@@ -62,7 +62,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			Id: tempRoleId,
 		}
 		profile := roleProfile(ctx, r)
-		roleResource, err := sdk.NewRoleResource(r.RoleName, resourceTypeRole, nil, r.RoleId, profile, annos)
+		roleResource, err := sdk.NewRoleResource(r.RoleName, resourceTypeRole, nil, tempRoleId, profile, annos)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -78,7 +78,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 func (o *roleResourceType) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	var annos annotations.Annotations
 	annos.Update(&v2.V1Identifier{
-		Id: MembershipEntitlementID(resource.Id),
+		Id: V1MembershipEntitlementID(resource.Id.Resource),
 	})
 	member := sdk.NewAssignmentEntitlement(resource, roleMemberEntitlement, resourceTypeUser)
 	member.Description = fmt.Sprintf("Has the %s role in Google Workspace", resource.DisplayName)
@@ -112,11 +112,19 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
+		tempRoleAssignmentId := strconv.FormatInt(roleAssignment.RoleAssignmentId, 10)
+		v1Identifier := &v2.V1Identifier{
+			Id: tempRoleAssignmentId,
+		}
 		uID, err := sdk.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
 		if err != nil {
 			return nil, "", nil, err
 		}
-		rv = append(rv, sdk.NewGrant(resource, roleMemberEntitlement, uID))
+		grant := sdk.NewGrant(resource, roleMemberEntitlement, uID)
+		annos := annotations.Annotations(grant.Annotations)
+		annos.Update(v1Identifier)
+		grant.Annotations = annos
+		rv = append(rv, grant)
 	}
 
 	nextPage, err := bag.NextToken(roleAssignments.NextPageToken)

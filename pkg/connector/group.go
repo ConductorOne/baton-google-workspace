@@ -78,7 +78,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	var annos annotations.Annotations
 	annos.Update(&v2.V1Identifier{
-		Id: MembershipEntitlementID(resource.Id),
+		Id: V1MembershipEntitlementID(resource.Id.Resource),
 	})
 	member := sdk.NewAssignmentEntitlement(resource, groupMemberEntitlement, resourceTypeUser)
 	member.Description = fmt.Sprintf("Is member of the %s group in Google Workspace", resource.DisplayName)
@@ -112,11 +112,18 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 	}
 	var rv []*v2.Grant
 	for _, member := range members.Members {
+		v1Identifier := &v2.V1Identifier{
+			Id: V1GrantID(V1MembershipEntitlementID(resource.Id.Resource), member.Id),
+		}
 		gmID, err := sdk.NewResourceID(resourceTypeUser, member.Id)
 		if err != nil {
 			return nil, "", nil, err
 		}
-		rv = append(rv, sdk.NewGrant(resource, groupMemberEntitlement, gmID))
+		grant := sdk.NewGrant(resource, groupMemberEntitlement, gmID)
+		annos := annotations.Annotations(grant.Annotations)
+		annos.Update(v1Identifier)
+		grant.Annotations = annos
+		rv = append(rv, grant)
 	}
 
 	nextPage, err := bag.NextToken(members.NextPageToken)

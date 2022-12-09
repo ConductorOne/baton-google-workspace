@@ -8,10 +8,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const MembershipEntitlementIDTemplate = "%s:%s:member"
-
-// The format of grant IDs follows: 'grant:principal-type:principal-id:entitlement'.
-const GrantIDTemplate = "grant:%s:%s:%s"
+const (
+	MembershipEntitlementIDTemplate = "membership:%s"
+	GrantIDTemplate                 = "grant:%s:%s"
+)
 
 func v1AnnotationsForResourceType(resourceTypeID string) annotations.Annotations {
 	annos := annotations.Annotations{}
@@ -19,14 +19,6 @@ func v1AnnotationsForResourceType(resourceTypeID string) annotations.Annotations
 		Id: resourceTypeID,
 	})
 	return annos
-}
-
-func MembershipEntitlementID(resource *v2.ResourceId) string {
-	return fmt.Sprintf(MembershipEntitlementIDTemplate, resource.ResourceType, resource.Resource)
-}
-
-func GrantID(entitlement *v2.Entitlement, principalId *v2.ResourceId) string {
-	return fmt.Sprintf(GrantIDTemplate, principalId.ResourceType, principalId.Resource, entitlement.Id)
 }
 
 // Convert accepts a list of T and returns a list of R based on the input func.
@@ -44,4 +36,12 @@ type GoogleWorkspaceOAuthUnauthorizedError struct {
 
 func (g *GoogleWorkspaceOAuthUnauthorizedError) Error() string {
 	return g.o.Error()
+}
+
+func V1GrantID(entitlementID string, userID string) string {
+	return fmt.Sprintf(GrantIDTemplate, entitlementID, userID)
+}
+
+func V1MembershipEntitlementID(resourceID string) string {
+	return fmt.Sprintf(MembershipEntitlementIDTemplate, resourceID)
 }
