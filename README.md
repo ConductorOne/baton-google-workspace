@@ -61,14 +61,14 @@ Available Commands:
   help               Help about any command
 
 Flags:
-  -f, --file string                         The path to the c1z file to sync with ($C1_FILE) (default "sync.c1z")
+  -f, --file string                         The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
       --customer-id string                  The customer Id for the google workspace account. ($BATON_CUSTOMER_ID)
       --domain string                       The domain for the google workspace account. ($BATON_DOMAIN)
       --administrator-email string          An administrator email for the google workspace account. ($BATON_ADMINISTRATOR_EMAIL)
       --credentials-json-file-path string   Json credentials file name for the google workspace account. ($BATON_CREDENTIALS_JSON_FILE_PATH)
   -h, --help                                help for baton-google-workspace
-      --log-format string                   The output format for logs: json, console ($C1_LOG_FORMAT) (default "json")
-      --log-level string                    The log level: debug, info, warn, error ($C1_LOG_LEVEL) (default "info")
+      --log-format string                   The output format for logs: json, console ($BATON_LOG_FORMAT) (default "json")
+      --log-level string                    The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
   -v, --version                             version for baton-google-workspace
 
 Use "baton-google-workspace [command] --help" for more information about a command.

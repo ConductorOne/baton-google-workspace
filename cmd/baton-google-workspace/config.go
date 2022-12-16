@@ -15,7 +15,7 @@ type config struct {
 	CustomerID              string `mapstructure:"customer-id"`
 	Domain                  string `mapstructure:"domain"`
 	AdministratorEmail      string `mapstructure:"administrator-email"`
-	CredentialsJsonFilePath string `mapstructure:"credentials-json-file-path"`
+	CredentialsJSONFilePath string `mapstructure:"credentials-json-file-path"`
 }
 
 // validateConfig is run after the configuration is loaded, and should return an error if it isn't valid.
@@ -29,7 +29,7 @@ func validateConfig(ctx context.Context, cfg *config) error {
 	if cfg.AdministratorEmail == "" {
 		return fmt.Errorf("administrator email is missing")
 	}
-	if cfg.CredentialsJsonFilePath == "" {
+	if cfg.CredentialsJSONFilePath == "" {
 		return fmt.Errorf("credentials json file path is missing")
 	}
 	return nil
