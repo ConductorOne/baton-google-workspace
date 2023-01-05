@@ -107,7 +107,7 @@ func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 		customerID:         config.CustomerID,
 		domain:             config.Domain,
 		administratorEmail: config.AdministratorEmail,
-		credentials:        []byte(config.Credentials),
+		credentials:        config.Credentials,
 		serviceCache:       map[string]*admin.Service{},
 	}
 	return rv, nil
