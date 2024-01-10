@@ -1,4 +1,4 @@
-// Copyright 2022 Google LLC.
+// Copyright 2024 Google LLC.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,6 +7,17 @@
 // Package admin provides access to the Admin SDK API.
 //
 // For product documentation, see: https://developers.google.com/admin-sdk/
+//
+// # Library status
+//
+// These client libraries are officially supported by Google. However, this
+// library is considered complete and is in maintenance mode. This means
+// that we will address critical bugs and security issues but will not add
+// any new features.
+//
+// When possible, we recommend using our newer
+// [Cloud Client Libraries for Go](https://pkg.go.dev/cloud.google.com/go)
+// that are still actively being worked and iterated on.
 //
 // # Creating a client
 //
@@ -17,28 +28,31 @@
 //	ctx := context.Background()
 //	adminService, err := admin.NewService(ctx)
 //
-// In this example, Google Application Default Credentials are used for authentication.
-//
-// For information on how to create and obtain Application Default Credentials, see https://developers.google.com/identity/protocols/application-default-credentials.
+// In this example, Google Application Default Credentials are used for
+// authentication. For information on how to create and obtain Application
+// Default Credentials, see https://developers.google.com/identity/protocols/application-default-credentials.
 //
 // # Other authentication options
 //
-// By default, all available scopes (see "Constants") are used to authenticate. To restrict scopes, use option.WithScopes:
+// By default, all available scopes (see "Constants") are used to authenticate.
+// To restrict scopes, use [google.golang.org/api/option.WithScopes]:
 //
 //	adminService, err := admin.NewService(ctx, option.WithScopes(admin.CloudPlatformScope))
 //
-// To use an API key for authentication (note: some APIs do not support API keys), use option.WithAPIKey:
+// To use an API key for authentication (note: some APIs do not support API
+// keys), use [google.golang.org/api/option.WithAPIKey]:
 //
 //	adminService, err := admin.NewService(ctx, option.WithAPIKey("AIza..."))
 //
-// To use an OAuth token (e.g., a user token obtained via a three-legged OAuth flow), use option.WithTokenSource:
+// To use an OAuth token (e.g., a user token obtained via a three-legged OAuth
+// flow, use [google.golang.org/api/option.WithTokenSource]:
 //
 //	config := &oauth2.Config{...}
 //	// ...
 //	token, err := config.Exchange(ctx, ...)
 //	adminService, err := admin.NewService(ctx, option.WithTokenSource(config.TokenSource(ctx, token)))
 //
-// See https://godoc.org/google.golang.org/api/option/ for details on options.
+// See [google.golang.org/api/option.ClientOption] for details on options.
 package admin // import "google.golang.org/api/admin/directory/v1"
 
 import (
@@ -75,6 +89,7 @@ var _ = errors.New
 var _ = strings.Replace
 var _ = context.Canceled
 var _ = internaloption.WithDefaultEndpoint
+var _ = internal.Version
 
 const apiId = "admin:directory_v1"
 const apiName = "admin"
@@ -852,6 +867,138 @@ func (s *AuxiliaryMessage) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
+// BatchChangeChromeOsDeviceStatusRequest: A request for changing the
+// status of a batch of ChromeOS devices.
+type BatchChangeChromeOsDeviceStatusRequest struct {
+	// ChangeChromeOsDeviceStatusAction: Required. The action to take on the
+	// ChromeOS device in order to change its status.
+	//
+	// Possible values:
+	//   "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_UNSPECIFIED" - Default
+	// value. Value is unused.
+	//   "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DEPROVISION" - Deprovisions
+	// a ChromeOS device. If you have ChromeOS devices that are no longer
+	// being used in your organization, you should deprovision them so that
+	// you’re no longer managing them. Deprovisioning the device removes
+	// all policies that were on the device as well as device-level printers
+	// and the ability to use the device as a kiosk. Depending on the
+	// upgrade that’s associated with the device this action might release
+	// the license back into the license pool; which allows you to use the
+	// license on a different device.
+	//   "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DISABLE" - Disables a
+	// ChromeOS device. Use this action if a user loses their device or
+	// it’s stolen, this makes it such that the device is still managed,
+	// so it will still receive policies, but no one can use it. Depending
+	// on the upgrade that’s associated with the device this action might
+	// release the license back into the license pool; which allows you to
+	// use the license on a different device.
+	//   "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_REENABLE" - Reenables a
+	// ChromeOS device to be used after being disabled. Reenables the device
+	// once it's no longer lost or it's been recovered. This allows the
+	// device to be used again. Depending on the upgrade associated with the
+	// device this might consume one license from the license pool, meaning
+	// that if there aren't enough licenses available the operation will
+	// fail.
+	ChangeChromeOsDeviceStatusAction string `json:"changeChromeOsDeviceStatusAction,omitempty"`
+
+	// DeprovisionReason: Optional. The reason behind a device deprovision.
+	// Must be provided if 'changeChromeOsDeviceStatusAction' is set to
+	// 'CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DEPROVISION'. Otherwise, omit
+	// this field.
+	//
+	// Possible values:
+	//   "DEPROVISION_REASON_UNSPECIFIED" - The deprovision reason is
+	// unknown.
+	//   "DEPROVISION_REASON_SAME_MODEL_REPLACEMENT" - Same model
+	// replacement. You have return materials authorization (RMA) or you are
+	// replacing a malfunctioning device under warranty with the same device
+	// model.
+	//   "DEPROVISION_REASON_UPGRADE" - The device was upgraded.
+	//   "DEPROVISION_REASON_DOMAIN_MOVE" - The device's domain was changed.
+	//   "DEPROVISION_REASON_SERVICE_EXPIRATION" - Service expired for the
+	// device.
+	//   "DEPROVISION_REASON_OTHER" - The device was deprovisioned for a
+	// legacy reason that is no longer supported.
+	//   "DEPROVISION_REASON_DIFFERENT_MODEL_REPLACEMENT" - Different model
+	// replacement. You are replacing this device with an upgraded or newer
+	// device model.
+	//   "DEPROVISION_REASON_RETIRING_DEVICE" - Retiring from fleet. You are
+	// donating, discarding, or otherwise removing the device from use.
+	//   "DEPROVISION_REASON_UPGRADE_TRANSFER" - ChromeOS Flex upgrade
+	// transfer. This is a ChromeOS Flex device that you are replacing with
+	// a Chromebook within a year.
+	//   "DEPROVISION_REASON_NOT_REQUIRED" - A reason was not required. For
+	// example, the licenses were returned to the customer's license pool.
+	//   "DEPROVISION_REASON_REPAIR_CENTER" - The device was deprovisioned
+	// by the Repair Service Center. Can only be set by Repair Service
+	// Center during RMA.
+	DeprovisionReason string `json:"deprovisionReason,omitempty"`
+
+	// DeviceIds: Required. List of the IDs of the ChromeOS devices to
+	// change. Maximum 50.
+	DeviceIds []string `json:"deviceIds,omitempty"`
+
+	// ForceSendFields is a list of field names (e.g.
+	// "ChangeChromeOsDeviceStatusAction") to unconditionally include in API
+	// requests. By default, fields with empty or default values are omitted
+	// from API requests. However, any non-pointer, non-interface field
+	// appearing in ForceSendFields will be sent to the server regardless of
+	// whether the field is empty or not. This may be used to include empty
+	// fields in Patch requests.
+	ForceSendFields []string `json:"-"`
+
+	// NullFields is a list of field names (e.g.
+	// "ChangeChromeOsDeviceStatusAction") to include in API requests with
+	// the JSON null value. By default, fields with empty values are omitted
+	// from API requests. However, any field with an empty value appearing
+	// in NullFields will be sent to the server as null. It is an error if a
+	// field in this list has a non-empty value. This may be used to include
+	// null fields in Patch requests.
+	NullFields []string `json:"-"`
+}
+
+func (s *BatchChangeChromeOsDeviceStatusRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod BatchChangeChromeOsDeviceStatusRequest
+	raw := NoMethod(*s)
+	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
+}
+
+// BatchChangeChromeOsDeviceStatusResponse: The response of changing the
+// status of a batch of ChromeOS devices.
+type BatchChangeChromeOsDeviceStatusResponse struct {
+	// ChangeChromeOsDeviceStatusResults: The results for each of the
+	// ChromeOS devices provided in the request.
+	ChangeChromeOsDeviceStatusResults []*ChangeChromeOsDeviceStatusResult `json:"changeChromeOsDeviceStatusResults,omitempty"`
+
+	// ServerResponse contains the HTTP response code and headers from the
+	// server.
+	googleapi.ServerResponse `json:"-"`
+
+	// ForceSendFields is a list of field names (e.g.
+	// "ChangeChromeOsDeviceStatusResults") to unconditionally include in
+	// API requests. By default, fields with empty or default values are
+	// omitted from API requests. However, any non-pointer, non-interface
+	// field appearing in ForceSendFields will be sent to the server
+	// regardless of whether the field is empty or not. This may be used to
+	// include empty fields in Patch requests.
+	ForceSendFields []string `json:"-"`
+
+	// NullFields is a list of field names (e.g.
+	// "ChangeChromeOsDeviceStatusResults") to include in API requests with
+	// the JSON null value. By default, fields with empty values are omitted
+	// from API requests. However, any field with an empty value appearing
+	// in NullFields will be sent to the server as null. It is an error if a
+	// field in this list has a non-empty value. This may be used to include
+	// null fields in Patch requests.
+	NullFields []string `json:"-"`
+}
+
+func (s *BatchChangeChromeOsDeviceStatusResponse) MarshalJSON() ([]byte, error) {
+	type NoMethod BatchChangeChromeOsDeviceStatusResponse
+	raw := NoMethod(*s)
+	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
+}
+
 // BatchCreatePrintServersRequest: Request to add multiple new print
 // servers in a batch.
 type BatchCreatePrintServersRequest struct {
@@ -1453,6 +1600,46 @@ func (s *CalendarResources) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
+// ChangeChromeOsDeviceStatusResult: The result of a single ChromeOS
+// device for a Change state operation.
+type ChangeChromeOsDeviceStatusResult struct {
+	// DeviceId: The unique ID of the ChromeOS device.
+	DeviceId string `json:"deviceId,omitempty"`
+
+	// Error: The error result of the operation in case of failure.
+	Error *Status `json:"error,omitempty"`
+
+	// Response: The device could change its status successfully.
+	Response *ChangeChromeOsDeviceStatusSucceeded `json:"response,omitempty"`
+
+	// ForceSendFields is a list of field names (e.g. "DeviceId") to
+	// unconditionally include in API requests. By default, fields with
+	// empty or default values are omitted from API requests. However, any
+	// non-pointer, non-interface field appearing in ForceSendFields will be
+	// sent to the server regardless of whether the field is empty or not.
+	// This may be used to include empty fields in Patch requests.
+	ForceSendFields []string `json:"-"`
+
+	// NullFields is a list of field names (e.g. "DeviceId") to include in
+	// API requests with the JSON null value. By default, fields with empty
+	// values are omitted from API requests. However, any field with an
+	// empty value appearing in NullFields will be sent to the server as
+	// null. It is an error if a field in this list has a non-empty value.
+	// This may be used to include null fields in Patch requests.
+	NullFields []string `json:"-"`
+}
+
+func (s *ChangeChromeOsDeviceStatusResult) MarshalJSON() ([]byte, error) {
+	type NoMethod ChangeChromeOsDeviceStatusResult
+	raw := NoMethod(*s)
+	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
+}
+
+// ChangeChromeOsDeviceStatusSucceeded: Response for a successful
+// ChromeOS device status change.
+type ChangeChromeOsDeviceStatusSucceeded struct {
+}
+
 // Channel: An notification channel used to watch for resource changes.
 type Channel struct {
 	// Address: The address where notifications are delivered for this
@@ -1561,11 +1748,56 @@ type ChromeOsDevice struct {
 	// (Read-only)
 	CpuStatusReports []*ChromeOsDeviceCpuStatusReports `json:"cpuStatusReports,omitempty"`
 
+	// DeprovisionReason: (Read-only) Deprovision reason.
+	//
+	// Possible values:
+	//   "DEPROVISION_REASON_UNSPECIFIED" - The deprovision reason is
+	// unknown.
+	//   "DEPROVISION_REASON_SAME_MODEL_REPLACEMENT" - Same model
+	// replacement. You have return materials authorization (RMA) or you are
+	// replacing a malfunctioning device under warranty with the same device
+	// model.
+	//   "DEPROVISION_REASON_UPGRADE" - The device was upgraded.
+	//   "DEPROVISION_REASON_DOMAIN_MOVE" - The device's domain was changed.
+	//   "DEPROVISION_REASON_SERVICE_EXPIRATION" - Service expired for the
+	// device.
+	//   "DEPROVISION_REASON_OTHER" - The device was deprovisioned for a
+	// legacy reason that is no longer supported.
+	//   "DEPROVISION_REASON_DIFFERENT_MODEL_REPLACEMENT" - Different model
+	// replacement. You are replacing this device with an upgraded or newer
+	// device model.
+	//   "DEPROVISION_REASON_RETIRING_DEVICE" - Retiring from fleet. You are
+	// donating, discarding, or otherwise removing the device from use.
+	//   "DEPROVISION_REASON_UPGRADE_TRANSFER" - ChromeOS Flex upgrade
+	// transfer. This is a ChromeOS Flex device that you are replacing with
+	// a Chromebook within a year.
+	//   "DEPROVISION_REASON_NOT_REQUIRED" - A reason was not required. For
+	// example, the licenses were returned to the customer's license pool.
+	//   "DEPROVISION_REASON_REPAIR_CENTER" - The device was deprovisioned
+	// by the Repair Service Center. Can only be set by Repair Service
+	// Center during RMA.
+	DeprovisionReason string `json:"deprovisionReason,omitempty"`
+
 	// DeviceFiles: A list of device files to download (Read-only)
 	DeviceFiles []*ChromeOsDeviceDeviceFiles `json:"deviceFiles,omitempty"`
 
 	// DeviceId: The unique ID of the Chrome device.
 	DeviceId string `json:"deviceId,omitempty"`
+
+	// DeviceLicenseType: Output only. Device license type.
+	//
+	// Possible values:
+	//   "deviceLicenseTypeUnspecified" - The license type is unknown.
+	//   "enterprise" - The device is bundled with a perpetual Chrome
+	// Enterprise Upgrade.
+	//   "enterpriseUpgrade" - The device has an annual standalone Chrome
+	// Enterprise Upgrade.
+	//   "educationUpgrade" - The device has a perpetual standalone Chrome
+	// Education Upgrade.
+	//   "education" - The device is bundled with a perpetual Chrome
+	// Education Upgrade.
+	//   "kioskUpgrade" - The device has an annual Kiosk Upgrade.
+	DeviceLicenseType string `json:"deviceLicenseType,omitempty"`
 
 	// DiskVolumeReports: Reports of disk space and other info about
 	// mounted/connected volumes.
@@ -1603,6 +1835,10 @@ type ChromeOsDevice struct {
 	// Kind: The type of resource. For the Chromeosdevices resource, the
 	// value is `admin#directory#chromeosdevice`.
 	Kind string `json:"kind,omitempty"`
+
+	// LastDeprovisionTimestamp: (Read-only) Date and time for the last
+	// deprovision of the device.
+	LastDeprovisionTimestamp string `json:"lastDeprovisionTimestamp,omitempty"`
 
 	// LastEnrollmentTime: Date and time the device was last enrolled
 	// (Read-only)
@@ -2570,6 +2806,13 @@ type DirectoryChromeosdevicesCommand struct {
 	// will revert the device back to a factory state with no enrollment
 	// unless the device is subject to forced or auto enrollment. Use with
 	// caution, as this is an irreversible action!
+	//   "DEVICE_START_CRD_SESSION" - Starts a Chrome Remote Desktop
+	// session.
+	//   "CAPTURE_LOGS" - Capture the system logs of a kiosk device. The
+	// logs can be downloaded from the downloadUrl link present in
+	// `deviceFiles` field of
+	// [chromeosdevices](https://developers.google.com/admin-sdk/directory/re
+	// ference/rest/v1/chromeosdevices)
 	Type string `json:"type,omitempty"`
 
 	// ServerResponse contains the HTTP response code and headers from the
@@ -2603,6 +2846,13 @@ func (s *DirectoryChromeosdevicesCommand) MarshalJSON() ([]byte, error) {
 // DirectoryChromeosdevicesCommandResult: The result of executing a
 // command.
 type DirectoryChromeosdevicesCommandResult struct {
+	// CommandResultPayload: The payload for the command result. The
+	// following commands respond with a payload: *
+	// `DEVICE_START_CRD_SESSION`: Payload is a stringified JSON object in
+	// the form: { "url": url }. The URL provides a link to the Chrome
+	// Remote Desktop session.
+	CommandResultPayload string `json:"commandResultPayload,omitempty"`
+
 	// ErrorMessage: The error message with a short explanation as to why
 	// the command failed. Only present if the command failed.
 	ErrorMessage string `json:"errorMessage,omitempty"`
@@ -2621,20 +2871,22 @@ type DirectoryChromeosdevicesCommandResult struct {
 	//   "SUCCESS" - The command was successfully executed.
 	Result string `json:"result,omitempty"`
 
-	// ForceSendFields is a list of field names (e.g. "ErrorMessage") to
-	// unconditionally include in API requests. By default, fields with
-	// empty or default values are omitted from API requests. However, any
-	// non-pointer, non-interface field appearing in ForceSendFields will be
-	// sent to the server regardless of whether the field is empty or not.
-	// This may be used to include empty fields in Patch requests.
+	// ForceSendFields is a list of field names (e.g.
+	// "CommandResultPayload") to unconditionally include in API requests.
+	// By default, fields with empty or default values are omitted from API
+	// requests. However, any non-pointer, non-interface field appearing in
+	// ForceSendFields will be sent to the server regardless of whether the
+	// field is empty or not. This may be used to include empty fields in
+	// Patch requests.
 	ForceSendFields []string `json:"-"`
 
-	// NullFields is a list of field names (e.g. "ErrorMessage") to include
-	// in API requests with the JSON null value. By default, fields with
-	// empty values are omitted from API requests. However, any field with
-	// an empty value appearing in NullFields will be sent to the server as
-	// null. It is an error if a field in this list has a non-empty value.
-	// This may be used to include null fields in Patch requests.
+	// NullFields is a list of field names (e.g. "CommandResultPayload") to
+	// include in API requests with the JSON null value. By default, fields
+	// with empty values are omitted from API requests. However, any field
+	// with an empty value appearing in NullFields will be sent to the
+	// server as null. It is an error if a field in this list has a
+	// non-empty value. This may be used to include null fields in Patch
+	// requests.
 	NullFields []string `json:"-"`
 }
 
@@ -2666,12 +2918,24 @@ type DirectoryChromeosdevicesIssueCommandRequest struct {
 	// will revert the device back to a factory state with no enrollment
 	// unless the device is subject to forced or auto enrollment. Use with
 	// caution, as this is an irreversible action!
+	//   "DEVICE_START_CRD_SESSION" - Starts a Chrome Remote Desktop
+	// session.
+	//   "CAPTURE_LOGS" - Capture the system logs of a kiosk device. The
+	// logs can be downloaded from the downloadUrl link present in
+	// `deviceFiles` field of
+	// [chromeosdevices](https://developers.google.com/admin-sdk/directory/re
+	// ference/rest/v1/chromeosdevices)
 	CommandType string `json:"commandType,omitempty"`
 
 	// Payload: The payload for the command, provide it only if command
-	// supports it. The following commands support adding payload: -
-	// SET_VOLUME: Payload is a stringified JSON object in the form: {
+	// supports it. The following commands support adding payload: *
+	// `SET_VOLUME`: Payload is a stringified JSON object in the form: {
 	// "volume": 50 }. The volume has to be an integer in the range [0,100].
+	// * `DEVICE_START_CRD_SESSION`: Payload is optionally a stringified
+	// JSON object in the form: { "ackedUserPresence": true }.
+	// `ackedUserPresence` is a boolean. By default, `ackedUserPresence` is
+	// set to `false`. To start a Chrome Remote Desktop session for an
+	// active device, set `ackedUserPresence` to `true`.
 	Payload string `json:"payload,omitempty"`
 
 	// ForceSendFields is a list of field names (e.g. "CommandType") to
@@ -3181,7 +3445,15 @@ func (s *Features) MarshalJSON() ([]byte, error) {
 // Group: Google Groups provide your users the ability to send messages
 // to groups of people using the group's email address. For more
 // information about common tasks, see the Developer's Guide
-// (/admin-sdk/directory/v1/guides/manage-groups).
+// (https://developers.google.com/admin-sdk/directory/v1/guides/manage-groups).
+// For information about other types of groups, see the Cloud Identity
+// Groups API documentation
+// (https://cloud.google.com/identity/docs/groups). Note: The user
+// calling the API (or being impersonated by a service account) must
+// have an assigned role
+// (https://developers.google.com/admin-sdk/directory/v1/guides/manage-roles)
+// that includes Admin API Groups permissions, such as Super Admin or
+// Groups Admin.
 type Group struct {
 	// AdminCreated: Read-only. Value is `true` if this group was created by
 	// an administrator rather than a user.
@@ -3467,7 +3739,7 @@ func (s *ListPrintersResponse) MarshalJSON() ([]byte, error) {
 // Guide (/admin-sdk/directory/v1/guides/manage-group-members).
 type Member struct {
 	// DeliverySettings: Defines mail delivery preferences of member. This
-	// is only supported by create/update/get.
+	// field is only supported by `insert`, `update`, and `get` methods.
 	DeliverySettings string `json:"delivery_settings,omitempty"`
 
 	// Email: The member's email address. A member can be a user or another
@@ -3926,9 +4198,10 @@ type OrgUnit struct {
 	// BlockInheritance: Determines if a sub-organizational unit can inherit
 	// the settings of the parent organization. The default value is
 	// `false`, meaning a sub-organizational unit inherits the settings of
-	// the nearest parent organizational unit. For more information on
-	// inheritance and users in an organization structure, see the
-	// administration help center
+	// the nearest parent organizational unit. This field is deprecated.
+	// Setting it to `true` is no longer supported and can have _unintended
+	// consequences_. For more information about inheritance and users in an
+	// organization structure, see the administration help center
 	// (https://support.google.com/a/answer/4352075).
 	BlockInheritance bool `json:"blockInheritance,omitempty"`
 
@@ -4563,10 +4836,19 @@ func (s *RoleRolePrivileges) MarshalJSON() ([]byte, error) {
 // RoleAssignment: Defines an assignment of a role.
 type RoleAssignment struct {
 	// AssignedTo: The unique ID of the entity this role is assigned
-	// to—either the `user_id` of a user or the `uniqueId` of a service
-	// account, as defined in Identity and Access Management (IAM)
+	// to—either the `user_id` of a user, the `group_id` of a group, or
+	// the `uniqueId` of a service account as defined in Identity and Access
+	// Management (IAM)
 	// (https://cloud.google.com/iam/docs/reference/rest/v1/projects.serviceAccounts).
 	AssignedTo string `json:"assignedTo,omitempty"`
+
+	// AssigneeType: Output only. The type of the assignee (`USER` or
+	// `GROUP`).
+	//
+	// Possible values:
+	//   "user" - An individual user within the domain.
+	//   "group" - A group within the domain.
+	AssigneeType string `json:"assigneeType,omitempty"`
 
 	// Etag: ETag of the resource.
 	Etag string `json:"etag,omitempty"`
@@ -4911,6 +5193,50 @@ func (s *Schemas) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
 
+// Status: The `Status` type defines a logical error model that is
+// suitable for different programming environments, including REST APIs
+// and RPC APIs. It is used by gRPC (https://github.com/grpc). Each
+// `Status` message contains three pieces of data: error code, error
+// message, and error details. You can find out more about this error
+// model and how to work with it in the API Design Guide
+// (https://cloud.google.com/apis/design/errors).
+type Status struct {
+	// Code: The status code, which should be an enum value of
+	// google.rpc.Code.
+	Code int64 `json:"code,omitempty"`
+
+	// Details: A list of messages that carry the error details. There is a
+	// common set of message types for APIs to use.
+	Details []googleapi.RawMessage `json:"details,omitempty"`
+
+	// Message: A developer-facing error message, which should be in
+	// English. Any user-facing error message should be localized and sent
+	// in the google.rpc.Status.details field, or localized by the client.
+	Message string `json:"message,omitempty"`
+
+	// ForceSendFields is a list of field names (e.g. "Code") to
+	// unconditionally include in API requests. By default, fields with
+	// empty or default values are omitted from API requests. However, any
+	// non-pointer, non-interface field appearing in ForceSendFields will be
+	// sent to the server regardless of whether the field is empty or not.
+	// This may be used to include empty fields in Patch requests.
+	ForceSendFields []string `json:"-"`
+
+	// NullFields is a list of field names (e.g. "Code") to include in API
+	// requests with the JSON null value. By default, fields with empty
+	// values are omitted from API requests. However, any field with an
+	// empty value appearing in NullFields will be sent to the server as
+	// null. It is an error if a field in this list has a non-empty value.
+	// This may be used to include null fields in Patch requests.
+	NullFields []string `json:"-"`
+}
+
+func (s *Status) MarshalJSON() ([]byte, error) {
+	type NoMethod Status
+	raw := NoMethod(*s)
+	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
+}
+
 // Token: JSON template for token resource in Directory API.
 type Token struct {
 	// Anonymous: Whether the application is registered with Google. The
@@ -5010,8 +5336,8 @@ func (s *Tokens) MarshalJSON() ([]byte, error) {
 }
 
 // User: The Directory API allows you to create and manage your
-// account's users, user aliases, and user Gmail chat profile photos.
-// For more information about common tasks, see the User Accounts
+// account's users, user aliases, and user Google profile photos. For
+// more information about common tasks, see the User Accounts
 // Developer's Guide (/admin-sdk/directory/v1/guides/manage-users.html)
 // and the User Aliases Developer's Guide
 // (/admin-sdk/directory/v1/guides/manage-user-aliases.html).
@@ -5057,7 +5383,8 @@ type User struct {
 	DeletionTime string `json:"deletionTime,omitempty"`
 
 	// Emails: The list of the user's email addresses. The maximum allowed
-	// data size for this field is 10KB.
+	// data size for this field is 10KB. This excludes
+	// `publicKeyEncryptionCertificates`.
 	Emails interface{} `json:"emails,omitempty"`
 
 	// Etag: Output only. ETag of the resource.
@@ -5228,7 +5555,8 @@ type User struct {
 	// ThumbnailPhotoEtag: Output only. ETag of the user's photo (Read-only)
 	ThumbnailPhotoEtag string `json:"thumbnailPhotoEtag,omitempty"`
 
-	// ThumbnailPhotoUrl: Output only. Photo Url of the user (Read-only)
+	// ThumbnailPhotoUrl: Output only. The URL of the user's profile photo.
+	// The URL might be temporary or private.
 	ThumbnailPhotoUrl string `json:"thumbnailPhotoUrl,omitempty"`
 
 	// Websites: The user's websites. The maximum allowed data size for this
@@ -5421,6 +5749,10 @@ type UserEmail struct {
 	// marked as primary.
 	Primary bool `json:"primary,omitempty"`
 
+	// PublicKeyEncryptionCertificates: Public Key Encryption Certificates.
+	// Current limit: 1 per email address, and 5 per user.
+	PublicKeyEncryptionCertificates *UserEmailPublicKeyEncryptionCertificates `json:"public_key_encryption_certificates,omitempty"`
+
 	// Type: Each entry can have a type which indicates standard types of
 	// that entry. For example email could be of home, work etc. In addition
 	// to the standard type, an entry can have a custom type and can take
@@ -5447,6 +5779,45 @@ type UserEmail struct {
 
 func (s *UserEmail) MarshalJSON() ([]byte, error) {
 	type NoMethod UserEmail
+	raw := NoMethod(*s)
+	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
+}
+
+// UserEmailPublicKeyEncryptionCertificates: Public Key Encryption
+// Certificates. Current limit: 1 per email address, and 5 per user.
+type UserEmailPublicKeyEncryptionCertificates struct {
+	// Certificate: X.509 encryption certificate in `PEM` format. Must only
+	// be an end-entity (leaf) certificate.
+	Certificate string `json:"certificate,omitempty"`
+
+	// IsDefault: Whether this is the default certificate for the given
+	// email address.
+	IsDefault bool `json:"is_default,omitempty"`
+
+	// State: Denotes the certificate's state in its lifecycle. Possible
+	// values are `not_yet_validated`, `valid`, `invalid`, `expired`, and
+	// `revoked`.
+	State string `json:"state,omitempty"`
+
+	// ForceSendFields is a list of field names (e.g. "Certificate") to
+	// unconditionally include in API requests. By default, fields with
+	// empty or default values are omitted from API requests. However, any
+	// non-pointer, non-interface field appearing in ForceSendFields will be
+	// sent to the server regardless of whether the field is empty or not.
+	// This may be used to include empty fields in Patch requests.
+	ForceSendFields []string `json:"-"`
+
+	// NullFields is a list of field names (e.g. "Certificate") to include
+	// in API requests with the JSON null value. By default, fields with
+	// empty values are omitted from API requests. However, any field with
+	// an empty value appearing in NullFields will be sent to the server as
+	// null. It is an error if a field in this list has a non-empty value.
+	// This may be used to include null fields in Patch requests.
+	NullFields []string `json:"-"`
+}
+
+func (s *UserEmailPublicKeyEncryptionCertificates) MarshalJSON() ([]byte, error) {
+	type NoMethod UserEmailPublicKeyEncryptionCertificates
 	raw := NoMethod(*s)
 	return gensupport.MarshalJSON(raw, s.ForceSendFields, s.NullFields)
 }
@@ -6800,16 +7171,18 @@ type ChromeosdevicesActionCall struct {
 	header_              http.Header
 }
 
-// Action: Takes an action that affects a Chrome OS Device. This
-// includes deprovisioning, disabling, and re-enabling devices.
-// *Warning:* * Deprovisioning a device will stop device policy syncing
-// and remove device-level printers. After a device is deprovisioned, it
-// must be wiped before it can be re-enrolled. * Lost or stolen devices
-// should use the disable action. * Re-enabling a disabled device will
-// consume a device license. If you do not have sufficient licenses
-// available when completing the re-enable action, you will receive an
-// error. For more information about deprovisioning and disabling
-// devices, visit the help center
+// Action: Use BatchChangeChromeOsDeviceStatus
+// (/admin-sdk/directory/reference/rest/v1/customer.devices.chromeos/batc
+// hChangeStatus) instead. Takes an action that affects a Chrome OS
+// Device. This includes deprovisioning, disabling, and re-enabling
+// devices. *Warning:* * Deprovisioning a device will stop device policy
+// syncing and remove device-level printers. After a device is
+// deprovisioned, it must be wiped before it can be re-enrolled. * Lost
+// or stolen devices should use the disable action. * Re-enabling a
+// disabled device will consume a device license. If you do not have
+// sufficient licenses available when completing the re-enable action,
+// you will receive an error. For more information about deprovisioning
+// and disabling devices, visit the help center
 // (https://support.google.com/chrome/a/answer/3523633).
 //
 //   - customerId: The unique ID for the customer's Google Workspace
@@ -6895,7 +7268,8 @@ func (c *ChromeosdevicesActionCall) Do(opts ...googleapi.CallOption) error {
 	}
 	return nil
 	// {
-	//   "description": "Takes an action that affects a Chrome OS Device. This includes deprovisioning, disabling, and re-enabling devices. *Warning:* * Deprovisioning a device will stop device policy syncing and remove device-level printers. After a device is deprovisioned, it must be wiped before it can be re-enrolled. * Lost or stolen devices should use the disable action. * Re-enabling a disabled device will consume a device license. If you do not have sufficient licenses available when completing the re-enable action, you will receive an error. For more information about deprovisioning and disabling devices, visit the [help center](https://support.google.com/chrome/a/answer/3523633).",
+	//   "deprecated": true,
+	//   "description": "Use [BatchChangeChromeOsDeviceStatus](/admin-sdk/directory/reference/rest/v1/customer.devices.chromeos/batchChangeStatus) instead. Takes an action that affects a Chrome OS Device. This includes deprovisioning, disabling, and re-enabling devices. *Warning:* * Deprovisioning a device will stop device policy syncing and remove device-level printers. After a device is deprovisioned, it must be wiped before it can be re-enrolled. * Lost or stolen devices should use the disable action. * Re-enabling a disabled device will consume a device license. If you do not have sufficient licenses available when completing the re-enable action, you will receive an error. For more information about deprovisioning and disabling devices, visit the [help center](https://support.google.com/chrome/a/answer/3523633).",
 	//   "flatPath": "admin/directory/v1/customer/{customerId}/devices/chromeos/{resourceId}/action",
 	//   "httpMethod": "POST",
 	//   "id": "directory.chromeosdevices.action",
@@ -7955,6 +8329,151 @@ func (c *ChromeosdevicesUpdateCall) Do(opts ...googleapi.CallOption) (*ChromeOsD
 	//   },
 	//   "response": {
 	//     "$ref": "ChromeOsDevice"
+	//   },
+	//   "scopes": [
+	//     "https://www.googleapis.com/auth/admin.directory.device.chromeos"
+	//   ]
+	// }
+
+}
+
+// method id "admin.customer.devices.chromeos.batchChangeStatus":
+
+type CustomerDevicesChromeosBatchChangeStatusCall struct {
+	s                                      *Service
+	customerId                             string
+	batchchangechromeosdevicestatusrequest *BatchChangeChromeOsDeviceStatusRequest
+	urlParams_                             gensupport.URLParams
+	ctx_                                   context.Context
+	header_                                http.Header
+}
+
+// BatchChangeStatus: Changes the status of a batch of ChromeOS devices.
+// For more information about changing a ChromeOS device state Repair,
+// repurpose, or retire ChromeOS devices
+// (https://support.google.com/chrome/a/answer/3523633).
+//
+// - customerId: Immutable ID of the Google Workspace account.
+func (r *CustomerDevicesChromeosService) BatchChangeStatus(customerId string, batchchangechromeosdevicestatusrequest *BatchChangeChromeOsDeviceStatusRequest) *CustomerDevicesChromeosBatchChangeStatusCall {
+	c := &CustomerDevicesChromeosBatchChangeStatusCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.customerId = customerId
+	c.batchchangechromeosdevicestatusrequest = batchchangechromeosdevicestatusrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse
+// for more information.
+func (c *CustomerDevicesChromeosBatchChangeStatusCall) Fields(s ...googleapi.Field) *CustomerDevicesChromeosBatchChangeStatusCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method. Any
+// pending HTTP request will be aborted if the provided context is
+// canceled.
+func (c *CustomerDevicesChromeosBatchChangeStatusCall) Context(ctx context.Context) *CustomerDevicesChromeosBatchChangeStatusCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns an http.Header that can be modified by the caller to
+// add HTTP headers to the request.
+func (c *CustomerDevicesChromeosBatchChangeStatusCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *CustomerDevicesChromeosBatchChangeStatusCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := make(http.Header)
+	reqHeaders.Set("x-goog-api-client", "gl-go/"+gensupport.GoVersion()+" gdcl/"+internal.Version)
+	for k, v := range c.header_ {
+		reqHeaders[k] = v
+	}
+	reqHeaders.Set("User-Agent", c.s.userAgent())
+	var body io.Reader = nil
+	body, err := googleapi.WithoutDataWrapper.JSONReader(c.batchchangechromeosdevicestatusrequest)
+	if err != nil {
+		return nil, err
+	}
+	reqHeaders.Set("Content-Type", "application/json")
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "admin/directory/v1/customer/{customerId}/devices/chromeos:batchChangeStatus")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"customerId": c.customerId,
+	})
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "admin.customer.devices.chromeos.batchChangeStatus" call.
+// Exactly one of *BatchChangeChromeOsDeviceStatusResponse or error will
+// be non-nil. Any non-2xx status code is an error. Response headers are
+// in either
+// *BatchChangeChromeOsDeviceStatusResponse.ServerResponse.Header or (if
+// a response was returned at all) in error.(*googleapi.Error).Header.
+// Use googleapi.IsNotModified to check whether the returned error was
+// because http.StatusNotModified was returned.
+func (c *CustomerDevicesChromeosBatchChangeStatusCall) Do(opts ...googleapi.CallOption) (*BatchChangeChromeOsDeviceStatusResponse, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &BatchChangeChromeOsDeviceStatusResponse{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	if err := gensupport.DecodeResponse(target, res); err != nil {
+		return nil, err
+	}
+	return ret, nil
+	// {
+	//   "description": "Changes the status of a batch of ChromeOS devices. For more information about changing a ChromeOS device state [Repair, repurpose, or retire ChromeOS devices](https://support.google.com/chrome/a/answer/3523633).",
+	//   "flatPath": "admin/directory/v1/customer/{customerId}/devices/chromeos:batchChangeStatus",
+	//   "httpMethod": "POST",
+	//   "id": "admin.customer.devices.chromeos.batchChangeStatus",
+	//   "parameterOrder": [
+	//     "customerId"
+	//   ],
+	//   "parameters": {
+	//     "customerId": {
+	//       "description": "Required. Immutable ID of the Google Workspace account.",
+	//       "location": "path",
+	//       "required": true,
+	//       "type": "string"
+	//     }
+	//   },
+	//   "path": "admin/directory/v1/customer/{customerId}/devices/chromeos:batchChangeStatus",
+	//   "request": {
+	//     "$ref": "BatchChangeChromeOsDeviceStatusRequest"
+	//   },
+	//   "response": {
+	//     "$ref": "BatchChangeChromeOsDeviceStatusResponse"
 	//   },
 	//   "scopes": [
 	//     "https://www.googleapis.com/auth/admin.directory.device.chromeos"
@@ -16023,6 +16542,9 @@ func (c *OrgunitsListCall) OrgUnitPath(orgUnitPath string) *OrgunitsListCall {
 //
 //	"all" - All sub-organizational units.
 //	"children" - Immediate children only (default).
+//	"allIncludingParent" - All sub-organizational units and the
+//
+// specified organizational unit (root if not specified).
 func (c *OrgunitsListCall) Type(type_ string) *OrgunitsListCall {
 	c.urlParams_.Set("type", type_)
 	return c
@@ -16151,11 +16673,13 @@ func (c *OrgunitsListCall) Do(opts ...googleapi.CallOption) (*OrgUnits, error) {
 	//       "description": "Whether to return all sub-organizations or just immediate children.",
 	//       "enum": [
 	//         "all",
-	//         "children"
+	//         "children",
+	//         "allIncludingParent"
 	//       ],
 	//       "enumDescriptions": [
 	//         "All sub-organizational units.",
-	//         "Immediate children only (default)."
+	//         "Immediate children only (default).",
+	//         "All sub-organizational units and the specified organizational unit (root if not specified)."
 	//       ],
 	//       "location": "query",
 	//       "type": "string"
@@ -20138,6 +20662,16 @@ func (r *RoleAssignmentsService) List(customer string) *RoleAssignmentsListCall 
 	return c
 }
 
+// IncludeIndirectRoleAssignments sets the optional parameter
+// "includeIndirectRoleAssignments": When set to `true`, fetches
+// indirect role assignments (i.e. role assignment via a group) as well
+// as direct ones. Defaults to `false`. You must specify `user_key` or
+// the indirect role assignments will not be included.
+func (c *RoleAssignmentsListCall) IncludeIndirectRoleAssignments(includeIndirectRoleAssignments bool) *RoleAssignmentsListCall {
+	c.urlParams_.Set("includeIndirectRoleAssignments", fmt.Sprint(includeIndirectRoleAssignments))
+	return c
+}
+
 // MaxResults sets the optional parameter "maxResults": Maximum number
 // of results to return.
 func (c *RoleAssignmentsListCall) MaxResults(maxResults int64) *RoleAssignmentsListCall {
@@ -20160,9 +20694,9 @@ func (c *RoleAssignmentsListCall) RoleId(roleId string) *RoleAssignmentsListCall
 	return c
 }
 
-// UserKey sets the optional parameter "userKey": The user's primary
-// email address, alias email address, or unique user ID. If included in
-// the request, returns role assignments only for this user.
+// UserKey sets the optional parameter "userKey": The primary email
+// address, alias email address, or unique user or group ID. If included
+// in the request, returns role assignments only for this user or group.
 func (c *RoleAssignmentsListCall) UserKey(userKey string) *RoleAssignmentsListCall {
 	c.urlParams_.Set("userKey", userKey)
 	return c
@@ -20281,6 +20815,11 @@ func (c *RoleAssignmentsListCall) Do(opts ...googleapi.CallOption) (*RoleAssignm
 	//       "required": true,
 	//       "type": "string"
 	//     },
+	//     "includeIndirectRoleAssignments": {
+	//       "description": "When set to `true`, fetches indirect role assignments (i.e. role assignment via a group) as well as direct ones. Defaults to `false`. You must specify `user_key` or the indirect role assignments will not be included.",
+	//       "location": "query",
+	//       "type": "boolean"
+	//     },
 	//     "maxResults": {
 	//       "description": "Maximum number of results to return.",
 	//       "format": "int32",
@@ -20300,7 +20839,7 @@ func (c *RoleAssignmentsListCall) Do(opts ...googleapi.CallOption) (*RoleAssignm
 	//       "type": "string"
 	//     },
 	//     "userKey": {
-	//       "description": "The user's primary email address, alias email address, or unique user ID. If included in the request, returns role assignments only for this user.",
+	//       "description": "The primary email address, alias email address, or unique user or group ID. If included in the request, returns role assignments only for this user or group.",
 	//       "location": "query",
 	//       "type": "string"
 	//     }
@@ -23004,10 +23543,24 @@ type UsersInsertCall struct {
 	header_    http.Header
 }
 
-// Insert: Creates a user.
+// Insert: Creates a user. Mutate calls immediately following user
+// creation might sometimes fail as the user isn't fully created due to
+// propagation delay in our backends. Check the error details for the
+// "User creation is not complete" message to see if this is the case.
+// Retrying the calls after some time can help in this case.
 func (r *UsersService) Insert(user *User) *UsersInsertCall {
 	c := &UsersInsertCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.user = user
+	return c
+}
+
+// ResolveConflictAccount sets the optional parameter
+// "resolveConflictAccount": If set to `true`, the option selected for
+// handling unmanaged user accounts
+// (https://support.google.com/a/answer/11112794) will apply. Default:
+// `false`
+func (c *UsersInsertCall) ResolveConflictAccount(resolveConflictAccount bool) *UsersInsertCall {
+	c.urlParams_.Set("resolveConflictAccount", fmt.Sprint(resolveConflictAccount))
 	return c
 }
 
@@ -23099,12 +23652,18 @@ func (c *UsersInsertCall) Do(opts ...googleapi.CallOption) (*User, error) {
 	}
 	return ret, nil
 	// {
-	//   "description": "Creates a user.",
+	//   "description": "Creates a user. Mutate calls immediately following user creation might sometimes fail as the user isn't fully created due to propagation delay in our backends. Check the error details for the \"User creation is not complete\" message to see if this is the case. Retrying the calls after some time can help in this case.",
 	//   "flatPath": "admin/directory/v1/users",
 	//   "httpMethod": "POST",
 	//   "id": "directory.users.insert",
 	//   "parameterOrder": [],
-	//   "parameters": {},
+	//   "parameters": {
+	//     "resolveConflictAccount": {
+	//       "description": "Optional. If set to `true`, the option selected for [handling unmanaged user accounts](https://support.google.com/a/answer/11112794) will apply. Default: `false`",
+	//       "location": "query",
+	//       "type": "boolean"
+	//     }
+	//   },
 	//   "path": "admin/directory/v1/users",
 	//   "request": {
 	//     "$ref": "User"
@@ -23650,10 +24209,13 @@ type UsersPatchCall struct {
 }
 
 // Patch: Updates a user using patch semantics. The update method should
-// be used instead, since it also supports patch semantics and has
-// better performance. This method is unable to clear fields that
-// contain repeated objects (`addresses`, `phones`, etc). Use the update
-// method instead.
+// be used instead, because it also supports patch semantics and has
+// better performance. If you're mapping an external identity to a
+// Google identity, use the `update`
+// (https://developers.google.com/admin-sdk/directory/v1/reference/users/update)
+// method instead of the `patch` method. This method is unable to clear
+// fields that contain repeated objects (`addresses`, `phones`, etc).
+// Use the update method instead.
 //
 //   - userKey: Identifies the user in the API request. The value can be
 //     the user's primary email address, alias email address, or unique
@@ -23756,7 +24318,7 @@ func (c *UsersPatchCall) Do(opts ...googleapi.CallOption) (*User, error) {
 	}
 	return ret, nil
 	// {
-	//   "description": "Updates a user using patch semantics. The update method should be used instead, since it also supports patch semantics and has better performance. This method is unable to clear fields that contain repeated objects (`addresses`, `phones`, etc). Use the update method instead.",
+	//   "description": "Updates a user using patch semantics. The update method should be used instead, because it also supports patch semantics and has better performance. If you're mapping an external identity to a Google identity, use the [`update`](https://developers.google.com/admin-sdk/directory/v1/reference/users/update) method instead of the `patch` method. This method is unable to clear fields that contain repeated objects (`addresses`, `phones`, etc). Use the update method instead.",
 	//   "flatPath": "admin/directory/v1/users/{userKey}",
 	//   "httpMethod": "PATCH",
 	//   "id": "directory.users.patch",
