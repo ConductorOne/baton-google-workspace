@@ -8,7 +8,9 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
@@ -61,8 +63,8 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		annos := &v2.V1Identifier{
 			Id: tempRoleId,
 		}
-		profile := roleProfile(ctx, r)
-		roleResource, err := sdk.NewRoleResource(r.RoleName, resourceTypeRole, nil, tempRoleId, profile, annos)
+		traitOpts := []sdkResource.RoleTraitOption{sdkResource.WithRoleProfile(roleProfile(ctx, r))}
+		roleResource, err := sdkResource.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, traitOpts, sdkResource.WithAnnotation(annos))
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -80,7 +82,7 @@ func (o *roleResourceType) Entitlements(ctx context.Context, resource *v2.Resour
 	annos.Update(&v2.V1Identifier{
 		Id: V1MembershipEntitlementID(resource.Id.Resource),
 	})
-	member := sdk.NewAssignmentEntitlement(resource, roleMemberEntitlement, resourceTypeUser)
+	member := sdkEntitlement.NewAssignmentEntitlement(resource, roleMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
 	member.Description = fmt.Sprintf("Has the %s role in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Role Member", resource.DisplayName)
@@ -116,11 +118,11 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 		v1Identifier := &v2.V1Identifier{
 			Id: tempRoleAssignmentId,
 		}
-		uID, err := sdk.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
+		uID, err := sdkResource.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
 		if err != nil {
 			return nil, "", nil, err
 		}
-		grant := sdk.NewGrant(resource, roleMemberEntitlement, uID)
+		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID)
 		annos := annotations.Annotations(grant.Annotations)
 		annos.Update(v1Identifier)
 		grant.Annotations = annos
