@@ -7,7 +7,10 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
@@ -61,8 +64,8 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 		annos := &v2.V1Identifier{
 			Id: g.Id,
 		}
-		profile := groupProfile(ctx, g)
-		groupResource, err := sdk.NewGroupResource(g.Name, resourceTypeGroup, nil, g.Id, profile, annos)
+		traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
+		groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, sdkResource.WithAnnotation(annos))
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -80,7 +83,7 @@ func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resou
 	annos.Update(&v2.V1Identifier{
 		Id: V1MembershipEntitlementID(resource.Id.Resource),
 	})
-	member := sdk.NewAssignmentEntitlement(resource, groupMemberEntitlement, resourceTypeUser)
+	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
 	member.Description = fmt.Sprintf("Is member of the %s group in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Group Member", resource.DisplayName)
@@ -115,11 +118,11 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		v1Identifier := &v2.V1Identifier{
 			Id: V1GrantID(V1MembershipEntitlementID(resource.Id.Resource), member.Id),
 		}
-		gmID, err := sdk.NewResourceID(resourceTypeUser, member.Id)
+		gmID, err := sdkResource.NewResourceID(resourceTypeUser, member.Id)
 		if err != nil {
 			return nil, "", nil, err
 		}
-		grant := sdk.NewGrant(resource, groupMemberEntitlement, gmID)
+		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID)
 		annos := annotations.Annotations(grant.Annotations)
 		annos.Update(v1Identifier)
 		grant.Annotations = annos

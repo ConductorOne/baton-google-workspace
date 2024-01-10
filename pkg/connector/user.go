@@ -7,7 +7,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
@@ -58,8 +58,11 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		annos := &v2.V1Identifier{
 			Id: user.Id,
 		}
-		profile := userProfile(ctx, user)
-		userResource, err := sdk.NewUserResource(user.Name.FullName, resourceTypeUser, nil, user.Id, user.PrimaryEmail, profile, annos)
+		traitOpts := []sdkResource.UserTraitOption{
+			sdkResource.WithEmail(user.PrimaryEmail, true),
+			sdkResource.WithUserProfile(userProfile(ctx, user)),
+		}
+		userResource, err := sdkResource.NewUserResource(user.Name.FullName, resourceTypeUser, user.Id, traitOpts, sdkResource.WithAnnotation(annos))
 		if err != nil {
 			return nil, "", nil, err
 		}
