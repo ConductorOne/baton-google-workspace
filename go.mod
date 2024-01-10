@@ -1,4 +1,4 @@
-module github.com/ConductorOne/baton-google-workspace
+module github.com/conductorone/baton-google-workspace
 
 go 1.20
 
