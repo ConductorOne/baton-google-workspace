@@ -514,6 +514,7 @@ golang.org/x/text/unicode/norm
 # google.golang.org/api v0.156.0
 ## explicit; go 1.19
 google.golang.org/api/admin/directory/v1
+google.golang.org/api/admin/reports/v1
 google.golang.org/api/googleapi
 google.golang.org/api/googleapi/transport
 google.golang.org/api/internal

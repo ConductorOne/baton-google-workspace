@@ -16,7 +16,8 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	admin "google.golang.org/api/admin/directory/v1"
+	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/option"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -105,8 +106,12 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	return srv, nil
 }
 
-func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*admin.Service, error) {
-	return getService(ctx, c, scope, admin.NewService)
+func (c *GoogleWorkspace) getRoleService(ctx context.Context, scope string) (*reportsAdmin.Service, error) {
+	return getService(ctx, c, scope, reportsAdmin.NewService)
+}
+
+func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*directoryAdmin.Service, error) {
+	return getService(ctx, c, scope, directoryAdmin.NewService)
 }
 
 func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
@@ -138,9 +143,9 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 }
 
 func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations, error) {
-	service, err := c.getDirectoryService(ctx, admin.AdminDirectoryDomainReadonlyScope)
+	service, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
 	if err != nil {
-		return nil, fmt.Errorf("google-workspace: failed to initialize service for scope %s: %w", admin.AdminDirectoryDomainReadonlyScope, err)
+		return nil, fmt.Errorf("google-workspace: failed to initialize service for scope %s: %w", directoryAdmin.AdminDirectoryDomainReadonlyScope, err)
 	}
 
 	_, err = service.Domains.Get(c.customerID, c.domain).Context(ctx).Do()
@@ -157,17 +162,17 @@ func (c *GoogleWorkspace) Asset(ctx context.Context, asset *v2.AssetRef) (string
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	rs := []connectorbuilder.ResourceSyncer{}
-	roleService, err := c.getDirectoryService(ctx, admin.AdminDirectoryRolemanagementReadonlyScope)
+	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID))
 	}
-	userService, err := c.getDirectoryService(ctx, admin.AdminDirectoryUserReadonlyScope)
+	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
 	}
-	groupService, err := c.getDirectoryService(ctx, admin.AdminDirectoryGroupReadonlyScope)
+	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err == nil {
-		groupMemberService, err := c.getDirectoryService(ctx, admin.AdminDirectoryGroupMemberReadonlyScope)
+		groupMemberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
 		if err == nil {
 			rs = append(rs, groupBuilder(groupService, c.customerID, c.domain, groupMemberService))
 		}
