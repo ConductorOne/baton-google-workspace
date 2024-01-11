@@ -3,12 +3,12 @@ module github.com/conductorone/baton-google-workspace
 go 1.20
 
 require (
-	github.com/conductorone/baton-sdk v0.1.14
+	github.com/conductorone/baton-sdk v0.1.15-0.20240111183904-2a89c5260b8d
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/spf13/cobra v1.8.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/oauth2 v0.16.0
-	google.golang.org/api v0.155.0
+	google.golang.org/api v0.156.0
 )
 
 require (

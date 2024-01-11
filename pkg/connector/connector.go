@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -59,21 +60,23 @@ type GoogleWorkspace struct {
 	credentials        []byte
 
 	mtx          sync.Mutex
-	serviceCache map[string]*admin.Service
+	serviceCache map[string]any
 }
 
-func (o *GoogleWorkspace) newGoogleWorkspaceAdminServiceForScopes(ctx context.Context, scopes ...string) (*admin.Service, error) {
+type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
+
+func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, newService newService[T], scopes ...string) (*T, error) {
 	l := ctxzap.Extract(ctx)
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, l))
 	if err != nil {
 		return nil, err
 	}
 
-	config, err := google.JWTConfigFromJSON(o.credentials, scopes...)
+	config, err := google.JWTConfigFromJSON(credentials, scopes...)
 	if err != nil {
 		return nil, err
 	}
-	config.Subject = o.administratorEmail
+	config.Subject = email
 
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	tokenSrc := config.TokenSource(ctx)
@@ -95,11 +98,15 @@ func (o *GoogleWorkspace) newGoogleWorkspaceAdminServiceForScopes(ctx context.Co
 			Source: oauth2.ReuseTokenSource(token, tokenSrc),
 		},
 	}
-	srv, err := admin.NewService(ctx, option.WithHTTPClient(httpClient))
+	srv, err := newService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, err
 	}
 	return srv, nil
+}
+
+func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*admin.Service, error) {
+	return getService(ctx, c, scope, admin.NewService)
 }
 
 func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
@@ -108,7 +115,7 @@ func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 		domain:             config.Domain,
 		administratorEmail: config.AdministratorEmail,
 		credentials:        config.Credentials,
-		serviceCache:       map[string]*admin.Service{},
+		serviceCache:       map[string]any{},
 	}
 	return rv, nil
 }
@@ -131,7 +138,7 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 }
 
 func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations, error) {
-	service, err := c.getService(ctx, admin.AdminDirectoryDomainReadonlyScope)
+	service, err := c.getDirectoryService(ctx, admin.AdminDirectoryDomainReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("google-workspace: failed to initialize service for scope %s: %w", admin.AdminDirectoryDomainReadonlyScope, err)
 	}
@@ -150,17 +157,17 @@ func (c *GoogleWorkspace) Asset(ctx context.Context, asset *v2.AssetRef) (string
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	rs := []connectorbuilder.ResourceSyncer{}
-	roleService, err := c.getService(ctx, admin.AdminDirectoryRolemanagementReadonlyScope)
+	roleService, err := c.getDirectoryService(ctx, admin.AdminDirectoryRolemanagementReadonlyScope)
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID))
 	}
-	userService, err := c.getService(ctx, admin.AdminDirectoryUserReadonlyScope)
+	userService, err := c.getDirectoryService(ctx, admin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
 	}
-	groupService, err := c.getService(ctx, admin.AdminDirectoryGroupReadonlyScope)
+	groupService, err := c.getDirectoryService(ctx, admin.AdminDirectoryGroupReadonlyScope)
 	if err == nil {
-		groupMemberService, err := c.getService(ctx, admin.AdminDirectoryGroupMemberReadonlyScope)
+		groupMemberService, err := c.getDirectoryService(ctx, admin.AdminDirectoryGroupMemberReadonlyScope)
 		if err == nil {
 			rs = append(rs, groupBuilder(groupService, c.customerID, c.domain, groupMemberService))
 		}
@@ -168,29 +175,47 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	return rs
 }
 
-// getService will return an *admin.Service for the given scope, caching the result.
-// If you request a 'readonly' scope and get a 401 fetching a token, getService will attempt 'upgrade'
-// the scope (strip the 'readonly') and try again.
-func (c *GoogleWorkspace) getService(ctx context.Context, scope string) (*admin.Service, error) {
-	l := ctxzap.Extract(ctx)
+func updateCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
 	c.mtx.Lock()
 	service, ok := c.serviceCache[scope]
 	if ok {
 		c.mtx.Unlock()
+		if service, ok := service.(*T); ok {
+			return service, nil
+		}
+		return nil, fmt.Errorf("google-workspace: cache entry for scope %s exists, but is not of type %s", scope, reflect.TypeOf(service))
+	}
+	c.mtx.Unlock()
+	return nil, nil
+}
+
+// getService will return an *admin.Service for the given scope, caching the result.
+// If you request a 'readonly' scope and get a 401 fetching a token, getService will attempt 'upgrade'
+// the scope (strip the 'readonly') and try again.
+func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, newService newService[T]) (*T, error) {
+	l := ctxzap.Extract(ctx)
+
+	service, err := updateCache[T](ctx, c, scope)
+	if err != nil {
+		return nil, err
+	}
+	if service != nil {
 		return service, nil
 	}
 
 	upgradedScope, upgraded := upgradeScope(ctx, scope)
 	if upgraded {
-		service, ok := c.serviceCache[upgradedScope]
-		if ok {
-			c.mtx.Unlock()
+		service, err := updateCache[T](ctx, c, upgradedScope)
+		if err != nil {
+			return nil, err
+		}
+		if service != nil {
 			return service, nil
 		}
 	}
 	c.mtx.Unlock()
 
-	service, err := c.newGoogleWorkspaceAdminServiceForScopes(ctx, scope)
+	service, err = newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, newService, scope)
 	if err != nil {
 		var ae *GoogleWorkspaceOAuthUnauthorizedError
 		if errors.As(err, &ae) {
@@ -202,7 +227,7 @@ func (c *GoogleWorkspace) getService(ctx context.Context, scope string) (*admin.
 					zap.String("scope", scope),
 					zap.String("upgraded_scope", upgradedScope),
 				)
-				return c.getService(ctx, upgradedScope)
+				return getService(ctx, c, upgradedScope, newService)
 			}
 		}
 		return nil, err
