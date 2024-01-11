@@ -32,10 +32,6 @@ type ResourceProvisionerV2 interface {
 	Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error)
 }
 
-type EventProvider interface {
-	ListEvents(ctx context.Context, startingPosition *v2.StartingPosition, pToken *pagination.Token) ([]*v2.Event, string, annotations.Annotations, error)
-}
-
 type ConnectorBuilder interface {
 	Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 	Validate(ctx context.Context) (annotations.Annotations, error)
@@ -46,7 +42,6 @@ type builderImpl struct {
 	resourceBuilders       map[string]ResourceSyncer
 	resourceProvisioners   map[string]ResourceProvisioner
 	resourceProvisionersV2 map[string]ResourceProvisionerV2
-	eventFeed              EventProvider
 	cb                     ConnectorBuilder
 }
 
@@ -59,10 +54,6 @@ func NewConnector(ctx context.Context, in interface{}) (types.ConnectorServer, e
 			resourceProvisioners:   make(map[string]ResourceProvisioner),
 			resourceProvisionersV2: make(map[string]ResourceProvisionerV2),
 			cb:                     c,
-		}
-
-		if b, ok := c.(EventProvider); ok {
-			ret.eventFeed = b
 		}
 
 		for _, rb := range c.ResourceSyncers(ctx) {
@@ -290,22 +281,4 @@ func (b *builderImpl) Revoke(ctx context.Context, request *v2.GrantManagerServic
 // FIXME(jirwin): Asset streaming is disabled.
 func (b *builderImpl) GetAsset(request *v2.AssetServiceGetAssetRequest, server v2.AssetService_GetAssetServer) error {
 	return nil
-}
-
-func (b *builderImpl) ListEvents(ctx context.Context, request *v2.ListEventsRequest) (*v2.ListEventsResponse, error) {
-	if b.eventFeed == nil {
-		return nil, fmt.Errorf("error: event feed not implemented")
-	}
-	events, nextPage, annotations, err := b.eventFeed.ListEvents(ctx, request.StartingPosition, &pagination.Token{
-		Size:  int(request.PageSize),
-		Token: request.PageToken,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error: listing events failed: %w", err)
-	}
-	return &v2.ListEventsResponse{
-		Events:        events,
-		NextPageToken: nextPage,
-		Annotations:   annotations,
-	}, nil
 }

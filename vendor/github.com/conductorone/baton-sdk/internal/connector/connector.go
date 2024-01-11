@@ -11,13 +11,6 @@ import (
 	"sync"
 	"time"
 
-	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/protobuf/proto"
-
 	connectorV2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	connectorwrapperV1 "github.com/conductorone/baton-sdk/pb/c1/connector_wrapper/v1"
 	ratelimitV1 "github.com/conductorone/baton-sdk/pb/c1/ratelimit/v1"
@@ -26,6 +19,12 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/conductorone/baton-sdk/pkg/ugrpc"
 	utls2 "github.com/conductorone/baton-sdk/pkg/utls"
+	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/proto"
 )
 
 const listenerFdEnv = "BATON_CONNECTOR_SERVICE_LISTENER_FD"
@@ -39,7 +38,6 @@ type connectorClient struct {
 	connectorV2.AssetServiceClient
 	ratelimitV1.RateLimiterServiceClient
 	connectorV2.GrantManagerServiceClient
-	connectorV2.EventServiceClient
 }
 
 var ErrConnectorNotImplemented = errors.New("client does not implement connector connectorV2")
@@ -138,7 +136,6 @@ func (cw *wrapper) Run(ctx context.Context, serverCfg *connectorwrapperV1.Server
 	connectorV2.RegisterResourcesServiceServer(server, cw.server)
 	connectorV2.RegisterResourceTypesServiceServer(server, cw.server)
 	connectorV2.RegisterAssetServiceServer(server, cw.server)
-	connectorV2.RegisterEventServiceServer(server, cw.server)
 
 	if cw.provisioningEnabled {
 		connectorV2.RegisterGrantManagerServiceServer(server, cw.server)
@@ -300,7 +297,6 @@ func (cw *wrapper) C(ctx context.Context) (types.ConnectorClient, error) {
 		AssetServiceClient:         connectorV2.NewAssetServiceClient(cw.conn),
 		RateLimiterServiceClient:   ratelimitV1.NewRateLimiterServiceClient(cw.conn),
 		GrantManagerServiceClient:  connectorV2.NewGrantManagerServiceClient(cw.conn),
-		EventServiceClient:         connectorV2.NewEventServiceClient(cw.conn),
 	}
 
 	return cw.client, nil
