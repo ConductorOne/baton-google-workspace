@@ -182,15 +182,14 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 
 func updateCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
 	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	service, ok := c.serviceCache[scope]
 	if ok {
-		c.mtx.Unlock()
 		if service, ok := service.(*T); ok {
 			return service, nil
 		}
 		return nil, fmt.Errorf("google-workspace: cache entry for scope %s exists, but is not of type %s", scope, reflect.TypeOf(service))
 	}
-	c.mtx.Unlock()
 	return nil, nil
 }
 
@@ -218,7 +217,6 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 			return service, nil
 		}
 	}
-	c.mtx.Unlock()
 
 	service, err = newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, newService, scope)
 	if err != nil {
