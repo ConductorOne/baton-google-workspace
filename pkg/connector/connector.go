@@ -60,8 +60,9 @@ type GoogleWorkspace struct {
 	administratorEmail string
 	credentials        []byte
 
-	mtx          sync.Mutex
-	serviceCache map[string]any
+	mtx           sync.Mutex
+	serviceCache  map[string]any
+	reportService *reportsAdmin.Service
 }
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
@@ -106,8 +107,16 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	return srv, nil
 }
 
-func (c *GoogleWorkspace) getRoleService(ctx context.Context, scope string) (*reportsAdmin.Service, error) {
-	return getService(ctx, c, scope, reportsAdmin.NewService)
+func (c *GoogleWorkspace) getRoleService(ctx context.Context) (*reportsAdmin.Service, error) {
+	if c.reportService != nil {
+		return c.reportService, nil
+	}
+	srv, err := newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
+	if err != nil {
+		return nil, err
+	}
+	c.reportService = srv
+	return srv, nil
 }
 
 func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*directoryAdmin.Service, error) {
