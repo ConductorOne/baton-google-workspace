@@ -107,7 +107,7 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	return srv, nil
 }
 
-func (c *GoogleWorkspace) getRoleService(ctx context.Context) (*reportsAdmin.Service, error) {
+func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.Service, error) {
 	if c.reportService != nil {
 		return c.reportService, nil
 	}
