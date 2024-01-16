@@ -45,6 +45,11 @@ var (
 		},
 		Annotations: v1AnnotationsForResourceType("user"),
 	}
+	enterpriseApplicationResourceType = &v2.ResourceType{
+		Id:          "enterprise_application",
+		DisplayName: "Enterprise Application",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+	}
 )
 
 type Config struct {

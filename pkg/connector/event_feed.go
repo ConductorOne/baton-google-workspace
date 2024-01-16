@@ -53,15 +53,15 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startingPosition *v2.S
 					UsageEvent: &v2.UsageEvent{
 						TargetResource: &v2.Resource{
 							Id: &v2.ResourceId{
-								// ResourceType: .Id,
-								Resource: getValueFromParameters("client_id", e.Parameters),
+								ResourceType: enterpriseApplicationResourceType.Id,
+								Resource:     getValueFromParameters("client_id", e.Parameters),
 							},
 							DisplayName: getValueFromParameters("app_name", e.Parameters),
 						},
 						ActorResource: &v2.Resource{
 							Id: &v2.ResourceId{
-								// ResourceType: userResourceType.Id,
-								Resource: activity.Actor.ProfileId,
+								ResourceType: resourceTypeRole.Id,
+								Resource:     activity.Actor.ProfileId,
 							},
 							DisplayName: activity.Actor.Email,
 						},
