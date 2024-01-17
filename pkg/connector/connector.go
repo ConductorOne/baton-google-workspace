@@ -189,7 +189,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	return rs
 }
 
-func updateCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
+func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	service, ok := c.serviceCache[scope]
@@ -208,7 +208,7 @@ func updateCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (
 func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, newService newService[T]) (*T, error) {
 	l := ctxzap.Extract(ctx)
 
-	service, err := updateCache[T](ctx, c, scope)
+	service, err := getFromCache[T](ctx, c, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 
 	upgradedScope, upgraded := upgradeScope(ctx, scope)
 	if upgraded {
-		service, err := updateCache[T](ctx, c, upgradedScope)
+		service, err := getFromCache[T](ctx, c, upgradedScope)
 		if err != nil {
 			return nil, err
 		}
