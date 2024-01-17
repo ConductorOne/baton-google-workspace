@@ -51,7 +51,7 @@ func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEven
 
 func (c *GoogleWorkspace) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	var streamState *pagination.StreamState
-	s, err := c.getRoleService(ctx)
+	s, err := c.getReportService(ctx)
 	if err != nil {
 		return nil, streamState, nil, err
 	}
