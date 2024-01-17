@@ -3,7 +3,7 @@ module github.com/conductorone/baton-google-workspace
 go 1.20
 
 require (
-	github.com/conductorone/baton-sdk v0.1.15-0.20240111213450-426cf5e84529
+	github.com/conductorone/baton-sdk v0.1.15-0.20240117193910-6678ed16295a
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/spf13/cobra v1.8.0
 	go.uber.org/zap v1.26.0

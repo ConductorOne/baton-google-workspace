@@ -6,6 +6,7 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -33,7 +34,7 @@ type ResourceProvisionerV2 interface {
 }
 
 type EventProvider interface {
-	ListEvents(ctx context.Context, startingPosition *v2.StartingPosition, pToken *pagination.Token) ([]*v2.Event, string, annotations.Annotations, error)
+	ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error)
 }
 
 type ConnectorBuilder interface {
@@ -296,7 +297,7 @@ func (b *builderImpl) ListEvents(ctx context.Context, request *v2.ListEventsRequ
 	if b.eventFeed == nil {
 		return nil, fmt.Errorf("error: event feed not implemented")
 	}
-	events, nextPage, annotations, err := b.eventFeed.ListEvents(ctx, request.StartingPosition, &pagination.Token{
+	events, streamState, annotations, err := b.eventFeed.ListEvents(ctx, request.EarliestEvent, &pagination.StreamToken{
 		Size:  int(request.PageSize),
 		Token: request.PageToken,
 	})
@@ -305,7 +306,8 @@ func (b *builderImpl) ListEvents(ctx context.Context, request *v2.ListEventsRequ
 	}
 	return &v2.ListEventsResponse{
 		Events:        events,
-		NextPageToken: nextPage,
+		NextPageToken: streamState.NextPageToken,
+		HasMore:       streamState.HasMore,
 		Annotations:   annotations,
 	}, nil
 }
