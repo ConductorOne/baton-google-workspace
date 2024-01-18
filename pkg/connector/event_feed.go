@@ -2,6 +2,8 @@ package connector
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"strconv"
 	"time"
 
@@ -49,20 +51,75 @@ func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEven
 	return ""
 }
 
-func (c *GoogleWorkspace) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+type PageToken struct {
+	LatestEventSeen string `json:"latest_event_seen,omitempty"`
+	NextPageToken   string `json:"next_page_token,omitempty"`
+	StartAt         string `json:"start_at,omitempty"`
+	PageSize        int    `json:"page_size,omitempty"`
+}
+
+func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*PageToken, error) {
+	pt := &PageToken{}
+	if token != nil && token.Cursor != "" {
+		data, err := base64.StdEncoding.DecodeString(token.Cursor)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := json.Unmarshal(data, pt); err != nil {
+			return nil, err
+		}
+
+		pt.PageSize = token.Size
+	}
+
+	if pt.StartAt == "" {
+		if defaultStart == nil {
+			// There's lag on these events, so we're going to start roughly when google says events should come in
+			// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
+			defaultStart = timestamppb.New(time.Now().Add(-2 * time.Hour))
+		}
+		pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
+	}
+
+	if pt.LatestEventSeen == "" {
+		pt.LatestEventSeen = pt.StartAt
+	}
+
+	return pt, nil
+}
+
+func (pt *PageToken) marshal() (string, error) {
+	data, err := json.Marshal(pt)
+	if err != nil {
+		return "", err
+	}
+
+	basedToken := base64.StdEncoding.EncodeToString(data)
+
+	return basedToken, nil
+}
+
+func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	var streamState *pagination.StreamState
 	s, err := c.getReportService(ctx)
 	if err != nil {
 		return nil, streamState, nil, err
 	}
 
-	req := s.Activities.List("all", "token")
+	req := s.Activities.List("all", "cursorToken")
 	req.MaxResults(int64(pToken.Size))
-	if pToken.Token != "" {
-		req.PageToken(pToken.Token)
+
+	cursor, err := unmarshalPageToken(pToken, startAt)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	if earliestEvent != nil {
-		req.StartTime(earliestEvent.AsTime().Format(time.RFC3339))
+
+	if cursor.StartAt != "" {
+		req.StartTime(cursor.StartAt)
+	}
+	if cursor.NextPageToken != "" {
+		req.PageToken(cursor.NextPageToken)
 	}
 
 	r, err := req.Do()
@@ -70,8 +127,17 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, earliestEvent *timesta
 		return nil, streamState, nil, err
 	}
 
+	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	events := []*v2.Event{}
 	for _, activity := range r.Items {
+		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
+		if occurredAt.AsTime().After(latestEvent) {
+			cursor.LatestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
+			latestEvent = occurredAt.AsTime()
+		}
 		// There can be multiple events, have not found an example of this yet
 		for _, e := range activity.Events {
 			userTrait, err := resource.NewUserTrait(resource.WithEmail(activity.Actor.Email, true))
@@ -80,7 +146,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, earliestEvent *timesta
 			}
 			event := &v2.Event{
 				Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
-				OccurredAt: convertIdTimeToTimestamp(activity.Id.Time),
+				OccurredAt: occurredAt,
 				Event: &v2.Event_UsageEvent{
 					UsageEvent: &v2.UsageEvent{
 						TargetResource: &v2.Resource{
@@ -105,9 +171,19 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, earliestEvent *timesta
 			events = append(events, event)
 		}
 	}
+
+	cursor.NextPageToken = r.NextPageToken
+	if r.NextPageToken == "" {
+		cursor.StartAt = cursor.LatestEventSeen
+		cursor.LatestEventSeen = ""
+	}
+
+	cursorToken, err := cursor.marshal()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	streamState = &pagination.StreamState{
-		NextPageToken: r.NextPageToken,
-		// todo @anthony/logan punting on this for now We actually want to return false if we find an event we have already seen
+		Cursor:  cursorToken,
 		HasMore: r.NextPageToken != "",
 	}
 	return events, streamState, nil, nil
