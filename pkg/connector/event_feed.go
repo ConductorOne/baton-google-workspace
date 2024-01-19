@@ -107,7 +107,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 		return nil, streamState, nil, err
 	}
 
-	req := s.Activities.List("all", "cursorToken")
+	req := s.Activities.List("all", "token")
 	req.MaxResults(int64(pToken.Size))
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
