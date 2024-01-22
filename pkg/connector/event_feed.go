@@ -104,7 +104,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 	var streamState *pagination.StreamState
 	s, err := c.getReportService(ctx)
 	if err != nil {
-		return nil, streamState, nil, err
+		return nil, nil, nil, err
 	}
 
 	req := s.Activities.List("all", "token")
@@ -124,7 +124,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 
 	r, err := req.Do()
 	if err != nil {
-		return nil, streamState, nil, err
+		return nil, nil, nil, err
 	}
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
