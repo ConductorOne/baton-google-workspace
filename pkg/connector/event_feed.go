@@ -142,7 +142,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 		for _, e := range activity.Events {
 			userTrait, err := resource.NewUserTrait(resource.WithEmail(activity.Actor.Email, true))
 			if err != nil {
-				return nil, streamState, nil, err
+				return nil, nil, nil, err
 			}
 			event := &v2.Event{
 				Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
@@ -151,7 +151,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 					UsageEvent: &v2.UsageEvent{
 						TargetResource: &v2.Resource{
 							Id: &v2.ResourceId{
-								ResourceType: enterpriseApplicationResourceType.Id,
+								ResourceType: resourceTypeEnterpriseApplication.Id,
 								Resource:     getValueFromParameters("client_id", e.Parameters),
 							},
 							DisplayName: getValueFromParameters("app_name", e.Parameters),
