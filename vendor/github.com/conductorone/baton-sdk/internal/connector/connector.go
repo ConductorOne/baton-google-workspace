@@ -39,6 +39,9 @@ type connectorClient struct {
 	connectorV2.AssetServiceClient
 	ratelimitV1.RateLimiterServiceClient
 	connectorV2.GrantManagerServiceClient
+	connectorV2.ResourceManagerServiceClient
+	connectorV2.AccountManagerServiceClient
+	connectorV2.CredentialManagerServiceClient
 	connectorV2.EventServiceClient
 }
 
@@ -142,8 +145,15 @@ func (cw *wrapper) Run(ctx context.Context, serverCfg *connectorwrapperV1.Server
 
 	if cw.provisioningEnabled {
 		connectorV2.RegisterGrantManagerServiceServer(server, cw.server)
+		connectorV2.RegisterResourceManagerServiceServer(server, cw.server)
+		connectorV2.RegisterAccountManagerServiceServer(server, cw.server)
+		connectorV2.RegisterCredentialManagerServiceServer(server, cw.server)
 	} else {
-		connectorV2.RegisterGrantManagerServiceServer(server, &noopProvisioner{})
+		noop := &noopProvisioner{}
+		connectorV2.RegisterGrantManagerServiceServer(server, noop)
+		connectorV2.RegisterResourceManagerServiceServer(server, noop)
+		connectorV2.RegisterAccountManagerServiceServer(server, noop)
+		connectorV2.RegisterCredentialManagerServiceServer(server, noop)
 	}
 
 	rl, err := ratelimit2.NewLimiter(ctx, cw.now, serverCfg.RateLimiterConfig)
@@ -292,15 +302,18 @@ func (cw *wrapper) C(ctx context.Context) (types.ConnectorClient, error) {
 	cw.conn = conn
 
 	cw.client = &connectorClient{
-		ResourceTypesServiceClient: connectorV2.NewResourceTypesServiceClient(cw.conn),
-		ResourcesServiceClient:     connectorV2.NewResourcesServiceClient(cw.conn),
-		EntitlementsServiceClient:  connectorV2.NewEntitlementsServiceClient(cw.conn),
-		GrantsServiceClient:        connectorV2.NewGrantsServiceClient(cw.conn),
-		ConnectorServiceClient:     connectorV2.NewConnectorServiceClient(cw.conn),
-		AssetServiceClient:         connectorV2.NewAssetServiceClient(cw.conn),
-		RateLimiterServiceClient:   ratelimitV1.NewRateLimiterServiceClient(cw.conn),
-		GrantManagerServiceClient:  connectorV2.NewGrantManagerServiceClient(cw.conn),
-		EventServiceClient:         connectorV2.NewEventServiceClient(cw.conn),
+		ResourceTypesServiceClient:     connectorV2.NewResourceTypesServiceClient(cw.conn),
+		ResourcesServiceClient:         connectorV2.NewResourcesServiceClient(cw.conn),
+		EntitlementsServiceClient:      connectorV2.NewEntitlementsServiceClient(cw.conn),
+		GrantsServiceClient:            connectorV2.NewGrantsServiceClient(cw.conn),
+		ConnectorServiceClient:         connectorV2.NewConnectorServiceClient(cw.conn),
+		AssetServiceClient:             connectorV2.NewAssetServiceClient(cw.conn),
+		RateLimiterServiceClient:       ratelimitV1.NewRateLimiterServiceClient(cw.conn),
+		GrantManagerServiceClient:      connectorV2.NewGrantManagerServiceClient(cw.conn),
+		ResourceManagerServiceClient:   connectorV2.NewResourceManagerServiceClient(cw.conn),
+		AccountManagerServiceClient:    connectorV2.NewAccountManagerServiceClient(cw.conn),
+		CredentialManagerServiceClient: connectorV2.NewCredentialManagerServiceClient(cw.conn),
+		EventServiceClient:             connectorV2.NewEventServiceClient(cw.conn),
 	}
 
 	return cw.client, nil
