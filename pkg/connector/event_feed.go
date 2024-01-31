@@ -134,6 +134,11 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 	events := []*v2.Event{}
 	for _, activity := range r.Items {
 		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
+		if occurredAt == nil {
+			// Set occurred at to epoch so that it should never be after the latest event
+			// Unless latest event is before epoch for some reason
+			occurredAt = timestamppb.New(time.Unix(0, 0))
+		}
 		if occurredAt.AsTime().After(latestEvent) {
 			cursor.LatestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
 			latestEvent = occurredAt.AsTime()
