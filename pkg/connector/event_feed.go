@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -49,6 +50,15 @@ func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEven
 		}
 	}
 	return ""
+}
+func hasParameter(name string, parameters []*reportsAdmin.ActivityEventsParameters) bool {
+	for _, p := range parameters {
+		p := p
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type pageToken struct {
@@ -152,29 +162,9 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			event := &v2.Event{
-				Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
-				OccurredAt: occurredAt,
-				Event: &v2.Event_UsageEvent{
-					UsageEvent: &v2.UsageEvent{
-						TargetResource: &v2.Resource{
-							Id: &v2.ResourceId{
-								ResourceType: resourceTypeEnterpriseApplication.Id,
-								Resource:     getValueFromParameters("client_id", e.Parameters),
-							},
-							DisplayName: getValueFromParameters("app_name", e.Parameters),
-						},
-						ActorResource: &v2.Resource{
-							Id: &v2.ResourceId{
-								ResourceType: resourceTypeUser.Id,
-								Resource:     activity.Actor.ProfileId,
-							},
-							DisplayName: activity.Actor.Email,
-							Annotations: annotations.New(userTrait),
-						},
-					},
-				},
-				Annotations: nil,
+			event, err := newV2Event(activity, occurredAt, e, userTrait)
+			if err != nil {
+				return nil, nil, nil, err
 			}
 			events = append(events, event)
 		}
@@ -195,4 +185,38 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 		HasMore: r.NextPageToken != "",
 	}
 	return events, streamState, nil, nil
+}
+
+func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait) (*v2.Event, error) {
+	if !hasParameter("client_id", e.Parameters) {
+		return nil, errors.New("google-workspace-event-feed: no client id in parameters")
+	}
+	if !hasParameter("app_name", e.Parameters) {
+		return nil, errors.New("google-workspace-event-feed: no app name in parameters")
+	}
+
+	event := &v2.Event{
+		Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
+		OccurredAt: occurredAt,
+		Event: &v2.Event_UsageEvent{
+			UsageEvent: &v2.UsageEvent{
+				TargetResource: &v2.Resource{
+					Id: &v2.ResourceId{
+						ResourceType: resourceTypeEnterpriseApplication.Id,
+						Resource:     getValueFromParameters("client_id", e.Parameters),
+					},
+					DisplayName: getValueFromParameters("app_name", e.Parameters),
+				},
+				ActorResource: &v2.Resource{
+					Id: &v2.ResourceId{
+						ResourceType: resourceTypeUser.Id,
+						Resource:     activity.Actor.ProfileId,
+					},
+					DisplayName: activity.Actor.Email,
+					Annotations: annotations.New(userTrait),
+				},
+			},
+		},
+	}
+	return event, nil
 }
