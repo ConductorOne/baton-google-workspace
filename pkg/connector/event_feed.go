@@ -140,7 +140,10 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 		}
 		// There can be multiple events, have not found an example of this yet
 		for _, e := range activity.Events {
-			userTrait, err := resource.NewUserTrait(resource.WithEmail(activity.Actor.Email, true))
+			userTrait, err := resource.NewUserTrait(
+				resource.WithEmail(activity.Actor.Email, true),
+				resource.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
+			)
 			if err != nil {
 				return nil, nil, nil, err
 			}
