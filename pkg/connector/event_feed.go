@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func RFC3339ToTimestamp(s string) *timestamppb.Timestamp {
+func rfc3339ToTimestamp(s string) *timestamppb.Timestamp {
 	i, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return nil
@@ -23,7 +23,7 @@ func RFC3339ToTimestamp(s string) *timestamppb.Timestamp {
 	return timestamppb.New(i)
 }
 
-func UnixSecondStringToTimestamp(s string) *timestamppb.Timestamp {
+func unixSecondStringToTimestamp(s string) *timestamppb.Timestamp {
 	i, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return nil
@@ -32,10 +32,10 @@ func UnixSecondStringToTimestamp(s string) *timestamppb.Timestamp {
 }
 
 func convertIdTimeToTimestamp(s string) *timestamppb.Timestamp {
-	if time := RFC3339ToTimestamp(s); time != nil {
+	if time := rfc3339ToTimestamp(s); time != nil {
 		return time
 	}
-	if time := UnixSecondStringToTimestamp(s); time != nil {
+	if time := unixSecondStringToTimestamp(s); time != nil {
 		return time
 	}
 	return nil
@@ -51,15 +51,15 @@ func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEven
 	return ""
 }
 
-type PageToken struct {
+type pageToken struct {
 	LatestEventSeen string `json:"latest_event_seen,omitempty"`
 	NextPageToken   string `json:"next_page_token,omitempty"`
 	StartAt         string `json:"start_at,omitempty"`
 	PageSize        int    `json:"page_size,omitempty"`
 }
 
-func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*PageToken, error) {
-	pt := &PageToken{}
+func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*pageToken, error) {
+	pt := &pageToken{}
 	if token != nil && token.Cursor != "" {
 		data, err := base64.StdEncoding.DecodeString(token.Cursor)
 		if err != nil {
@@ -89,7 +89,7 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 	return pt, nil
 }
 
-func (pt *PageToken) marshal() (string, error) {
+func (pt *pageToken) marshal() (string, error) {
 	data, err := json.Marshal(pt)
 	if err != nil {
 		return "", err
