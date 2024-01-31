@@ -12,6 +12,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -111,6 +113,8 @@ func (pt *pageToken) marshal() (string, error) {
 }
 
 func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
 	var streamState *pagination.StreamState
 	s, err := c.getReportService(ctx)
 	if err != nil {
@@ -164,7 +168,9 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 			}
 			event, err := newV2Event(activity, occurredAt, e, userTrait)
 			if err != nil {
-				return nil, nil, nil, err
+				l.Error("google-workspace-event-feed: failed to create event", zap.Error(err))
+				// Let's not bail the whole feed because of one bad event
+				continue
 			}
 			events = append(events, event)
 		}
