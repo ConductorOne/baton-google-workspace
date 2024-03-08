@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
 func rfc3339ToTimestamp(s string) *timestamppb.Timestamp {
 	i, err := time.Parse(time.RFC3339, s)
@@ -172,6 +175,10 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 				// Let's not bail the whole feed because of one bad event
 				continue
 			}
+			if event == nil {
+				continue
+			}
+
 			events = append(events, event)
 		}
 	}
@@ -201,6 +208,14 @@ func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timesta
 		return nil, errors.New("google-workspace-event-feed: no app name in parameters")
 	}
 
+	clientID := getValueFromParameters("client_id", e.Parameters)
+	appName := getValueFromParameters("app_name", e.Parameters)
+
+	if clientID == appName && privateAppIDRegex.MatchString(clientID) {
+		// This is a private app, we don't want to report on these
+		return nil, nil
+	}
+
 	event := &v2.Event{
 		Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
 		OccurredAt: occurredAt,
@@ -209,9 +224,9 @@ func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timesta
 				TargetResource: &v2.Resource{
 					Id: &v2.ResourceId{
 						ResourceType: resourceTypeEnterpriseApplication.Id,
-						Resource:     getValueFromParameters("client_id", e.Parameters),
+						Resource:     clientID,
 					},
-					DisplayName: getValueFromParameters("app_name", e.Parameters),
+					DisplayName: appName,
 				},
 				ActorResource: &v2.Resource{
 					Id: &v2.ResourceId{
