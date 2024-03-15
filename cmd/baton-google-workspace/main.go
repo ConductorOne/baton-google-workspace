@@ -40,9 +40,16 @@ func main() {
 func getConnector(ctx context.Context, cfg *config) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	jsonCredentials, err := os.ReadFile(cfg.CredentialsJSONFilePath) // just pass the file name
-	if err != nil {
-		l.Error("error reading crentialsJson file", zap.Error(err))
+	var jsonCredentials []byte
+
+	if cfg.CredentialsJSONFilePath == "" {
+		l.Error("no path specified to credentialsJson file")
+	} else {
+		var err error
+		jsonCredentials, err = os.ReadFile(cfg.CredentialsJSONFilePath) // just pass the file name
+		if err != nil {
+			l.Error("error reading credentialsJson file", zap.String("CredentialsJSONFilePath", cfg.CredentialsJSONFilePath), zap.Error(err))
+		}
 	}
 
 	config := connector.Config{
