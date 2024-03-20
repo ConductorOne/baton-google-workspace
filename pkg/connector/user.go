@@ -24,6 +24,26 @@ func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {
 	return o.resourceType
 }
 
+func (o *userResourceType) userStatus(ctx context.Context, user *admin.User) (v2.UserTrait_Status_Status, string) {
+	if user.DeletionTime != "" {
+		return v2.UserTrait_Status_STATUS_DELETED, ""
+	}
+
+	if user.Suspended {
+		reason := "Suspended"
+		if user.SuspensionReason != "" {
+			reason += ": " + user.SuspensionReason
+		}
+		return v2.UserTrait_Status_STATUS_DISABLED, reason
+	}
+
+	if user.Archived {
+		return v2.UserTrait_Status_STATUS_DISABLED, "Archived"
+	}
+
+	return v2.UserTrait_Status_STATUS_ENABLED, ""
+}
+
 func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	bag := &pagination.Bag{}
@@ -61,6 +81,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		traitOpts := []sdkResource.UserTraitOption{
 			sdkResource.WithEmail(user.PrimaryEmail, true),
 			sdkResource.WithUserProfile(userProfile(ctx, user)),
+			sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
 		}
 		userResource, err := sdkResource.NewUserResource(user.Name.FullName, resourceTypeUser, user.Id, traitOpts, sdkResource.WithAnnotation(annos))
 		if err != nil {
