@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -150,4 +151,38 @@ func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
 	profile["role_id"] = role.RoleId
 	profile["role_name"] = role.RoleName
 	return profile
+}
+
+func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, nil, errors.New("google-workspace-v2: user principal is required")
+	}
+
+	tempRoleId, err := strconv.ParseInt(entitlement.Resource.Id.Resource, 10, 64)
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace-v2: failed to convert roleId to string: %w", err)
+	}
+	r := o.roleService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{AssignedTo: principal.GetId().GetResource(), RoleId: tempRoleId})
+	assignment, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
+	}
+
+	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
+	grant.Id = strconv.FormatInt(assignment.RoleAssignmentId, 10)
+	return []*v2.Grant{}, nil, nil
+}
+
+func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, errors.New("google-workspace-v2: user principal is required")
+	}
+
+	r := o.roleService.RoleAssignments.Delete(o.customerId, grant.Id)
+	err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace-v2: failed to remove role member: %w", err)
+	}
+
+	return nil, nil
 }

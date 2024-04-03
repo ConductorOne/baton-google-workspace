@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -153,4 +154,34 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 	profile["group_name"] = group.Name
 	profile["group_email"] = group.Email
 	return profile
+}
+
+func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, nil, errors.New("google-workspace-v2: user principal is required")
+	}
+
+	r := o.groupService.Members.Insert(o.customerId, &admin.Member{Id: principal.GetId().GetResource()})
+	assignment, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
+	}
+
+	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
+	grant.Id = assignment.Id
+	return []*v2.Grant{grant}, nil, nil
+}
+
+func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, errors.New("google-workspace-v2: user principal is required")
+	}
+
+	r := o.groupService.Members.Delete(o.customerId, grant.Id)
+	err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace-v2: failed to remove group member: %w", err)
+	}
+
+	return nil, nil
 }
