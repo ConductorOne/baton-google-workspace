@@ -123,10 +123,8 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 		if err != nil {
 			return nil, "", nil, err
 		}
-		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID)
-		annos := annotations.Annotations(grant.Annotations)
-		annos.Update(v1Identifier)
-		grant.Annotations = annos
+		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, sdkGrant.WithAnnotation(v1Identifier))
+		grant.Id = tempRoleAssignmentId
 		rv = append(rv, grant)
 	}
 
