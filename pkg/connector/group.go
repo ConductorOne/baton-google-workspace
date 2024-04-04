@@ -159,7 +159,7 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 		return nil, nil, errors.New("google-workspace-v2: user principal is required")
 	}
 
-	r := o.groupService.Members.Insert(o.customerId, &admin.Member{Id: principal.GetId().GetResource()})
+	r := o.groupService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
 	assignment, err := r.Context(ctx).Do()
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
