@@ -160,7 +160,11 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace-v2: failed to convert roleId to string: %w", err)
 	}
-	r := o.roleService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{AssignedTo: principal.GetId().GetResource(), RoleId: tempRoleId})
+	r := o.roleService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{
+		AssignedTo: principal.GetId().GetResource(),
+		RoleId:     tempRoleId,
+		ScopeType:  "CUSTOMER",
+	})
 	assignment, err := r.Context(ctx).Do()
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
