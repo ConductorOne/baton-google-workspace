@@ -2,7 +2,9 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -14,6 +16,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
 )
 
 const (
@@ -122,10 +125,8 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 		if err != nil {
 			return nil, "", nil, err
 		}
-		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID)
-		annos := annotations.Annotations(grant.Annotations)
-		annos.Update(v1Identifier)
-		grant.Annotations = annos
+		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, sdkGrant.WithAnnotation(v1Identifier))
+		grant.Id = tempRoleAssignmentId
 		rv = append(rv, grant)
 	}
 
@@ -150,4 +151,62 @@ func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
 	profile["role_id"] = role.RoleId
 	profile["role_name"] = role.RoleName
 	return profile
+}
+
+func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, nil, errors.New("google-workspace-v2: user principal is required")
+	}
+
+	tempRoleId, err := strconv.ParseInt(entitlement.Resource.Id.Resource, 10, 64)
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace-v2: failed to convert roleId to string: %w", err)
+	}
+	r := o.roleService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{
+		AssignedTo: principal.GetId().GetResource(),
+		RoleId:     tempRoleId,
+		ScopeType:  "CUSTOMER",
+	})
+	assignment, err := r.Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusConflict {
+				// We don't need to do anything here, the user is already a member of the role
+				// We unfortunately can't get the role assignment to return as a grant, so we just return nil
+				return nil, nil, nil
+			}
+		} else {
+			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
+		}
+	}
+
+	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
+	grant.Id = strconv.FormatInt(assignment.RoleAssignmentId, 10)
+	return []*v2.Grant{grant}, nil, nil
+}
+
+func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, errors.New("google-workspace-v2: user principal is required")
+	}
+	l := ctxzap.Extract(ctx)
+
+	r := o.roleService.RoleAssignments.Delete(o.customerId, grant.Id)
+	err := r.Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// This should only hit if someone double-revokes, but I'd rather we log something about it
+				l.Info("google-workspace-v2: role member is being deleted but doesn't exist",
+					zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
+					zap.String("user_id", grant.Principal.GetId().GetResource()))
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("google-workspace-v2: failed to remove role member: %w", err)
+	}
+
+	return nil, nil
 }

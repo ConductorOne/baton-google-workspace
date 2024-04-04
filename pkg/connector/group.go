@@ -2,7 +2,9 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -10,6 +12,7 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/api/googleapi"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -122,10 +125,8 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		if err != nil {
 			return nil, "", nil, err
 		}
-		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID)
-		annos := annotations.Annotations(grant.Annotations)
-		annos.Update(v1Identifier)
-		grant.Annotations = annos
+		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, sdkGrant.WithAnnotation(v1Identifier))
+		grant.Id = member.Id
 		rv = append(rv, grant)
 	}
 
@@ -153,4 +154,55 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 	profile["group_name"] = group.Name
 	profile["group_email"] = group.Email
 	return profile
+}
+
+func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, nil, errors.New("google-workspace-v2: user principal is required")
+	}
+
+	r := o.groupService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
+	assignment, err := r.Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusConflict {
+				assignment, err = o.groupService.Members.Get(entitlement.Resource.Id.Resource, principal.GetId().GetResource()).Context(ctx).Do()
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		} else {
+			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
+		}
+	}
+
+	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
+	grant.Id = assignment.Id
+	return []*v2.Grant{grant}, nil, nil
+}
+
+func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
+		return nil, errors.New("google-workspace-v2: user principal is required")
+	}
+	l := ctxzap.Extract(ctx)
+
+	r := o.groupService.Members.Delete(grant.Entitlement.Resource.Id.Resource, grant.Principal.GetId().GetResource())
+	err := r.Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// This should only hit if someone double-revokes, but I'd rather we log something about it
+				l.Info("google-workspace-v2: group member is being deleted but doesn't exist",
+					zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
+					zap.String("user_id", grant.Principal.GetId().GetResource()))
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("google-workspace-v2: failed to remove group member: %w", err)
+	}
+
+	return nil, nil
 }
