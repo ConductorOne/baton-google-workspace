@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -15,6 +16,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
 )
 
 const (
@@ -167,22 +169,42 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 	})
 	assignment, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusConflict {
+				// We don't need to do anything here, the user is already a member of the role
+				// We unfortunately can't get the role assignment to return as a grant, so we just return nil
+				return nil, nil, nil
+			}
+		} else {
+			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
+		}
 	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
 	grant.Id = strconv.FormatInt(assignment.RoleAssignmentId, 10)
-	return []*v2.Grant{}, nil, nil
+	return []*v2.Grant{grant}, nil, nil
 }
 
 func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, errors.New("google-workspace-v2: user principal is required")
 	}
+	l := ctxzap.Extract(ctx)
 
 	r := o.roleService.RoleAssignments.Delete(o.customerId, grant.Id)
 	err := r.Context(ctx).Do()
 	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// This should only hit if someone double-revokes, but I'd rather we log something about it
+				l.Info("google-workspace-v2: role member is being deleted but doesn't exist",
+					zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
+					zap.String("user_id", grant.Principal.GetId().GetResource()))
+				return nil, nil
+			}
+		}
 		return nil, fmt.Errorf("google-workspace-v2: failed to remove role member: %w", err)
 	}
 
