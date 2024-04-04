@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -11,6 +12,7 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/api/googleapi"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -162,7 +164,17 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 	r := o.groupService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
 	assignment, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusConflict {
+				assignment, err = o.groupService.Members.Get(entitlement.Resource.Id.Resource, principal.GetId().GetResource()).Context(ctx).Do()
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		} else {
+			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
+		}
 	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
@@ -174,10 +186,21 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, errors.New("google-workspace-v2: user principal is required")
 	}
+	l := ctxzap.Extract(ctx)
 
-	r := o.groupService.Members.Delete(o.customerId, grant.Id)
+	r := o.groupService.Members.Delete(grant.Entitlement.Resource.Id.Resource, grant.Principal.GetId().GetResource())
 	err := r.Context(ctx).Do()
 	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// This should only hit if someone double-revokes, but I'd rather we log something about it
+				l.Info("google-workspace-v2: group member is being deleted but doesn't exist",
+					zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
+					zap.String("user_id", grant.Principal.GetId().GetResource()))
+				return nil, nil
+			}
+		}
 		return nil, fmt.Errorf("google-workspace-v2: failed to remove group member: %w", err)
 	}
 
