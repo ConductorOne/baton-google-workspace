@@ -176,9 +176,8 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 				// We unfortunately can't get the role assignment to return as a grant, so we just return nil
 				return nil, nil, nil
 			}
-		} else {
-			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
 		}
+		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
 	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
