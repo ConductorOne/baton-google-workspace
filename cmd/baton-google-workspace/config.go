@@ -16,6 +16,7 @@ type config struct {
 	Domain                  string `mapstructure:"domain"`
 	AdministratorEmail      string `mapstructure:"administrator-email"`
 	CredentialsJSONFilePath string `mapstructure:"credentials-json-file-path"`
+	CredentialsJSON         string `mapstructure:"credentials-json"`
 }
 
 // validateConfig is run after the configuration is loaded, and should return an error if it isn't valid.
@@ -29,8 +30,8 @@ func validateConfig(ctx context.Context, cfg *config) error {
 	if cfg.AdministratorEmail == "" {
 		return fmt.Errorf("administrator email is missing")
 	}
-	if cfg.CredentialsJSONFilePath == "" {
-		return fmt.Errorf("credentials json file path is missing")
+	if cfg.CredentialsJSONFilePath == "" && cfg.CredentialsJSON == "" {
+		return fmt.Errorf("credentials are missing. provide credentials directly via a file")
 	}
 	return nil
 }
@@ -40,5 +41,8 @@ func cmdFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String("customer-id", "", "The customer Id for the google workspace account. ($BATON_CUSTOMER_ID)")
 	cmd.PersistentFlags().String("domain", "", "The domain for the google workspace account. ($BATON_DOMAIN)")
 	cmd.PersistentFlags().String("administrator-email", "", "An administrator email for the google workspace account. ($BATON_ADMINISTRATOR_EMAIL)")
-	cmd.PersistentFlags().String("credentials-json-file-path", "", "Json credentials file name for the google workspace account. ($BATON_CREDENTIALS_JSON_FILE_PATH)")
+	cmd.PersistentFlags().String("credentials-json-file-path",
+		"",
+		"Json credentials file name for the google workspace account. Mutual exclusive with credentials JSON. ($BATON_CREDENTIALS_JSON_FILE_PATH)")
+	cmd.PersistentFlags().String("credentials-json", "", "Json credentials for the google workspace account. Mutual exclusive with file path. ($BATON_CREDENTIALS_JSON)")
 }
