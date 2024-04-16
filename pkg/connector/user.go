@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -83,6 +84,34 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			sdkResource.WithUserProfile(userProfile(ctx, user)),
 			sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
 		}
+
+		if user.ThumbnailPhotoUrl != "" {
+			traitOpts = append(traitOpts, sdkResource.WithUserIcon(&v2.AssetRef{
+				Id: user.ThumbnailPhotoUrl,
+			}))
+		}
+		if user.Archived || user.Suspended {
+			traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DISABLED))
+		}
+		if user.IsEnrolledIn2Sv {
+			traitOpts = append(traitOpts, sdkResource.WithMFAStatus(
+				&v2.UserTrait_MFAStatus{MfaEnabled: true},
+			))
+		}
+		if user.DeletionTime != "" {
+			traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
+		}
+		if user.CreationTime != "" {
+			if t, err := time.Parse("2006-01-02T15:04:05-0700", user.CreationTime); err == nil {
+				traitOpts = append(traitOpts, sdkResource.WithCreatedAt(t))
+			}
+		}
+		if user.LastLoginTime != "" {
+			if t, err := time.Parse("2006-01-02T15:04:05-0700", user.LastLoginTime); err == nil {
+				traitOpts = append(traitOpts, sdkResource.WithLastLogin(t))
+			}
+		}
+
 		userResource, err := sdkResource.NewUserResource(user.Name.FullName, resourceTypeUser, user.Id, traitOpts, sdkResource.WithAnnotation(annos))
 		if err != nil {
 			return nil, "", nil, err
