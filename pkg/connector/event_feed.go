@@ -126,6 +126,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 
 	req := s.Activities.List("all", "token")
 	req.MaxResults(int64(pToken.Size))
+	req.EventName("authorize")
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
