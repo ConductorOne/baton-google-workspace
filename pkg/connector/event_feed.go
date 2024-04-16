@@ -92,7 +92,7 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 		if defaultStart == nil {
 			// There's lag on these events, so we're going to start roughly when google says events should come in
 			// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
-			defaultStart = timestamppb.New(time.Now().Add(-2 * time.Hour))
+			defaultStart = timestamppb.New(time.Now().Add(-2 * time.Hour * 10000))
 		}
 		pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
 	}
@@ -126,6 +126,7 @@ func (c *GoogleWorkspace) ListEvents(ctx context.Context, startAt *timestamppb.T
 
 	req := s.Activities.List("all", "token")
 	req.MaxResults(int64(pToken.Size))
+	req.EventName("authorize")
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
