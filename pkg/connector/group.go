@@ -126,7 +126,6 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 			return nil, "", nil, err
 		}
 		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, sdkGrant.WithAnnotation(v1Identifier))
-		grant.Id = member.Id
 		rv = append(rv, grant)
 	}
 
