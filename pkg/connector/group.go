@@ -170,6 +170,8 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 				if err != nil {
 					return nil, nil, err
 				}
+			} else {
+				return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
 			}
 		} else {
 			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
