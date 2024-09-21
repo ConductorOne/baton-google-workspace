@@ -15,10 +15,11 @@ import (
 )
 
 type userResourceType struct {
-	resourceType *v2.ResourceType
-	userService  *admin.Service
-	customerId   string
-	domain       string
+	resourceType            *v2.ResourceType
+	userService             *admin.Service
+	userProvisioningService *admin.Service
+	customerId              string
+	domain                  string
 }
 
 func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {

@@ -16,6 +16,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 )
 
@@ -24,9 +25,10 @@ const (
 )
 
 type roleResourceType struct {
-	resourceType *v2.ResourceType
-	roleService  *admin.Service
-	customerId   string
+	resourceType            *v2.ResourceType
+	roleService             *admin.Service
+	roleProvisioningService *admin.Service
+	customerId              string
 }
 
 func (o *roleResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -138,11 +140,12 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 	return rv, nextPage, nil, nil
 }
 
-func roleBuilder(roleService *admin.Service, customerId string) *roleResourceType {
+func roleBuilder(roleService *admin.Service, customerId string, roleProvisioningService *admin.Service) *roleResourceType {
 	return &roleResourceType{
-		resourceType: resourceTypeRole,
-		roleService:  roleService,
-		customerId:   customerId,
+		resourceType:            resourceTypeRole,
+		roleService:             roleService,
+		customerId:              customerId,
+		roleProvisioningService: roleProvisioningService,
 	}
 }
 
@@ -154,6 +157,9 @@ func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
 }
 
 func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if o.roleProvisioningService == nil {
+		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryRolemanagementScope)
+	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, nil, errors.New("google-workspace-v2: user principal is required")
 	}
@@ -162,7 +168,7 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace-v2: failed to convert roleId to string: %w", err)
 	}
-	r := o.roleService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{
+	r := o.roleProvisioningService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{
 		AssignedTo: principal.GetId().GetResource(),
 		RoleId:     tempRoleId,
 		ScopeType:  "CUSTOMER",
@@ -186,12 +192,15 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 }
 
 func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	if o.roleProvisioningService == nil {
+		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryRolemanagementScope)
+	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, errors.New("google-workspace-v2: user principal is required")
 	}
 	l := ctxzap.Extract(ctx)
 
-	r := o.roleService.RoleAssignments.Delete(o.customerId, grant.Id)
+	r := o.roleProvisioningService.RoleAssignments.Delete(o.customerId, grant.Id)
 	err := r.Context(ctx).Do()
 	if err != nil {
 		gerr := &googleapi.Error{}
