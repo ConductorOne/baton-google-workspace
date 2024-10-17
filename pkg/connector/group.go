@@ -17,6 +17,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	directoryAdmin "google.golang.org/api/admin/directory/v1"
 )
 
 const (
@@ -24,11 +25,12 @@ const (
 )
 
 type groupResourceType struct {
-	resourceType       *v2.ResourceType
-	groupService       *admin.Service
-	customerId         string
-	domain             string
-	groupMemberService *admin.Service
+	resourceType                   *v2.ResourceType
+	groupService                   *admin.Service
+	customerId                     string
+	domain                         string
+	groupMemberService             *admin.Service
+	groupMemberProvisioningService *admin.Service
 }
 
 func (o *groupResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -137,13 +139,20 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 	return rv, nextPage, nil, nil
 }
 
-func groupBuilder(groupService *admin.Service, customerId string, domain string, groupMemberService *admin.Service) *groupResourceType {
+func groupBuilder(
+	groupService *admin.Service,
+	customerId string,
+	domain string,
+	groupMemberService *admin.Service,
+	groupMemberProvisioningService *admin.Service,
+) *groupResourceType {
 	return &groupResourceType{
-		resourceType:       resourceTypeGroup,
-		groupService:       groupService,
-		customerId:         customerId,
-		domain:             domain,
-		groupMemberService: groupMemberService,
+		resourceType:                   resourceTypeGroup,
+		groupService:                   groupService,
+		customerId:                     customerId,
+		domain:                         domain,
+		groupMemberService:             groupMemberService,
+		groupMemberProvisioningService: groupMemberProvisioningService,
 	}
 }
 
@@ -156,11 +165,14 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 }
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if o.groupMemberProvisioningService == nil {
+		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryGroupMemberScope)
+	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, nil, errors.New("google-workspace-v2: user principal is required")
 	}
 
-	r := o.groupService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
+	r := o.groupMemberProvisioningService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
 	assignment, err := r.Context(ctx).Do()
 	if err != nil {
 		gerr := &googleapi.Error{}
@@ -184,12 +196,15 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 }
 
 func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	if o.groupMemberProvisioningService == nil {
+		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryGroupMemberScope)
+	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, errors.New("google-workspace-v2: user principal is required")
 	}
 	l := ctxzap.Extract(ctx)
 
-	r := o.groupService.Members.Delete(grant.Entitlement.Resource.Id.Resource, grant.Principal.GetId().GetResource())
+	r := o.groupMemberProvisioningService.Members.Delete(grant.Entitlement.Resource.Id.Resource, grant.Principal.GetId().GetResource())
 	err := r.Context(ctx).Do()
 	if err != nil {
 		gerr := &googleapi.Error{}

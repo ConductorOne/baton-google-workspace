@@ -176,19 +176,25 @@ func (c *GoogleWorkspace) Asset(ctx context.Context, asset *v2.AssetRef) (string
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	rs := []connectorbuilder.ResourceSyncer{}
+	// We don't care about the error here, as we handle the case where the service is nil in the syncer
+	roleProvisioningService, _ := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
 	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
 	if err == nil {
-		rs = append(rs, roleBuilder(roleService, c.customerID))
+		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}
+
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
 	}
+
+	// We don't care about the error here, as we handle the case where the service is nil in the syncer
+	groupProvisioningService, _ := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err == nil {
 		groupMemberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
 		if err == nil {
-			rs = append(rs, groupBuilder(groupService, c.customerID, c.domain, groupMemberService))
+			rs = append(rs, groupBuilder(groupService, c.customerID, c.domain, groupMemberService, groupProvisioningService))
 		}
 	}
 	return rs
