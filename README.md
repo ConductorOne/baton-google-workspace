@@ -57,18 +57,23 @@ Usage:
   baton-google-workspace [command]
 
 Available Commands:
+  capabilities       Get connector capabilities
   completion         Generate the autocompletion script for the specified shell
   help               Help about any command
 
 Flags:
-  -f, --file string                         The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
+      --administrator-email string          An administrator email for the google workspace account. ($BATON_ADMINISTRATOR_EMAIL)
+      --client-id string                    The client ID used to authenticate with ConductorOne ($BATON_CLIENT_ID)
+      --client-secret string                The client secret used to authenticate with ConductorOne ($BATON_CLIENT_SECRET)
+      --credentials-json string             Json credentials for the google workspace account. Mutual exclusive with file path. ($BATON_CREDENTIALS_JSON)
+      --credentials-json-file-path string   Json credentials file name for the google workspace account. Mutual exclusive with credentials JSON. ($BATON_CREDENTIALS_JSON_FILE_PATH)
       --customer-id string                  The customer Id for the google workspace account. ($BATON_CUSTOMER_ID)
       --domain string                       The domain for the google workspace account. ($BATON_DOMAIN)
-      --administrator-email string          An administrator email for the google workspace account. ($BATON_ADMINISTRATOR_EMAIL)
-      --credentials-json-file-path string   Json credentials file name for the google workspace account. ($BATON_CREDENTIALS_JSON_FILE_PATH)
+  -f, --file string                         The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
   -h, --help                                help for baton-google-workspace
       --log-format string                   The output format for logs: json, console ($BATON_LOG_FORMAT) (default "json")
       --log-level string                    The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
+  -p, --provisioning                        This must be set in order for provisioning actions to be enabled. ($BATON_PROVISIONING)
   -v, --version                             version for baton-google-workspace
 
 Use "baton-google-workspace [command] --help" for more information about a command.
