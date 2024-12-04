@@ -58,8 +58,8 @@ func getConnector(ctx context.Context, cfg *config) (types.ConnectorServer, erro
 
 	config := connector.Config{
 		CustomerID:         cfg.CustomerID,
-		Domain:             cfg.Domain,
 		AdministratorEmail: cfg.AdministratorEmail,
+		Domain:             cfg.Domain,
 		Credentials:        jsonCredentials,
 	}
 

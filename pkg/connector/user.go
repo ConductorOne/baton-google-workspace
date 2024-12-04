@@ -59,8 +59,18 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		})
 	}
 
-	r := o.userService.Users.List().Domain(o.domain).MaxResults(100).
-		OrderBy("email").Context(ctx)
+	r := o.userService.Users.List().OrderBy("email")
+
+	if o.domain != "" {
+		r = r.Domain(o.domain)
+	} else {
+		r = r.Customer(o.customerId)
+	}
+
+	// https://developers.google.com/admin-sdk/directory/v1/limits
+	// Users – A default of 100 entries and a maximum of 500 entries per page.
+	r = r.MaxResults(500)
+
 	if bag.PageToken() != "" {
 		r = r.PageToken(bag.PageToken())
 	}
@@ -135,12 +145,11 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ *paginati
 	return nil, "", nil, nil
 }
 
-func userBuilder(userService *admin.Service, customerId string, domain string) *userResourceType {
+func userBuilder(userService *admin.Service, customerId string) *userResourceType {
 	return &userResourceType{
 		resourceType: resourceTypeUser,
 		userService:  userService,
 		customerId:   customerId,
-		domain:       domain,
 	}
 }
 
