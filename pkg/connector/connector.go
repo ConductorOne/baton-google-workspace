@@ -65,8 +65,11 @@ type GoogleWorkspace struct {
 	administratorEmail string
 	credentials        []byte
 
-	mtx           sync.Mutex
-	serviceCache  map[string]any
+	mtx          sync.Mutex
+	serviceCache map[string]any
+
+	domainMtx sync.Mutex
+
 	primaryDomain string
 	domainsCache  []string
 	reportService *reportsAdmin.Service
@@ -136,6 +139,7 @@ func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 		administratorEmail: config.AdministratorEmail,
 		credentials:        config.Credentials,
 		serviceCache:       map[string]any{},
+		domain:             config.Domain,
 	}
 	return rv, nil
 }
@@ -161,8 +165,8 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 }
 
 func (c *GoogleWorkspace) getPrimaryDomain(ctx context.Context) (string, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
+	c.domainMtx.Lock()
+	defer c.domainMtx.Unlock()
 
 	if c.primaryDomain != "" {
 		return c.primaryDomain, nil
@@ -197,8 +201,8 @@ func (c *GoogleWorkspace) fetchDomains(ctx context.Context) error {
 }
 
 func (c *GoogleWorkspace) getDomains(ctx context.Context) ([]string, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
+	c.domainMtx.Lock()
+	defer c.domainMtx.Unlock()
 
 	if c.domainsCache != nil {
 		return c.domainsCache, nil

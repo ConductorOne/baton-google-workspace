@@ -119,7 +119,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		})
 	}
 
-	r := o.groupMemberService.Members.List(resource.Id.Resource).MaxResults(100)
+	r := o.groupMemberService.Members.List(resource.Id.Resource).MaxResults(200)
 	if bag.PageToken() != "" {
 		r = r.PageToken(bag.PageToken())
 	}
