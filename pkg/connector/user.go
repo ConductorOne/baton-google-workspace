@@ -145,11 +145,12 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ *paginati
 	return nil, "", nil, nil
 }
 
-func userBuilder(userService *admin.Service, customerId string) *userResourceType {
+func userBuilder(userService *admin.Service, customerId string, domain string) *userResourceType {
 	return &userResourceType{
 		resourceType: resourceTypeUser,
 		userService:  userService,
 		customerId:   customerId,
+		domain:       domain,
 	}
 }
 

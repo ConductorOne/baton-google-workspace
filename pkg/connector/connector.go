@@ -245,7 +245,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
-		rs = append(rs, userBuilder(userService, c.customerID))
+		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
 	}
 
 	// We don't care about the error here, as we handle the case where the service is nil in the syncer
