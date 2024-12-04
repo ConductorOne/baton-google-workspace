@@ -54,8 +54,8 @@ var (
 
 type Config struct {
 	CustomerID         string
-	Domain             string
 	AdministratorEmail string
+	Domain             string
 	Credentials        []byte
 }
 
@@ -65,8 +65,13 @@ type GoogleWorkspace struct {
 	administratorEmail string
 	credentials        []byte
 
-	mtx           sync.Mutex
-	serviceCache  map[string]any
+	mtx          sync.Mutex
+	serviceCache map[string]any
+
+	domainMtx sync.Mutex
+
+	primaryDomain string
+	domainsCache  []string
 	reportService *reportsAdmin.Service
 }
 
@@ -131,10 +136,10 @@ func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string)
 func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 	rv := &GoogleWorkspace{
 		customerID:         config.CustomerID,
-		domain:             config.Domain,
 		administratorEmail: config.AdministratorEmail,
 		credentials:        config.Credentials,
 		serviceCache:       map[string]any{},
+		domain:             config.Domain,
 	}
 	return rv, nil
 }
@@ -144,10 +149,13 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	if err != nil {
 		return nil, err
 	}
-
+	primaryDomain, err := c.getPrimaryDomain(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var annos annotations.Annotations
 	annos.Update(&v2.ExternalLink{
-		Url: c.domain,
+		Url: primaryDomain,
 	})
 
 	return &v2.ConnectorMetadata{
@@ -156,15 +164,71 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	}, nil
 }
 
-func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations, error) {
+func (c *GoogleWorkspace) getPrimaryDomain(ctx context.Context) (string, error) {
+	c.domainMtx.Lock()
+	defer c.domainMtx.Unlock()
+
+	if c.primaryDomain != "" {
+		return c.primaryDomain, nil
+	}
+	err := c.fetchDomains(ctx)
+	if err != nil {
+		return "", err
+	}
+	return c.primaryDomain, nil
+}
+
+func (c *GoogleWorkspace) fetchDomains(ctx context.Context) error {
 	service, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
 	if err != nil {
-		return nil, fmt.Errorf("google-workspace: failed to initialize service for scope %s: %w", directoryAdmin.AdminDirectoryDomainReadonlyScope, err)
+		return fmt.Errorf("google-workspace: failed to initialize service for scope %s: %w", directoryAdmin.AdminDirectoryDomainReadonlyScope, err)
 	}
 
-	_, err = service.Domains.Get(c.customerID, c.domain).Context(ctx).Do()
+	resp, err := service.Domains.List(c.customerID).Context(ctx).Do()
+	if err != nil {
+		return err
+	}
+
+	domains := make([]string, 0, len(resp.Domains))
+	for _, d := range resp.Domains {
+		domains = append(domains, d.DomainName)
+		if d.IsPrimary {
+			c.primaryDomain = d.DomainName
+		}
+	}
+	c.domainsCache = domains
+	return nil
+}
+
+func (c *GoogleWorkspace) getDomains(ctx context.Context) ([]string, error) {
+	c.domainMtx.Lock()
+	defer c.domainMtx.Unlock()
+
+	if c.domainsCache != nil {
+		return c.domainsCache, nil
+	}
+
+	err := c.fetchDomains(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	return c.domainsCache, nil
+}
+
+func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations, error) {
+	domains, err := c.getDomains(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.domain != "" {
+		for _, d := range domains {
+			if strings.EqualFold(c.domain, d) {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("google-workspace: domain '%s' is not a valid domain for customer '%s'", c.domain, c.customerID)
 	}
 
 	return nil, nil
@@ -194,7 +258,13 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	if err == nil {
 		groupMemberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
 		if err == nil {
-			rs = append(rs, groupBuilder(groupService, c.customerID, c.domain, groupMemberService, groupProvisioningService))
+			rs = append(rs, groupBuilder(
+				groupService,
+				c.customerID,
+				c.domain,
+				groupMemberService,
+				groupProvisioningService,
+			))
 		}
 	}
 	return rs

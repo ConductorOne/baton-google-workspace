@@ -24,9 +24,6 @@ func validateConfig(ctx context.Context, cfg *config) error {
 	if cfg.CustomerID == "" {
 		return fmt.Errorf("customer id is missing")
 	}
-	if cfg.Domain == "" {
-		return fmt.Errorf("domain is missing")
-	}
 	if cfg.AdministratorEmail == "" {
 		return fmt.Errorf("administrator email is missing")
 	}

@@ -49,7 +49,17 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 		})
 	}
 	l := ctxzap.Extract(ctx)
-	r := o.groupService.Groups.List().Domain(o.domain).MaxResults(100)
+	r := o.groupService.Groups.List()
+
+	if o.domain != "" {
+		r = r.Domain(o.domain)
+	} else {
+		r = r.Customer(o.customerId)
+	}
+
+	// https://developers.google.com/admin-sdk/directory/v1/limits
+	// Groups and group members – A default and maximum of 200 entries per page.
+	r = r.MaxResults(200)
 
 	if bag.PageToken() != "" {
 		r = r.PageToken(bag.PageToken())
@@ -109,7 +119,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		})
 	}
 
-	r := o.groupMemberService.Members.List(resource.Id.Resource).MaxResults(100)
+	r := o.groupMemberService.Members.List(resource.Id.Resource).MaxResults(200)
 	if bag.PageToken() != "" {
 		r = r.PageToken(bag.PageToken())
 	}
