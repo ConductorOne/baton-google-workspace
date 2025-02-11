@@ -163,6 +163,17 @@ func userProfile(ctx context.Context, user *admin.User) map[string]interface{} {
 		profile["icon"] = user.ThumbnailPhotoUrl
 		profile["manager_email"] = extractManagerEmail(user)
 	}
+
+	primaryOrg := extractPrimaryOrganizations(user)
+	if primaryOrg != nil {
+		// add all org[0] fields to the profile
+		profile["organization"] = primaryOrg.Name
+		profile["department"] = primaryOrg.Department
+		profile["title"] = primaryOrg.Title
+		profile["location"] = primaryOrg.Location
+		profile["cost_center"] = primaryOrg.CostCenter
+	}
+
 	return profile
 }
 
@@ -190,4 +201,34 @@ func extractRelations(u *admin.User) []*admin.UserRelation {
 		return nil
 	}
 	return rv
+}
+
+func extractOrganizations(u *admin.User) []*admin.UserOrganization {
+	if u.Organizations == nil {
+		return nil
+	}
+
+	data, err := json.Marshal(u.Organizations)
+	if err != nil {
+		return nil
+	}
+	rv := make([]*admin.UserOrganization, 0)
+	err = json.Unmarshal(data, &rv)
+	if err != nil {
+		return nil
+	}
+	return rv
+}
+
+func extractPrimaryOrganizations(u *admin.User) *admin.UserOrganization {
+	orgs := extractOrganizations(u)
+	if len(orgs) == 0 {
+		return nil
+	}
+	for _, org := range orgs {
+		if org.Primary {
+			return org
+		}
+	}
+	return orgs[0]
 }
