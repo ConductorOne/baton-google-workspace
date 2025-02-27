@@ -93,6 +93,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			sdkResource.WithEmail(user.PrimaryEmail, true),
 			sdkResource.WithUserProfile(userProfile(ctx, user)),
 			sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
+			sdkResource.WithUserLogin(user.PrimaryEmail),
 		}
 
 		if user.ThumbnailPhotoUrl != "" {
