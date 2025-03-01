@@ -1,6 +1,6 @@
 module github.com/conductorone/baton-google-workspace
 
-go 1.20
+go 1.23
 
 require (
 	github.com/conductorone/baton-sdk v0.1.29
