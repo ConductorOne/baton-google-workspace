@@ -7,16 +7,17 @@ import (
 	"time"
 
 	"github.com/doug-martin/goqu/v9"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	c1zpb "github.com/conductorone/baton-sdk/pb/c1/c1z/v1"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 )
 
-const maxPageSize = 250
+const maxPageSize = 10000
 
 var allTableDescriptors = []tableDescriptor{
 	resourceTypes,
@@ -70,9 +71,29 @@ type protoHasID interface {
 	GetId() string
 }
 
-// listConnectorObjects uses a connecter list request to fetch the corresponding data from the local db.
-// It returns the raw bytes that need to be unmarshaled into the correct proto message.
+// throttledWarnSlowQuery logs a warning about a slow query at most once per minute per request type.
+func (c *C1File) throttledWarnSlowQuery(ctx context.Context, query string, duration time.Duration) {
+	c.slowQueryLogTimesMu.Lock()
+	defer c.slowQueryLogTimesMu.Unlock()
+
+	now := time.Now()
+	lastLogTime, exists := c.slowQueryLogTimes[query]
+	if !exists || now.Sub(lastLogTime) > c.slowQueryLogFrequency {
+		ctxzap.Extract(ctx).Warn(
+			"slow query detected",
+			zap.String("query", query),
+			zap.Duration("duration", duration),
+		)
+		c.slowQueryLogTimes[query] = now
+	}
+}
+
+// listConnectorObjects uses a connector list request to fetch the corresponding data from the local db.
+// It returns the raw bytes that need to be unmarshalled into the correct proto message.
 func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req proto.Message) ([][]byte, string, error) {
+	ctx, span := tracer.Start(ctx, "C1File.listConnectorObjects")
+	defer span.End()
+
 	err := c.validateDb(ctx)
 	if err != nil {
 		return nil, "", err
@@ -84,19 +105,16 @@ func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req
 		return nil, "", fmt.Errorf("c1file: invalid list request")
 	}
 
-	reqAnnos := annotations.Annotations(listReq.GetAnnotations())
-
-	var reqSyncID string
-	syncDetails := &c1zpb.SyncDetails{}
-	hasSyncIdAnno, err := reqAnnos.Pick(syncDetails)
+	annoSyncID, err := annotations.GetSyncIdFromAnnotations(listReq.GetAnnotations())
 	if err != nil {
-		return nil, "", fmt.Errorf("c1file: failed to get sync id annotation: %w", err)
+		return nil, "", fmt.Errorf("error getting sync id from annotations for list request: %w", err)
 	}
 
+	var reqSyncID string
 	switch {
 	// If the request has a sync id annotation, use that
-	case hasSyncIdAnno && syncDetails.GetId() != "":
-		reqSyncID = syncDetails.GetId()
+	case annoSyncID != "":
+		reqSyncID = annoSyncID
 
 	// We are currently syncing, so use the current sync id
 	case c.currentSyncID != "":
@@ -183,7 +201,7 @@ func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req
 	}
 
 	// Clamp the page size
-	pageSize := int(listReq.GetPageSize())
+	pageSize := listReq.GetPageSize()
 	if pageSize > maxPageSize || pageSize == 0 {
 		pageSize = maxPageSize
 	}
@@ -200,13 +218,25 @@ func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req
 		return nil, "", err
 	}
 
+	// Start timing the query execution
+	queryStartTime := time.Now()
+
+	// Execute the query
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", err
 	}
 	defer rows.Close()
 
-	count := 0
+	// Calculate the query duration
+	queryDuration := time.Since(queryStartTime)
+
+	// If the query took longer than the threshold, log a warning (rate-limited)
+	if queryDuration > c.slowQueryThreshold {
+		c.throttledWarnSlowQuery(ctx, query, queryDuration)
+	}
+
+	var count uint32 = 0
 	lastRow := 0
 	for rows.Next() {
 		count++
@@ -231,40 +261,84 @@ func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req
 	return ret, nextPageToken, nil
 }
 
-func (c *C1File) putConnectorObjectQuery(ctx context.Context, tableName string, m proto.Message, fields goqu.Record) (string, []interface{}, error) {
+var protoMarshaler = proto.MarshalOptions{Deterministic: true}
+
+func bulkPutConnectorObject[T proto.Message](ctx context.Context, c *C1File,
+	tableName string,
+	extractFields func(m T) (goqu.Record, error),
+	msgs ...T) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	ctx, span := tracer.Start(ctx, "C1File.bulkPutConnectorObjectTx")
+	defer span.End()
+
 	err := c.validateSyncDb(ctx)
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 
-	messageBlob, err := proto.MarshalOptions{Deterministic: true}.Marshal(m)
-	if err != nil {
-		return "", nil, err
-	}
-
-	if fields == nil {
-		fields = goqu.Record{}
-	}
-
-	if _, idSet := fields["external_id"]; !idSet {
-		idGetter, ok := m.(protoHasID)
-		if !ok {
-			return "", nil, fmt.Errorf("unable to get ID for object")
+	rows := make([]*goqu.Record, len(msgs))
+	for i, m := range msgs {
+		messageBlob, err := protoMarshaler.Marshal(m)
+		if err != nil {
+			return err
 		}
-		fields["external_id"] = idGetter.GetId()
+
+		fields, err := extractFields(m)
+		if err != nil {
+			return err
+		}
+		if fields == nil {
+			fields = goqu.Record{}
+		}
+
+		if _, idSet := fields["external_id"]; !idSet {
+			idGetter, ok := any(m).(protoHasID)
+			if !ok {
+				return fmt.Errorf("unable to get ID for object")
+			}
+			fields["external_id"] = idGetter.GetId()
+		}
+		fields["data"] = messageBlob
+		fields["sync_id"] = c.currentSyncID
+		fields["discovered_at"] = time.Now().Format("2006-01-02 15:04:05.999999999")
+		rows[i] = &fields
 	}
-	fields["data"] = messageBlob
-	fields["sync_id"] = c.currentSyncID
-	fields["discovered_at"] = time.Now().Format("2006-01-02 15:04:05.999999999")
+	chunkSize := 100
+	chunks := len(rows) / chunkSize
+	if len(rows)%chunkSize != 0 {
+		chunks++
+	}
 
-	q := c.db.Insert(tableName).Prepared(true)
-	q = q.Rows(fields)
-	q = q.OnConflict(goqu.DoUpdate("external_id, sync_id", goqu.C("data").Set(goqu.I("EXCLUDED.data"))))
+	for i := 0; i < chunks; i++ {
+		start := i * chunkSize
+		end := (i + 1) * chunkSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		chunkedRows := rows[start:end]
+		query, args, err := c.db.Insert(tableName).
+			OnConflict(goqu.DoUpdate("external_id, sync_id", goqu.C("data").Set(goqu.I("EXCLUDED.data")))).
+			Rows(chunkedRows).
+			Prepared(true).
+			ToSQL()
+		if err != nil {
+			return err
+		}
+		_, err = c.db.Exec(query, args...)
+		if err != nil {
+			return err
+		}
+	}
 
-	return q.ToSQL()
+	return nil
 }
 
 func (c *C1File) getResourceObject(ctx context.Context, resourceID *v2.ResourceId, m *v2.Resource, syncID string) error {
+	ctx, span := tracer.Start(ctx, "C1File.getResourceObject")
+	defer span.End()
+
 	err := c.validateDb(ctx)
 	if err != nil {
 		return err
@@ -322,7 +396,10 @@ func (c *C1File) getResourceObject(ctx context.Context, resourceID *v2.ResourceI
 	return nil
 }
 
-func (c *C1File) getConnectorObject(ctx context.Context, tableName string, id string, m proto.Message) error {
+func (c *C1File) getConnectorObject(ctx context.Context, tableName string, id string, syncID string, m proto.Message) error {
+	ctx, span := tracer.Start(ctx, "C1File.getConnectorObject")
+	defer span.End()
+
 	err := c.validateDb(ctx)
 	if err != nil {
 		return err
@@ -333,6 +410,8 @@ func (c *C1File) getConnectorObject(ctx context.Context, tableName string, id st
 	q = q.Where(goqu.C("external_id").Eq(id))
 
 	switch {
+	case syncID != "":
+		q = q.Where(goqu.C("sync_id").Eq(syncID))
 	case c.currentSyncID != "":
 		q = q.Where(goqu.C("sync_id").Eq(c.currentSyncID))
 	case c.viewSyncID != "":
