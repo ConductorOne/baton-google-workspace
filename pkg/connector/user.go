@@ -92,7 +92,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			Id: user.Id,
 		}
 		additionalLogins := mapset.NewSet[string]()
-		employeeIds := mapset.NewSet[string]()
+		employeeIDs := mapset.NewSet[string]()
 		traitOpts := []sdkResource.UserTraitOption{
 			sdkResource.WithEmail(user.PrimaryEmail, true),
 			sdkResource.WithUserProfile(userProfile(ctx, user)),
@@ -126,19 +126,19 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		}
 
 		if user.ExternalIds != nil {
-			externalIds, err := extractFromInterface[*admin.UserExternalId](user.ExternalIds)
+			externalIDs, err := extractFromInterface[*admin.UserExternalId](user.ExternalIds)
 			if err != nil {
 				return nil, "", nil, err
 			}
 			/*
 				Acceptable values: account, custom, customer, login_id, network, organization.
 			*/
-			for _, id := range externalIds {
+			for _, id := range externalIDs {
 				switch id.Type {
 				case "organization":
 					// oddly named, this is the employee ID in the google console.
 					if id.Value != "" {
-						employeeIds.Add(id.Value)
+						employeeIDs.Add(id.Value)
 					}
 				case "account":
 					if id.Value != "" {
@@ -169,9 +169,9 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			}
 		}
 
-		if employeeIds.Cardinality() > 0 {
+		if employeeIDs.Cardinality() > 0 {
 			traitOpts = append(traitOpts,
-				sdkResource.WithEmployeeID(employeeIds.ToSlice()...),
+				sdkResource.WithEmployeeID(employeeIDs.ToSlice()...),
 			)
 		}
 
