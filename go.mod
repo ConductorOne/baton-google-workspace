@@ -4,6 +4,7 @@ go 1.23.4
 
 require (
 	github.com/conductorone/baton-sdk v0.2.88
+	github.com/deckarep/golang-set/v2 v2.8.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/spf13/viper v1.20.1
 	go.uber.org/zap v1.27.0
@@ -44,7 +45,6 @@ require (
 	github.com/conductorone/dpop v0.2.4 // indirect
 	github.com/conductorone/dpop/integrations/dpop_grpc v0.2.4 // indirect
 	github.com/conductorone/dpop/integrations/dpop_oauth2 v0.2.4 // indirect
-	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/doug-martin/goqu/v9 v9.19.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
