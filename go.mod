@@ -2,8 +2,6 @@ module github.com/conductorone/baton-google-workspace
 
 go 1.23.4
 
-toolchain go1.24.1
-
 require (
 	github.com/conductorone/baton-sdk v0.2.88
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
