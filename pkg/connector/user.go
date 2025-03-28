@@ -12,6 +12,8 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+
+	mapset "github.com/deckarep/golang-set/v2"
 )
 
 type userResourceType struct {
@@ -89,11 +91,12 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		annos := &v2.V1Identifier{
 			Id: user.Id,
 		}
+		additionalLogins := mapset.NewSet[string]()
+		employeeIds := mapset.NewSet[string]()
 		traitOpts := []sdkResource.UserTraitOption{
 			sdkResource.WithEmail(user.PrimaryEmail, true),
 			sdkResource.WithUserProfile(userProfile(ctx, user)),
 			sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
-			sdkResource.WithUserLogin(user.PrimaryEmail),
 		}
 
 		if user.ThumbnailPhotoUrl != "" {
@@ -109,6 +112,33 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 				&v2.UserTrait_MFAStatus{MfaEnabled: true},
 			))
 		}
+		if user.ExternalIds != nil {
+			externalIds := make([]*admin.UserExternalId, 0)
+			data, err := json.Marshal(user.ExternalIds)
+			if err != nil {
+				return nil, "", nil, err
+			}
+			err = json.Unmarshal(data, &externalIds)
+			if err != nil {
+				return nil, "", nil, err
+			}
+			/*
+				Acceptable values: account, custom, customer, login_id, network, organization.
+			*/
+			for _, id := range externalIds {
+				switch id.Type {
+				case "organization":
+					// oddly named, this is the employee ID in the google console.
+					employeeIds.Add(id.Value)
+				case "account":
+					additionalLogins.Add(id.Value)
+				case "login_id":
+					additionalLogins.Add(id.Value)
+				case "network":
+					additionalLogins.Add(id.Value)
+				}
+			}
+		}
 		if user.DeletionTime != "" {
 			traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
 		}
@@ -122,6 +152,13 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 				traitOpts = append(traitOpts, sdkResource.WithLastLogin(t))
 			}
 		}
+
+		traitOpts = append(traitOpts,
+			sdkResource.WithEmployeeID(employeeIds.ToSlice()...),
+		)
+		traitOpts = append(traitOpts,
+			sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
+		)
 
 		userResource, err := sdkResource.NewUserResource(user.Name.FullName, resourceTypeUser, user.Id, traitOpts, sdkResource.WithAnnotation(annos))
 		if err != nil {
