@@ -296,7 +296,7 @@ func extractPrimaryOrganizations(u *admin.User) *admin.UserOrganization {
 	return orgs[0]
 }
 
-// extractFromInterface extracts a typed slice from an interface{} value using JSON marshal/unmarshal
+// extractFromInterface extracts a typed slice from an interface{} value using JSON marshal/unmarshal.
 func extractFromInterface[T any](data interface{}) ([]T, error) {
 	if data == nil {
 		return nil, nil
