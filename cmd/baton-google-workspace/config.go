@@ -1,45 +1,71 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
-	"github.com/conductorone/baton-sdk/pkg/cli"
-	"github.com/spf13/cobra"
+	"github.com/conductorone/baton-sdk/pkg/field"
+	"github.com/spf13/viper"
 )
 
-// config defines the external configuration required for the connector to run.
-type config struct {
-	cli.BaseConfig `mapstructure:",squash"` // Puts the base config options in the same place as the connector options
+// Defining configuration fields for Google Workspace connector.
+var (
+	// CustomerIDField defines the customer ID for the Google Workspace account.
+	CustomerIDField = field.StringField(
+		"customer-id",
+		field.WithDescription("The customer ID for the Google Workspace account"),
+		field.WithRequired(true),
+	)
 
-	CustomerID              string `mapstructure:"customer-id"`
-	Domain                  string `mapstructure:"domain"`
-	AdministratorEmail      string `mapstructure:"administrator-email"`
-	CredentialsJSONFilePath string `mapstructure:"credentials-json-file-path"`
-	CredentialsJSON         string `mapstructure:"credentials-json"`
-}
+	// DomainField defines the domain for the Google Workspace account.
+	DomainField = field.StringField(
+		"domain",
+		field.WithDescription("The domain for the Google Workspace account"),
+	)
 
-// validateConfig is run after the configuration is loaded, and should return an error if it isn't valid.
-func validateConfig(ctx context.Context, cfg *config) error {
-	if cfg.CustomerID == "" {
-		return fmt.Errorf("customer id is missing")
+	// AdministratorEmailField defines an administrator email for the Google Workspace account.
+	AdministratorEmailField = field.StringField(
+		"administrator-email",
+		field.WithDescription("An administrator email for the Google Workspace account"),
+		field.WithRequired(true),
+	)
+
+	// CredentialsJSONFilePathField defines the path to JSON credentials file.
+	CredentialsJSONFilePathField = field.StringField(
+		"credentials-json-file-path",
+		field.WithDescription("JSON credentials file name for the Google Workspace account. Mutually exclusive with credentials JSON"),
+	)
+
+	// CredentialsJSONField defines the JSON credentials as a string.
+	CredentialsJSONField = field.StringField(
+		"credentials-json",
+		field.WithDescription("JSON credentials for the Google Workspace account. Mutually exclusive with file path"),
+	)
+
+	// Collection of all configuration fields.
+	ConfigurationFields = []field.SchemaField{
+		CustomerIDField,
+		DomainField,
+		AdministratorEmailField,
+		CredentialsJSONFilePathField,
+		CredentialsJSONField,
 	}
-	if cfg.AdministratorEmail == "" {
-		return fmt.Errorf("administrator email is missing")
+
+	// Configuration combines fields into a single configuration object.
+	Configuration = field.NewConfiguration(
+		ConfigurationFields,
+	)
+)
+
+// ValidateConfig validates that all required configuration is present and valid.
+func ValidateConfig(v *viper.Viper) error {
+	if err := field.Validate(Configuration, v); err != nil {
+		return err
 	}
-	if cfg.CredentialsJSONFilePath == "" && cfg.CredentialsJSON == "" {
-		return fmt.Errorf("credentials are missing. provide credentials directly via a file")
+
+	// Additional validation to ensure either credentials file or credentials JSON is provided
+	if v.GetString(CredentialsJSONFilePathField.FieldName) == "" && v.GetString(CredentialsJSONField.FieldName) == "" {
+		return fmt.Errorf("either credentials-json-file-path or credentials-json must be provided")
 	}
+
 	return nil
-}
-
-// cmdFlags sets the cmdFlags required for the connector.
-func cmdFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().String("customer-id", "", "The customer Id for the google workspace account. ($BATON_CUSTOMER_ID)")
-	cmd.PersistentFlags().String("domain", "", "The domain for the google workspace account. ($BATON_DOMAIN)")
-	cmd.PersistentFlags().String("administrator-email", "", "An administrator email for the google workspace account. ($BATON_ADMINISTRATOR_EMAIL)")
-	cmd.PersistentFlags().String("credentials-json-file-path",
-		"",
-		"Json credentials file name for the google workspace account. Mutual exclusive with credentials JSON. ($BATON_CREDENTIALS_JSON_FILE_PATH)")
-	cmd.PersistentFlags().String("credentials-json", "", "Json credentials for the google workspace account. Mutual exclusive with file path. ($BATON_CREDENTIALS_JSON)")
 }
