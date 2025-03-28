@@ -112,13 +112,21 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 				&v2.UserTrait_MFAStatus{MfaEnabled: true},
 			))
 		}
-		if user.ExternalIds != nil {
-			externalIds := make([]*admin.UserExternalId, 0)
-			data, err := json.Marshal(user.ExternalIds)
+
+		if user.PosixAccounts != nil {
+			posixAccounts, err := extractFromInterface[*admin.UserPosixAccount](user.PosixAccounts)
 			if err != nil {
 				return nil, "", nil, err
 			}
-			err = json.Unmarshal(data, &externalIds)
+			for _, posixAccount := range posixAccounts {
+				if posixAccount.Username != "" {
+					additionalLogins.Add(posixAccount.Username)
+				}
+			}
+		}
+
+		if user.ExternalIds != nil {
+			externalIds, err := extractFromInterface[*admin.UserExternalId](user.ExternalIds)
 			if err != nil {
 				return nil, "", nil, err
 			}
@@ -129,13 +137,21 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 				switch id.Type {
 				case "organization":
 					// oddly named, this is the employee ID in the google console.
-					employeeIds.Add(id.Value)
+					if id.Value != "" {
+						employeeIds.Add(id.Value)
+					}
 				case "account":
-					additionalLogins.Add(id.Value)
+					if id.Value != "" {
+						additionalLogins.Add(id.Value)
+					}
 				case "login_id":
-					additionalLogins.Add(id.Value)
+					if id.Value != "" {
+						additionalLogins.Add(id.Value)
+					}
 				case "network":
-					additionalLogins.Add(id.Value)
+					if id.Value != "" {
+						additionalLogins.Add(id.Value)
+					}
 				}
 			}
 		}
@@ -153,14 +169,23 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			}
 		}
 
-		traitOpts = append(traitOpts,
-			sdkResource.WithEmployeeID(employeeIds.ToSlice()...),
-		)
+		if employeeIds.Cardinality() > 0 {
+			traitOpts = append(traitOpts,
+				sdkResource.WithEmployeeID(employeeIds.ToSlice()...),
+			)
+		}
+
 		traitOpts = append(traitOpts,
 			sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 		)
 
-		userResource, err := sdkResource.NewUserResource(user.Name.FullName, resourceTypeUser, user.Id, traitOpts, sdkResource.WithAnnotation(annos))
+		userResource, err := sdkResource.NewUserResource(
+			user.Name.FullName,
+			resourceTypeUser,
+			user.Id,
+			traitOpts,
+			sdkResource.WithAnnotation(annos),
+		)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -269,4 +294,24 @@ func extractPrimaryOrganizations(u *admin.User) *admin.UserOrganization {
 		}
 	}
 	return orgs[0]
+}
+
+// extractFromInterface extracts a typed slice from an interface{} value using JSON marshal/unmarshal
+func extractFromInterface[T any](data interface{}) ([]T, error) {
+	if data == nil {
+		return nil, nil
+	}
+
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []T
+	err = json.Unmarshal(bytes, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
