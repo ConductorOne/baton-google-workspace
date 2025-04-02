@@ -61,7 +61,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		})
 	}
 
-	r := o.userService.Users.List().OrderBy("email")
+	r := o.userService.Users.List().OrderBy("email").Projection("full")
 
 	if o.domain != "" {
 		r = r.Domain(o.domain)
@@ -88,14 +88,12 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			l.Error("google-workspace: user had no id", zap.String("email", user.PrimaryEmail))
 			continue
 		}
-		annos := &v2.V1Identifier{
-			Id: user.Id,
-		}
+
+		profile := userProfile(ctx, user)
 		additionalLogins := mapset.NewSet[string]()
 		employeeIDs := mapset.NewSet[string]()
 		traitOpts := []sdkResource.UserTraitOption{
 			sdkResource.WithEmail(user.PrimaryEmail, true),
-			sdkResource.WithUserProfile(userProfile(ctx, user)),
 			sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
 		}
 
@@ -111,6 +109,13 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			traitOpts = append(traitOpts, sdkResource.WithMFAStatus(
 				&v2.UserTrait_MFAStatus{MfaEnabled: true},
 			))
+		}
+
+		if len(user.CustomSchemas) > 0 {
+			customSchemas := flattenCustomSchemas(ctx, user.CustomSchemas)
+			for k, v := range customSchemas {
+				profile[k] = v
+			}
 		}
 
 		if user.PosixAccounts != nil {
@@ -176,6 +181,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		}
 
 		traitOpts = append(traitOpts,
+			sdkResource.WithUserProfile(profile),
 			sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 		)
 
@@ -184,7 +190,11 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			resourceTypeUser,
 			user.Id,
 			traitOpts,
-			sdkResource.WithAnnotation(annos),
+			sdkResource.WithAnnotation(
+				&v2.V1Identifier{
+					Id: user.Id,
+				},
+			),
 		)
 		if err != nil {
 			return nil, "", nil, err
