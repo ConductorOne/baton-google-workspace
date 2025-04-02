@@ -26,11 +26,9 @@ func normalizeName(name string) string {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			result = append(result, unicode.ToLower(r))
 			prevUnderscore = false
-		} else {
-			if !prevUnderscore {
-				result = append(result, '_')
-				prevUnderscore = true
-			}
+		} else if !prevUnderscore {
+			result = append(result, '_')
+			prevUnderscore = true
 		}
 	}
 

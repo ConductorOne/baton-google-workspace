@@ -61,7 +61,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		})
 	}
 
-	r := o.userService.Users.List().OrderBy("email")
+	r := o.userService.Users.List().OrderBy("email").Projection("full")
 
 	if o.domain != "" {
 		r = r.Domain(o.domain)
