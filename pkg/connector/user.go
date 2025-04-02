@@ -88,9 +88,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			l.Error("google-workspace: user had no id", zap.String("email", user.PrimaryEmail))
 			continue
 		}
-		annos := &v2.V1Identifier{
-			Id: user.Id,
-		}
+
 		profile := userProfile(ctx, user)
 		additionalLogins := mapset.NewSet[string]()
 		employeeIDs := mapset.NewSet[string]()
@@ -192,7 +190,12 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			resourceTypeUser,
 			user.Id,
 			traitOpts,
-			sdkResource.WithAnnotation(annos),
+			sdkResource.WithAnnotation(
+				&v2.V1Identifier{
+					Id: user.Id,
+				},
+				&v2.SkipEntitlementsAndGrants{},
+			),
 		)
 		if err != nil {
 			return nil, "", nil, err
