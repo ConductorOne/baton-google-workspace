@@ -194,7 +194,6 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 				&v2.V1Identifier{
 					Id: user.Id,
 				},
-				&v2.SkipEntitlementsAndGrants{},
 			),
 		)
 		if err != nil {

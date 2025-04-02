@@ -14,10 +14,14 @@ const (
 )
 
 func v1AnnotationsForResourceType(resourceTypeID string) annotations.Annotations {
-	annos := annotations.Annotations{}
-	annos.Update(&v2.V1Identifier{
-		Id: resourceTypeID,
-	})
+	annos := annotations.New(
+		&v2.V1Identifier{
+			Id: resourceTypeID,
+		},
+	)
+	if resourceTypeID == "user" {
+		annos.Update(&v2.SkipEntitlementsAndGrants{})
+	}
 	return annos
 }
 
