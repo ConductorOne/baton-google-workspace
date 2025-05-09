@@ -12,12 +12,13 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"google.golang.org/api/googleapi"
-
+	uhttp "github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/grpc/codes"
 )
 
 const (
@@ -111,7 +112,6 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 	if err != nil {
 		return nil, "", nil, err
 	}
-	l := ctxzap.Extract(ctx)
 
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -131,8 +131,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		if errors.As(err, &gerr) {
 			// Return no grants if the group no longer exists. This might happen if the group is deleted during a sync.
 			if gerr.Code == http.StatusNotFound {
-				l.Info("google-workspace-v2: group no longer exists", zap.String("group_id", resource.Id.Resource))
-				return nil, "", nil, nil
+				return nil, "", nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
 			}
 		}
 
