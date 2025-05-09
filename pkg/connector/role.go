@@ -13,11 +13,13 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/grpc/codes"
 )
 
 const (
@@ -100,7 +102,6 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 	if err != nil {
 		return nil, "", nil, err
 	}
-	l := ctxzap.Extract(ctx)
 
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -120,8 +121,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 		if errors.As(err, &gerr) {
 			// Return no grants if the role no longer exists. This might happen if the role is deleted during a sync.
 			if gerr.Code == http.StatusNotFound {
-				l.Info("google-workspace-v2: role no longer exists", zap.String("role_id", resource.Id.Resource))
-				return nil, "", nil, nil
+				return nil, "", nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no role found with id %s", resource.Id.Resource))
 			}
 		}
 		return nil, "", nil, err
