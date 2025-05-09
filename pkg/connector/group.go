@@ -111,6 +111,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 	if err != nil {
 		return nil, "", nil, err
 	}
+	l := ctxzap.Extract(ctx)
 
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -126,8 +127,18 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 
 	members, err := r.Context(ctx).Do()
 	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			// Return no grants if the group no longer exists. This might happen if the group is deleted during a sync.
+			if gerr.Code == http.StatusNotFound {
+				l.Info("google-workspace-v2: group no longer exists", zap.String("group_id", resource.Id.Resource))
+				return nil, "", nil, nil
+			}
+		}
+
 		return nil, "", nil, err
 	}
+
 	var rv []*v2.Grant
 	for _, member := range members.Members {
 		v1Identifier := &v2.V1Identifier{
