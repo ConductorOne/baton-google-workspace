@@ -220,10 +220,10 @@ func extractFromInterface[T any](data interface{}) ([]T, error) {
 	return result, nil
 }
 
-func (o *userResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	r := o.userService.Users.Get(resource.Id.Resource).Projection("full")
+	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
 
 	user, err := r.Context(ctx).Do()
 	if err != nil {

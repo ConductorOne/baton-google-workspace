@@ -242,9 +242,9 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 	return nil, nil
 }
 
-func (o *groupResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	r := o.groupService.Groups.Get(resource.Id.Resource)
+	r := o.groupService.Groups.Get(resourceId.Resource)
 
 	g, err := r.Context(ctx).Do()
 	if err != nil {

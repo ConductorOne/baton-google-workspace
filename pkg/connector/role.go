@@ -228,9 +228,9 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 	return nil, nil
 }
 
-func (o *roleResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	r := o.roleService.Roles.Get(o.customerId, resource.Id.Resource)
+	r := o.roleService.Roles.Get(o.customerId, resourceId.Resource)
 
 	role, err := r.Context(ctx).Do()
 	if err != nil {
