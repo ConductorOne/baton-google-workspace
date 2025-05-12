@@ -251,7 +251,7 @@ func (o *groupResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2
 		return nil, nil, err
 	}
 
-	// TODO: Check if the group is in the domain or customer account, if one is specified.
+	// TODO: If o.domainId is set, check if the group is still in the domain.
 	//       There is not a straight forward way to do this when getting a single group.
 
 	if g.Id == "" {
