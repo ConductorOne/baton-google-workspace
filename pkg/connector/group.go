@@ -243,5 +243,29 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 }
 
 func (o *groupResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
-	return nil, nil, nil
+	l := ctxzap.Extract(ctx)
+	r := o.groupService.Groups.Get(resource.Id.Resource)
+
+	g, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// TODO: Check if the group is in the domain or customer account, if one is specified.
+	//       There is not a straight forward way to do this when getting a single group.
+
+	if g.Id == "" {
+		l.Error("google-workspace: group had no id", zap.String("name", g.Name))
+		return nil, nil, nil
+	}
+	annos := &v2.V1Identifier{
+		Id: g.Id,
+	}
+	traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
+	groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, sdkResource.WithAnnotation(annos))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return groupResource, nil, nil
 }
