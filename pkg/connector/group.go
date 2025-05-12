@@ -242,3 +242,7 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 
 	return nil, nil
 }
+
+func (o *groupResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+	return nil, nil, nil
+}

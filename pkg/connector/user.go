@@ -325,3 +325,7 @@ func extractFromInterface[T any](data interface{}) ([]T, error) {
 
 	return result, nil
 }
+
+func (o *userResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+	return nil, nil, nil
+}

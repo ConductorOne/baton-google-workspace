@@ -227,3 +227,7 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 
 	return nil, nil
 }
+
+func (o *roleResourceType) Get(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+	return nil, nil, nil
+}
