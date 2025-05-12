@@ -89,113 +89,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 			continue
 		}
 
-		profile := userProfile(ctx, user)
-		additionalLogins := mapset.NewSet[string]()
-		employeeIDs := mapset.NewSet[string]()
-		traitOpts := []sdkResource.UserTraitOption{
-			sdkResource.WithEmail(user.PrimaryEmail, true),
-			sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
-		}
-
-		if user.ThumbnailPhotoUrl != "" {
-			traitOpts = append(traitOpts, sdkResource.WithUserIcon(&v2.AssetRef{
-				Id: user.ThumbnailPhotoUrl,
-			}))
-		}
-		if user.Archived || user.Suspended {
-			traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DISABLED))
-		}
-		if user.IsEnrolledIn2Sv {
-			traitOpts = append(traitOpts, sdkResource.WithMFAStatus(
-				&v2.UserTrait_MFAStatus{MfaEnabled: true},
-			))
-		}
-
-		if len(user.CustomSchemas) > 0 {
-			customSchemas := flattenCustomSchemas(ctx, user.CustomSchemas)
-			for k, v := range customSchemas {
-				profile[k] = v
-			}
-		}
-
-		if user.PosixAccounts != nil {
-			posixAccounts, err := extractFromInterface[*admin.UserPosixAccount](user.PosixAccounts)
-			if err != nil {
-				return nil, "", nil, err
-			}
-			for _, posixAccount := range posixAccounts {
-				if posixAccount.Username != "" {
-					additionalLogins.Add(posixAccount.Username)
-				}
-			}
-		}
-
-		if user.ExternalIds != nil {
-			externalIDs, err := extractFromInterface[*admin.UserExternalId](user.ExternalIds)
-			if err != nil {
-				return nil, "", nil, err
-			}
-			/*
-				Acceptable values: account, custom, customer, login_id, network, organization.
-			*/
-			for _, id := range externalIDs {
-				switch id.Type {
-				case "organization":
-					// oddly named, this is the employee ID in the google console.
-					if id.Value != "" {
-						employeeIDs.Add(id.Value)
-					}
-				case "account":
-					if id.Value != "" {
-						additionalLogins.Add(id.Value)
-					}
-				case "login_id":
-					if id.Value != "" {
-						additionalLogins.Add(id.Value)
-					}
-				case "network":
-					if id.Value != "" {
-						additionalLogins.Add(id.Value)
-					}
-				}
-			}
-		}
-		if user.DeletionTime != "" {
-			traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
-		}
-		if user.CreationTime != "" {
-			if t, err := time.Parse("2006-01-02T15:04:05-0700", user.CreationTime); err == nil {
-				traitOpts = append(traitOpts, sdkResource.WithCreatedAt(t))
-			}
-		}
-		if user.LastLoginTime != "" {
-			if t, err := time.Parse("2006-01-02T15:04:05-0700", user.LastLoginTime); err == nil {
-				traitOpts = append(traitOpts, sdkResource.WithLastLogin(t))
-			}
-		}
-
-		if employeeIDs.Cardinality() > 0 {
-			traitOpts = append(traitOpts,
-				sdkResource.WithEmployeeID(employeeIDs.ToSlice()...),
-			)
-		}
-
-		traitOpts = append(traitOpts,
-			sdkResource.WithUserProfile(profile),
-			sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
-		)
-
-		userResource, err := sdkResource.NewUserResource(
-			user.Name.FullName,
-			resourceTypeUser,
-			user.Id,
-			traitOpts,
-			sdkResource.WithAnnotation(
-				&v2.V1Identifier{
-					Id: user.Id,
-				},
-			),
-		)
+		userResource, err := o.userResource(ctx, user)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -324,4 +218,162 @@ func extractFromInterface[T any](data interface{}) ([]T, error) {
 	}
 
 	return result, nil
+}
+
+func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
+
+	user, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if o.domain != "" {
+		orgs, err := extractFromInterface[*admin.UserOrganization](user.Organizations)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		found := false
+		for _, org := range orgs {
+			if org.Domain == o.domain {
+				found = true
+				break
+			}
+		}
+		if !found {
+			l.Info("google-workspace: user not in domain", zap.String("email", user.PrimaryEmail), zap.String("domain", o.domain))
+			return nil, nil, nil
+		}
+	} else if o.customerId != "" {
+		if user.CustomerId != o.customerId {
+			l.Info("google-workspace: user not in customer account", zap.String("email", user.PrimaryEmail), zap.String("customer_id", user.CustomerId))
+			return nil, nil, nil
+		}
+	}
+
+	if user.Id == "" {
+		l.Error("google-workspace: user had no id", zap.String("email", user.PrimaryEmail))
+		return nil, nil, nil
+	}
+
+	userResource, err := o.userResource(ctx, user)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return userResource, nil, nil
+}
+
+func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (*v2.Resource, error) {
+	profile := userProfile(ctx, user)
+	additionalLogins := mapset.NewSet[string]()
+	employeeIDs := mapset.NewSet[string]()
+	traitOpts := []sdkResource.UserTraitOption{
+		sdkResource.WithEmail(user.PrimaryEmail, true),
+		sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
+	}
+
+	if user.ThumbnailPhotoUrl != "" {
+		traitOpts = append(traitOpts, sdkResource.WithUserIcon(&v2.AssetRef{
+			Id: user.ThumbnailPhotoUrl,
+		}))
+	}
+	if user.Archived || user.Suspended {
+		traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DISABLED))
+	}
+	if user.IsEnrolledIn2Sv {
+		traitOpts = append(traitOpts, sdkResource.WithMFAStatus(
+			&v2.UserTrait_MFAStatus{MfaEnabled: true},
+		))
+	}
+
+	if len(user.CustomSchemas) > 0 {
+		customSchemas := flattenCustomSchemas(ctx, user.CustomSchemas)
+		for k, v := range customSchemas {
+			profile[k] = v
+		}
+	}
+
+	if user.PosixAccounts != nil {
+		posixAccounts, err := extractFromInterface[*admin.UserPosixAccount](user.PosixAccounts)
+		if err != nil {
+			return nil, err
+		}
+		for _, posixAccount := range posixAccounts {
+			if posixAccount.Username != "" {
+				additionalLogins.Add(posixAccount.Username)
+			}
+		}
+	}
+
+	if user.ExternalIds != nil {
+		externalIDs, err := extractFromInterface[*admin.UserExternalId](user.ExternalIds)
+		if err != nil {
+			return nil, err
+		}
+		/*
+			Acceptable values: account, custom, customer, login_id, network, organization.
+		*/
+		for _, id := range externalIDs {
+			switch id.Type {
+			case "organization":
+				// oddly named, this is the employee ID in the google console.
+				if id.Value != "" {
+					employeeIDs.Add(id.Value)
+				}
+			case "account":
+				if id.Value != "" {
+					additionalLogins.Add(id.Value)
+				}
+			case "login_id":
+				if id.Value != "" {
+					additionalLogins.Add(id.Value)
+				}
+			case "network":
+				if id.Value != "" {
+					additionalLogins.Add(id.Value)
+				}
+			}
+		}
+	}
+	if user.DeletionTime != "" {
+		traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
+	}
+	if user.CreationTime != "" {
+		if t, err := time.Parse("2006-01-02T15:04:05-0700", user.CreationTime); err == nil {
+			traitOpts = append(traitOpts, sdkResource.WithCreatedAt(t))
+		}
+	}
+	if user.LastLoginTime != "" {
+		if t, err := time.Parse("2006-01-02T15:04:05-0700", user.LastLoginTime); err == nil {
+			traitOpts = append(traitOpts, sdkResource.WithLastLogin(t))
+		}
+	}
+
+	if employeeIDs.Cardinality() > 0 {
+		traitOpts = append(traitOpts,
+			sdkResource.WithEmployeeID(employeeIDs.ToSlice()...),
+		)
+	}
+
+	traitOpts = append(traitOpts,
+		sdkResource.WithUserProfile(profile),
+		sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
+	)
+
+	userResource, err := sdkResource.NewUserResource(
+		user.Name.FullName,
+		resourceTypeUser,
+		user.Id,
+		traitOpts,
+		sdkResource.WithAnnotation(
+			&v2.V1Identifier{
+				Id: user.Id,
+			},
+		),
+	)
+	return userResource, err
 }
