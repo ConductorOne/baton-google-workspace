@@ -16,7 +16,6 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
-	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
 )
@@ -186,7 +185,7 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
 	if o.groupMemberProvisioningService == nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryGroupMemberScope)
+		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope)
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, nil, errors.New("google-workspace-v2: user principal is required")
@@ -217,7 +216,7 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 
 func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
 	if o.groupMemberProvisioningService == nil {
-		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryGroupMemberScope)
+		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope)
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, errors.New("google-workspace-v2: user principal is required")
