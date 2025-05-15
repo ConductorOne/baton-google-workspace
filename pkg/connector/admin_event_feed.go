@@ -153,6 +153,8 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 			return nil, nil
 		}
 		events = append(events, evt)
+
+		// Generate separate event for USER_EMAIL?
 	}
 
 	return events, nil
