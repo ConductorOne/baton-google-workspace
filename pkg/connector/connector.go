@@ -345,7 +345,12 @@ func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.Eve
 		connector: c,
 	}
 
+	adminEventFeed := &adminEventFeed{
+		connector: c,
+	}
+
 	return []connectorbuilder.EventFeed{
 		usageEventFeed,
+		adminEventFeed,
 	}
 }
