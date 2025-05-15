@@ -26,3 +26,9 @@ func (e *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 		StartAt: v2.EventFeedStartAt_EVENT_FEED_START_AT_TAIL,
 	}
 }
+
+func newUsageEventFeed(connector *GoogleWorkspace) *usageEventFeed {
+	return &usageEventFeed{
+		connector: connector,
+	}
+}

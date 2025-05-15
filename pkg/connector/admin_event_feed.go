@@ -3,12 +3,14 @@ package connector
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	directory "google.golang.org/api/admin/directory/v1"
+	reports "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -17,13 +19,19 @@ import (
 
 type adminEventFeed struct {
 	connector *GoogleWorkspace
+
+	groupIdCache map[string]string
+	userIdCache  map[string]string
+
+	groupIdMtx sync.Mutex
+	userIdMtx  sync.Mutex
 }
 
-func (e *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
 	var streamState *pagination.StreamState
-	s, err := e.connector.getReportService(ctx)
+	s, err := f.connector.getReportService(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -52,6 +60,7 @@ func (e *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
 	events := make([]*v2.Event, 0)
 	for _, activity := range r.Items {
 		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
@@ -65,76 +74,26 @@ func (e *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 			latestEvent = occurredAt.AsTime()
 		}
 		// There can be multiple events, have not found an example of this yet
-		for _, e := range activity.Events {
-			switch e.Name {
-			/*
-				case "DOMAIN_SETTINGS":
-					switch e.Type {
-					case "ADD_APPLICATION":
-						// APP_ID
-						// APPLICATION_ENABLED
-						// APPLICATION_NAME
-					}
-			*/
+		for _, evt := range activity.Events {
+			switch evt.Name {
 			case "GROUP_SETTINGS":
-				switch e.Type {
-				case "CREATE_GROUP", "DELETE_GROUP", "CHANGE_GROUP_DESCRIPTION", "CHANGE_GROUP_NAME":
-					// GROUP_EMAIL
-					evt := &v2.Event{
-						Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
-						OccurredAt: occurredAt,
-						Event: &v2.Event_ResourceChangeEvent{
-							ResourceChangeEvent: &v2.ResourceChangeEvent{
-								ResourceId: &v2.ResourceId{
-									ResourceType: resourceTypeGroup.Id,
-									Resource:     "", // TODO: Lookup resource
-								},
-							},
-						},
-					}
-					events = append(events, evt)
-					l.Debug("google-workspace-event-feed: group settings create", zap.String("event", e.Name), zap.String("type", e.Type))
-				case "CHANGE_GROUP_EMAIL":
-					// GROUP_EMAIL
-					// NEW_VALUE
-					l.Debug("google-workspace-event-feed: group settings update", zap.String("event", e.Name), zap.String("type", e.Type))
-				case "ADD_GROUP_MEMBER", "REMOVE_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
-					// GROUP_EMAIL
-					// USER_EMAIL
+				changeEvents, err := f.handleGroupEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
+				if err != nil {
+					l.Error("google-workspace: failed to handle group event", zap.Error(err))
+					continue
 				}
+				events = append(events, changeEvents...)
 			case "USER_SETTINGS":
-				switch e.Type {
-				case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "DELETE_ACCOUNT_INFO_DUMP", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME",
-					"REMOVE_DISPLAY_NAME", "CHANGE_FIRST_NAME", "CHANGE_LAST_NAME", "ARCHIVE_USER", "CREATE_USER", "DELETE_USER", "RENAME_USER", "SUSPEND_USER",
-					"UNARCHIVE_USER", "UNDELETE_USER", "UNSUSPEND_USER":
-					// USER_EMAIL
-				case "CANCEL_USER_INVITE":
-					// DOMAIN_NAME
-					// USER_EMAIL
+				changeEvents, err := f.handleUserEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
+				if err != nil {
+					l.Error("google-workspace: failed to handle user event", zap.Error(err))
+					continue
 				}
+				events = append(events, changeEvents...)
 			default:
-				l.Debug("google-workspace-event-feed: unsupported event", zap.String("event", e.Name), zap.String("type", e.Type))
+				l.Debug("google-workspace-event-feed: skipping event", zap.String("event", evt.Name), zap.String("type", evt.Type))
 				continue
 			}
-
-			userTrait, err := resource.NewUserTrait(
-				resource.WithEmail(activity.Actor.Email, true),
-				resource.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
-			)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			event, err := newV2Event(activity, occurredAt, e, userTrait)
-			if err != nil {
-				l.Error("google-workspace-event-feed: failed to create event", zap.Error(err))
-				// Let's not bail the whole feed because of one bad event
-				continue
-			}
-			if event == nil {
-				continue
-			}
-
-			events = append(events, event)
 		}
 	}
 
@@ -155,6 +114,186 @@ func (e *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	return events, streamState, nil, nil
 }
 
+func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, activityEvt *reports.ActivityEvents) ([]*v2.Event, error) {
+	events := make([]*v2.Event, 0)
+	switch activityEvt.Type {
+	case "CREATE_GROUP", "DELETE_GROUP", "CHANGE_GROUP_DESCRIPTION", "CHANGE_GROUP_NAME":
+		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
+	case "CHANGE_GROUP_EMAIL":
+		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
+
+		evt, err = f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "NEW_VALUE", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
+	case "ADD_GROUP_MEMBER", "REMOVE_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
+		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
+	}
+
+	return events, nil
+}
+
+func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, activityEvt *reports.ActivityEvents) ([]*v2.Event, error) {
+	events := make([]*v2.Event, 0)
+	switch activityEvt.Type {
+	case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "DELETE_ACCOUNT_INFO_DUMP", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME",
+		"REMOVE_DISPLAY_NAME", "CHANGE_FIRST_NAME", "CHANGE_LAST_NAME", "ARCHIVE_USER", "CREATE_USER", "DELETE_USER", "RENAME_USER", "SUSPEND_USER",
+		"UNARCHIVE_USER", "UNDELETE_USER", "UNSUSPEND_USER", "CANCEL_USER_INVITE":
+		evt, err := f.newUserChangedEvent(ctx, uniqueQualifier, occurredAt, "USER_EMAIL", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
+	}
+	return events, nil
+}
+
+func (f *adminEventFeed) newGroupChangedEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, parameterName string, activityEvent *reports.ActivityEvents) (*v2.Event, error) {
+	groupEmail := getValueFromParameters(parameterName, activityEvent.Parameters)
+
+	if groupEmail == "" {
+		return nil, nil
+	}
+
+	groupId, err := f.lookupGroupId(ctx, groupEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if groupId == "" {
+		return nil, nil
+	}
+
+	return &v2.Event{
+		Id:         strconv.FormatInt(uniqueQualifier, 10),
+		OccurredAt: occurredAt,
+		Event: &v2.Event_ResourceChangeEvent{
+			ResourceChangeEvent: &v2.ResourceChangeEvent{
+				ResourceId: &v2.ResourceId{
+					ResourceType: resourceTypeGroup.Id,
+					Resource:     groupId,
+				},
+			},
+		},
+	}, nil
+}
+
+func (f *adminEventFeed) newUserChangedEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, parameterName string, activityEvent *reports.ActivityEvents) (*v2.Event, error) {
+	userEmail := getValueFromParameters(parameterName, activityEvent.Parameters)
+
+	if userEmail == "" {
+		return nil, nil
+	}
+
+	userId, err := f.lookupUserId(ctx, userEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if userId == "" {
+		return nil, nil
+	}
+
+	return &v2.Event{
+		Id:         strconv.FormatInt(uniqueQualifier, 10),
+		OccurredAt: occurredAt,
+		Event: &v2.Event_ResourceChangeEvent{
+			ResourceChangeEvent: &v2.ResourceChangeEvent{
+				ResourceId: &v2.ResourceId{
+					ResourceType: resourceTypeUser.Id,
+					Resource:     userId,
+				},
+			},
+		},
+	}, nil
+}
+
+func (f *adminEventFeed) lookupUserId(ctx context.Context, email string) (string, error) {
+	f.userIdMtx.Lock()
+	defer f.userIdMtx.Unlock()
+
+	if id, ok := f.userIdCache[email]; ok {
+		return id, nil
+	}
+
+	userService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryUserReadonlyScope)
+	if err != nil {
+		return "", err
+	}
+
+	user, err := userService.Users.Get(email).Do()
+	if err != nil {
+		return "", err
+	}
+
+	f.userIdCache[email] = user.Id
+
+	if user.Id == "" {
+		l := ctxzap.Extract(ctx)
+		l.Warn("google-workspace: user has no id", zap.String("email", user.PrimaryEmail))
+		return "", nil
+	}
+
+	return user.Id, nil
+}
+
+func (f *adminEventFeed) lookupGroupId(ctx context.Context, email string) (string, error) {
+	f.groupIdMtx.Lock()
+	defer f.groupIdMtx.Unlock()
+
+	if id, ok := f.groupIdCache[email]; ok {
+		return id, nil
+	}
+
+	groupService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryGroupReadonlyScope)
+	if err != nil {
+		return "", err
+	}
+
+	group, err := groupService.Groups.Get(email).Do()
+	if err != nil {
+		return "", err
+	}
+
+	f.groupIdCache[email] = group.Id
+
+	if group.Id == "" {
+		l := ctxzap.Extract(ctx)
+		l.Warn("google-workspace: group has no id", zap.String("email", group.Email))
+		return "", nil
+	}
+
+	return group.Id, nil
+}
+
 func (e *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
 	return &v2.EventFeedMetadata{
 		Id: "admin_event_feed",
@@ -162,5 +301,13 @@ func (e *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 			v2.EventType_EVENT_TYPE_RESOURCE_CHANGE,
 		},
 		StartAt: v2.EventFeedStartAt_EVENT_FEED_START_AT_HEAD,
+	}
+}
+
+func newAdminEventFeed(connector *GoogleWorkspace) *adminEventFeed {
+	return &adminEventFeed{
+		connector:    connector,
+		groupIdCache: make(map[string]string),
+		userIdCache:  make(map[string]string),
 	}
 }
