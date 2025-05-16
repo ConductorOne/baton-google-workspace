@@ -80,7 +80,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		}
 		// There can be multiple events, have not found an example of this yet
 		for _, evt := range activity.Events {
-			switch evt.Name {
+			switch evt.Type {
 			case "GROUP_SETTINGS":
 				changeEvents, err := f.handleGroupEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
 				if err != nil {
@@ -121,8 +121,8 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, activityEvt *reports.ActivityEvents) ([]*v2.Event, error) {
 	events := make([]*v2.Event, 0)
-	switch activityEvt.Type {
-	case "CREATE_GROUP", "DELETE_GROUP", "CHANGE_GROUP_DESCRIPTION", "CHANGE_GROUP_NAME":
+	switch activityEvt.Name {
+	case "CREATE_GROUP", "CHANGE_GROUP_DESCRIPTION", "CHANGE_GROUP_NAME":
 		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
 		if err != nil {
 			return nil, err
@@ -167,7 +167,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 
 func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, activityEvt *reports.ActivityEvents) ([]*v2.Event, error) {
 	events := make([]*v2.Event, 0)
-	switch activityEvt.Type {
+	switch activityEvt.Name {
 	case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "DELETE_ACCOUNT_INFO_DUMP", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME",
 		"REMOVE_DISPLAY_NAME", "CHANGE_FIRST_NAME", "CHANGE_LAST_NAME", "ARCHIVE_USER", "CREATE_USER", "DELETE_USER", "RENAME_USER", "SUSPEND_USER",
 		"UNARCHIVE_USER", "UNDELETE_USER", "UNSUSPEND_USER", "CANCEL_USER_INVITE":
