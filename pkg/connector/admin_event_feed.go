@@ -2,7 +2,9 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	directory "google.golang.org/api/admin/directory/v1"
 	reports "google.golang.org/api/admin/reports/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -34,10 +37,8 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	var streamState *pagination.StreamState
 	s, err := f.connector.getReportService(ctx)
 	if err != nil {
-		fmt.Println("DEBUG: getReportService error:", err)
 		return nil, nil, nil, err
 	}
-	fmt.Println("DEBUG: getReportService successful")
 
 	req := s.Activities.List("all", "admin")
 	req.MaxResults(int64(pToken.Size))
@@ -63,8 +64,6 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	if err != nil {
 		return nil, nil, nil, err
 	}
-
-	l.Debug("google-workspace-event-feed: found events", zap.Int("count", len(r.Items)), zap.String("next_page_token", r.NextPageToken), zap.Any("start_at", startAt))
 
 	events := make([]*v2.Event, 0)
 	for _, activity := range r.Items {
@@ -102,6 +101,8 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		}
 	}
 
+	l.Debug("google-workspace-event-feed: found events", zap.Int("count", len(r.Items)), zap.String("next_page_token", r.NextPageToken), zap.Any("start_at", startAt), zap.Any("latest_event", cursor.LatestEventSeen))
+
 	cursor.NextPageToken = r.NextPageToken
 	if r.NextPageToken == "" {
 		cursor.StartAt = cursor.LatestEventSeen
@@ -116,10 +117,13 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		Cursor:  cursorToken,
 		HasMore: r.NextPageToken != "",
 	}
+
 	return events, streamState, nil, nil
 }
 
 func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, activityEvt *reports.ActivityEvents) ([]*v2.Event, error) {
+	l := ctxzap.Extract(ctx)
+
 	events := make([]*v2.Event, 0)
 	switch activityEvt.Name {
 	case "CREATE_GROUP", "CHANGE_GROUP_DESCRIPTION", "CHANGE_GROUP_NAME":
@@ -159,13 +163,18 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 		}
 		events = append(events, evt)
 
-		// Generate separate event for USER_EMAIL?
+	// We're unable to look up the id for a deleted group, so we skip it
+	case "DELETE_GROUP":
+	default:
+		l.Debug("google-workspace-event-feed: skipping group event", zap.String("event", activityEvt.Type))
 	}
 
 	return events, nil
 }
 
 func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, activityEvt *reports.ActivityEvents) ([]*v2.Event, error) {
+	l := ctxzap.Extract(ctx)
+
 	events := make([]*v2.Event, 0)
 	switch activityEvt.Name {
 	case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "DELETE_ACCOUNT_INFO_DUMP", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME",
@@ -179,6 +188,8 @@ func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier in
 			return nil, nil
 		}
 		events = append(events, evt)
+	default:
+		l.Debug("google-workspace-event-feed: skipping user event", zap.String("event", activityEvt.Type))
 	}
 	return events, nil
 }
@@ -251,6 +262,8 @@ func (f *adminEventFeed) lookupUserId(ctx context.Context, email string) (string
 		return id, nil
 	}
 
+	l := ctxzap.Extract(ctx)
+
 	userService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryUserReadonlyScope)
 	if err != nil {
 		return "", err
@@ -258,13 +271,20 @@ func (f *adminEventFeed) lookupUserId(ctx context.Context, email string) (string
 
 	user, err := userService.Users.Get(email).Do()
 	if err != nil {
-		return "", err
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				l.Info("google-workspace: user no longer exists", zap.String("email", email))
+				f.userIdCache[email] = ""
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("google-workspace: failed to get user %s: %w", email, err)
 	}
 
 	f.userIdCache[email] = user.Id
 
 	if user.Id == "" {
-		l := ctxzap.Extract(ctx)
 		l.Warn("google-workspace: user has no id", zap.String("email", user.PrimaryEmail))
 		return "", nil
 	}
@@ -280,6 +300,8 @@ func (f *adminEventFeed) lookupGroupId(ctx context.Context, email string) (strin
 		return id, nil
 	}
 
+	l := ctxzap.Extract(ctx)
+
 	groupService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
 		return "", err
@@ -287,13 +309,20 @@ func (f *adminEventFeed) lookupGroupId(ctx context.Context, email string) (strin
 
 	group, err := groupService.Groups.Get(email).Do()
 	if err != nil {
-		return "", err
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				l.Info("google-workspace: group no longer exists", zap.String("email", email))
+				f.groupIdCache[email] = ""
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("google-workspace: failed to get group %s: %w", email, err)
 	}
 
 	f.groupIdCache[email] = group.Id
 
 	if group.Id == "" {
-		l := ctxzap.Extract(ctx)
 		l.Warn("google-workspace: group has no id", zap.String("email", group.Email))
 		return "", nil
 	}
@@ -301,7 +330,7 @@ func (f *adminEventFeed) lookupGroupId(ctx context.Context, email string) (strin
 	return group.Id, nil
 }
 
-func (e *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
+func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
 	return &v2.EventFeedMetadata{
 		Id: "admin_event_feed",
 		SupportedEventTypes: []v2.EventType{
