@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -33,8 +34,10 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	var streamState *pagination.StreamState
 	s, err := f.connector.getReportService(ctx)
 	if err != nil {
+		fmt.Println("DEBUG: getReportService error:", err)
 		return nil, nil, nil, err
 	}
+	fmt.Println("DEBUG: getReportService successful")
 
 	req := s.Activities.List("all", "admin")
 	req.MaxResults(int64(pToken.Size))
@@ -60,6 +63,8 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
+	l.Debug("google-workspace-event-feed: found events", zap.Int("count", len(r.Items)), zap.String("next_page_token", r.NextPageToken), zap.Any("start_at", startAt))
 
 	events := make([]*v2.Event, 0)
 	for _, activity := range r.Items {
