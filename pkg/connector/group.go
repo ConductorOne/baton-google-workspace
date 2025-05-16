@@ -16,7 +16,6 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
-	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
 )
@@ -186,7 +185,7 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
 	if o.groupMemberProvisioningService == nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryGroupMemberScope)
+		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope)
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, nil, errors.New("google-workspace-v2: user principal is required")
@@ -217,7 +216,7 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 
 func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
 	if o.groupMemberProvisioningService == nil {
-		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", directoryAdmin.AdminDirectoryGroupMemberScope)
+		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope)
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, errors.New("google-workspace-v2: user principal is required")
@@ -241,4 +240,32 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 	}
 
 	return nil, nil
+}
+
+func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	r := o.groupService.Groups.Get(resourceId.Resource)
+
+	g, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// TODO: If o.domainId is set, check if the group is still in the domain.
+	//       There is not a straight forward way to do this when getting a single group.
+
+	if g.Id == "" {
+		l.Error("google-workspace: group had no id", zap.String("name", g.Name))
+		return nil, nil, nil
+	}
+	annos := &v2.V1Identifier{
+		Id: g.Id,
+	}
+	traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
+	groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, sdkResource.WithAnnotation(annos))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return groupResource, nil, nil
 }

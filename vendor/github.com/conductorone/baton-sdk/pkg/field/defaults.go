@@ -1,6 +1,19 @@
 package field
 
-import "github.com/conductorone/baton-sdk/pkg/logging"
+import (
+	"time"
+
+	"github.com/conductorone/baton-sdk/pkg/logging"
+)
+
+const (
+	OtelCollectorEndpointFieldName            = "otel-collector-endpoint"
+	OtelCollectorEndpointTLSCertPathFieldName = "otel-collector-endpoint-tls-cert-path"
+	OtelCollectorEndpointTLSCertFieldName     = "otel-collector-endpoint-tls-cert"
+	OtelCollectorEndpointTLSInsecureFieldName = "otel-collector-endpoint-tls-insecure"
+	OtelTracingDisabledFieldName              = "otel-tracing-disabled"
+	OtelLoggingDisabledFieldName              = "otel-logging-disabled"
+)
 
 var (
 	createTicketField           = BoolField("create-ticket", WithHidden(true), WithDescription("Create ticket"), WithPersistent(true), WithExportTarget(ExportTargetNone))
@@ -25,7 +38,14 @@ var (
 	deleteResourceField     = StringField("delete-resource", WithHidden(true), WithDescription("The id of the resource to delete"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	deleteResourceTypeField = StringField("delete-resource-type", WithHidden(true), WithDescription("The type of the resource to delete"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	eventFeedField          = StringField("event-feed", WithHidden(true), WithDescription("Read feed events to stdout"), WithPersistent(true), WithExportTarget(ExportTargetNone))
-	fileField               = StringField("file", WithShortHand("f"), WithDefaultValue("sync.c1z"), WithDescription("The path to the c1z file to sync with"),
+	eventFeedIdField        = StringField("event-feed-id", WithHidden(true), WithDescription("The id of the event feed to read events from"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	eventFeedStartAtField   = StringField("event-feed-start-at",
+		WithDefaultValue(time.Now().AddDate(0, 0, -1).Format(time.RFC3339)),
+		WithHidden(true),
+		WithDescription("The start time of the event feed to read events from"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
+	fileField = StringField("file", WithShortHand("f"), WithDefaultValue("sync.c1z"), WithDescription("The path to the c1z file to sync with"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
 	grantEntitlementField = StringField("grant-entitlement", WithHidden(true), WithDescription("The id of the entitlement to grant to the supplied principal"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
@@ -45,9 +65,72 @@ var (
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
 	logLevelField = StringField("log-level", WithDefaultValue("info"), WithDescription("The log level: debug, info, warn, error"), WithPersistent(true),
 		WithExportTarget(ExportTargetOps))
-	skipFullSync          = BoolField("skip-full-sync", WithDescription("This must be set to skip a full sync"), WithPersistent(true), WithExportTarget(ExportTargetNone))
-	otelCollectorEndpoint = StringField("otel-collector-endpoint", WithDescription("The endpoint of the OpenTelemetry collector to send observability data to"),
+	skipFullSync            = BoolField("skip-full-sync", WithDescription("This must be set to skip a full sync"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	targetedSyncResourceIDs = StringSliceField("sync-resources", WithDescription("The resource IDs to sync"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	diffSyncsField          = BoolField(
+		"diff-syncs",
+		WithDescription("Create a new partial SyncID from a base and applied sync."),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	diffSyncsBaseSyncField = StringField("base-sync-id",
+		WithDescription("The base sync to diff from."),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	diffSyncsAppliedSyncField = StringField("applied-sync-id",
+		WithDescription("The sync to show diffs when applied to the base sync."),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+
+	compactSyncsField = BoolField("compact-syncs",
+		WithDescription("Provide a list of sync files to compact into a single c1z file and sync ID."),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	compactOutputDirectoryField = StringField("compact-output-path",
+		WithDescription("The directory to store the results in"),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	compactFilePathsField = StringSliceField("compact-file-paths",
+		WithDescription("A comma-separated list of file paths to sync from."),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	compactSyncIDsField = StringSliceField("compact-sync-ids",
+		WithDescription("A comma-separated list of file ids to sync from. Must match sync IDs from each file provided. Order matters."),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+
+	otelCollectorEndpoint = StringField(OtelCollectorEndpointFieldName,
+		WithDescription("The endpoint of the OpenTelemetry collector to send observability data to (used for both tracing and logging if specific endpoints are not provided)"),
 		WithPersistent(true), WithExportTarget(ExportTargetOps))
+	otelCollectorEndpointTLSCertPath = StringField(OtelCollectorEndpointTLSCertPathFieldName,
+		WithDescription("Path to a file containing a PEM-encoded certificate to use as a CA for TLS connections to the OpenTelemetry collector"),
+		WithPersistent(true), WithHidden(true), WithExportTarget(ExportTargetOps))
+	otelCollectorEndpointTlSCert = StringField(OtelCollectorEndpointTLSCertFieldName,
+		WithDescription("A PEM-encoded certificate to use as a CA for TLS connections to the OpenTelemetry collector"),
+		WithPersistent(true), WithHidden(true), WithExportTarget(ExportTargetOps))
+	otelCollectorEndpointTlSInsecure = BoolField(OtelCollectorEndpointTLSInsecureFieldName,
+		WithDescription("Allow insecure connections to the OpenTelemetry collector"),
+		WithPersistent(true), WithHidden(true), WithExportTarget(ExportTargetOps))
+	otelTracingDisabled = BoolField(OtelTracingDisabledFieldName,
+		WithDescription("Disable OpenTelemetry tracing"), WithDefaultValue(false),
+		WithPersistent(true), WithHidden(true), WithExportTarget(ExportTargetOps))
+	otelLoggingDisabled = BoolField(OtelLoggingDisabledFieldName,
+		WithDescription("Disable OpenTelemetry logging"), WithDefaultValue(false),
+		WithPersistent(true), WithHidden(true), WithExportTarget(ExportTargetOps))
+
 	externalResourceC1ZField = StringField("external-resource-c1z",
 		WithDescription("The path to the c1z file to sync external baton resources with"),
 		WithPersistent(true),
@@ -121,6 +204,8 @@ var DefaultFields = []SchemaField{
 	deleteResourceField,
 	deleteResourceTypeField,
 	eventFeedField,
+	eventFeedIdField,
+	eventFeedStartAtField,
 	fileField,
 	grantEntitlementField,
 	grantPrincipalField,
@@ -133,9 +218,23 @@ var DefaultFields = []SchemaField{
 	ticketTemplatePathField,
 	logLevelField,
 	skipFullSync,
-	otelCollectorEndpoint,
+	targetedSyncResourceIDs,
 	externalResourceC1ZField,
 	externalResourceEntitlementIdFilter,
+	diffSyncsField,
+	diffSyncsBaseSyncField,
+	diffSyncsAppliedSyncField,
+	compactSyncIDsField,
+	compactFilePathsField,
+	compactOutputDirectoryField,
+	compactSyncsField,
+
+	otelCollectorEndpoint,
+	otelCollectorEndpointTLSCertPath,
+	otelCollectorEndpointTlSCert,
+	otelCollectorEndpointTlSInsecure,
+	otelTracingDisabled,
+	otelLoggingDisabled,
 }
 
 func IsFieldAmongDefaultList(f SchemaField) bool {
