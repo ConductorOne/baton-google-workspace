@@ -101,7 +101,12 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		}
 	}
 
-	l.Debug("google-workspace-event-feed: found events", zap.Int("count", len(r.Items)), zap.String("next_page_token", r.NextPageToken), zap.Any("start_at", startAt), zap.Any("latest_event", cursor.LatestEventSeen))
+	l.Debug("google-workspace-event-feed: listed events",
+		zap.Int("count", len(r.Items)),
+		zap.String("next_page_token", r.NextPageToken),
+		zap.Any("start_at", startAt),
+		zap.Any("latest_event", cursor.LatestEventSeen),
+	)
 
 	cursor.NextPageToken = r.NextPageToken
 	if r.NextPageToken == "" {
@@ -194,7 +199,13 @@ func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier in
 	return events, nil
 }
 
-func (f *adminEventFeed) newGroupChangedEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, parameterName string, activityEvent *reports.ActivityEvents) (*v2.Event, error) {
+func (f *adminEventFeed) newGroupChangedEvent(
+	ctx context.Context,
+	uniqueQualifier int64,
+	occurredAt *timestamppb.Timestamp,
+	parameterName string,
+	activityEvent *reports.ActivityEvents,
+) (*v2.Event, error) {
 	groupEmail := getValueFromParameters(parameterName, activityEvent.Parameters)
 
 	if groupEmail == "" {
@@ -224,7 +235,13 @@ func (f *adminEventFeed) newGroupChangedEvent(ctx context.Context, uniqueQualifi
 	}, nil
 }
 
-func (f *adminEventFeed) newUserChangedEvent(ctx context.Context, uniqueQualifier int64, occurredAt *timestamppb.Timestamp, parameterName string, activityEvent *reports.ActivityEvents) (*v2.Event, error) {
+func (f *adminEventFeed) newUserChangedEvent(
+	ctx context.Context,
+	uniqueQualifier int64,
+	occurredAt *timestamppb.Timestamp,
+	parameterName string,
+	activityEvent *reports.ActivityEvents,
+) (*v2.Event, error) {
 	userEmail := getValueFromParameters(parameterName, activityEvent.Parameters)
 
 	if userEmail == "" {
