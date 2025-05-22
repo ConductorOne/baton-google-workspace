@@ -3,7 +3,7 @@ module github.com/conductorone/baton-google-workspace
 go 1.23.4
 
 require (
-	github.com/conductorone/baton-sdk v0.3.8-0.20250515220925-4df2afba62d2
+	github.com/conductorone/baton-sdk v0.3.9-0.20250520233758-8adad6857173
 	github.com/deckarep/golang-set/v2 v2.8.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/spf13/viper v1.20.1

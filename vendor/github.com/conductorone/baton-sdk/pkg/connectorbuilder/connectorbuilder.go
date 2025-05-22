@@ -152,7 +152,6 @@ type EventProvider interface {
 // NewEventProviderV2 is a new interface that allows connectors to provide multiple event feeds.
 //
 // This is the recommended interface for implementing event feed support in new connectors.
-// TODO MJP does this get auto made when an EventFeed is registered? What does that look like? How do I make this easiest?
 type EventProviderV2 interface {
 	ConnectorBuilder
 	EventFeeds(ctx context.Context) []EventFeed
@@ -164,6 +163,29 @@ type EventProviderV2 interface {
 type EventFeed interface {
 	EventLister
 	EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata
+}
+
+type oldEventFeedWrapper struct {
+	feed EventLister
+}
+
+const (
+	LegacyBatonFeedId = "baton_feed_event"
+)
+
+func (e *oldEventFeedWrapper) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
+	return &v2.EventFeedMetadata{
+		Id:                  LegacyBatonFeedId,
+		SupportedEventTypes: []v2.EventType{v2.EventType_EVENT_TYPE_UNSPECIFIED},
+	}
+}
+
+func (e *oldEventFeedWrapper) ListEvents(
+	ctx context.Context,
+	earliestEvent *timestamppb.Timestamp,
+	pToken *pagination.StreamToken,
+) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	return e.feed.ListEvents(ctx, earliestEvent, pToken)
 }
 
 // TicketManager extends ConnectorBuilder to add capabilities for ticket management.
@@ -226,7 +248,6 @@ type builderImpl struct {
 	accountManager          AccountManager
 	actionManager           CustomActionManager
 	credentialManagers      map[string]CredentialManager
-	eventFeed               EventProvider
 	eventFeeds              map[string]EventFeed
 	cb                      ConnectorBuilder
 	ticketManager           TicketManager
@@ -460,6 +481,9 @@ func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.Conne
 				if feedData == nil {
 					return nil, fmt.Errorf("error: event feed metadata is nil")
 				}
+				if err := feedData.Validate(); err != nil {
+					return nil, fmt.Errorf("error: event feed metadata for %s is invalid: %w", feedData.Id, err)
+				}
 				if _, ok := ret.eventFeeds[feedData.Id]; ok {
 					return nil, fmt.Errorf("error: duplicate event feed id found: %s", feedData.Id)
 				}
@@ -468,7 +492,14 @@ func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.Conne
 		}
 
 		if b, ok := c.(EventProvider); ok {
-			ret.eventFeed = b
+			// Register the legacy Baton feed as a v2 event feed
+			// implementing both v1 and v2 event feeds is not supported.
+			if len(ret.eventFeeds) != 0 {
+				return nil, fmt.Errorf("error: using legacy event feed is not supported when using EventProviderV2")
+			}
+			ret.eventFeeds[LegacyBatonFeedId] = &oldEventFeedWrapper{
+				feed: b,
+			}
 		}
 
 		if ticketManager, ok := c.(TicketManager); ok {
@@ -687,7 +718,7 @@ func (b *builderImpl) GetResource(ctx context.Context, request *v2.ResourceGette
 	rb, ok := b.resourceTargetedSyncers[resourceType]
 	if !ok {
 		b.m.RecordTaskFailure(ctx, tt, b.nowFunc().Sub(start))
-		return nil, fmt.Errorf("error: get resource with unknown resource type %s", resourceType)
+		return nil, status.Errorf(codes.Unimplemented, "error: get resource with unknown resource type %s", resourceType)
 	}
 
 	resource, annos, err := rb.Get(ctx, request.GetResourceId(), request.GetParentResourceId())
@@ -911,10 +942,6 @@ func getCapabilities(ctx context.Context, b *builderImpl) (*v2.ConnectorCapabili
 		return resourceTypeCapabilities[i].ResourceType.GetId() < resourceTypeCapabilities[j].ResourceType.GetId()
 	})
 
-	if b.eventFeed != nil {
-		connectorCaps[v2.Capability_CAPABILITY_EVENT_FEED] = struct{}{}
-	}
-
 	if len(b.eventFeeds) > 0 {
 		connectorCaps[v2.Capability_CAPABILITY_EVENT_FEED_V2] = struct{}{}
 	}
@@ -1068,32 +1095,42 @@ func (b *builderImpl) GetAsset(request *v2.AssetServiceGetAssetRequest, server v
 	return nil
 }
 
+func (b *builderImpl) ListEventFeeds(ctx context.Context, request *v2.ListEventFeedsRequest) (*v2.ListEventFeedsResponse, error) {
+	ctx, span := tracer.Start(ctx, "builderImpl.ListEventFeeds")
+	defer span.End()
+
+	start := b.nowFunc()
+	tt := tasks.ListEventFeedsType
+
+	feeds := make([]*v2.EventFeedMetadata, 0, len(b.eventFeeds))
+
+	for _, feed := range b.eventFeeds {
+		feeds = append(feeds, feed.EventFeedMetadata(ctx))
+	}
+
+	b.m.RecordTaskSuccess(ctx, tt, b.nowFunc().Sub(start))
+	return &v2.ListEventFeedsResponse{
+		List: feeds,
+	}, nil
+}
+
 func (b *builderImpl) ListEvents(ctx context.Context, request *v2.ListEventsRequest) (*v2.ListEventsResponse, error) {
 	ctx, span := tracer.Start(ctx, "builderImpl.ListEvents")
 	defer span.End()
 
 	start := b.nowFunc()
+	feedId := request.GetEventFeedId()
 
-	feedId := request.EventFeedId
+	// If no feedId is provided, use the legacy Baton feed Id
 	if feedId == "" {
-		// We're requesting the old event feed
-		if b.eventFeed == nil {
-			b.m.RecordTaskFailure(ctx, tasks.ListEventsType, b.nowFunc().Sub(start))
-			return nil, fmt.Errorf("error: event feed not implemented")
-		}
-		return b.listEventsHandleFeed(ctx, request, b.eventFeed, start)
+		feedId = LegacyBatonFeedId
 	}
 
-	// We're requesting a specific event feed
 	feed, ok := b.eventFeeds[feedId]
 	if !ok {
-		return nil, fmt.Errorf("error: event feed not found")
+		return nil, status.Errorf(codes.NotFound, "error: event feed not found")
 	}
 
-	return b.listEventsHandleFeed(ctx, request, feed, start)
-}
-
-func (b *builderImpl) listEventsHandleFeed(ctx context.Context, request *v2.ListEventsRequest, feed EventLister, start time.Time) (*v2.ListEventsResponse, error) {
 	tt := tasks.ListEventsType
 	events, streamState, annotations, err := feed.ListEvents(ctx, request.StartAt, &pagination.StreamToken{
 		Size:   int(request.PageSize),
