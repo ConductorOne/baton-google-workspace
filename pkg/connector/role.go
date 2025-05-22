@@ -227,3 +227,28 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 
 	return nil, nil
 }
+
+func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	r := o.roleService.Roles.Get(o.customerId, resourceId.Resource)
+
+	role, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tempRoleId := strconv.FormatInt(role.RoleId, 10)
+	if tempRoleId == "" {
+		l.Error("google-workspace: role had no id", zap.String("name", role.RoleName))
+		return nil, nil, nil
+	}
+	annos := &v2.V1Identifier{
+		Id: tempRoleId,
+	}
+	traitOpts := []sdkResource.RoleTraitOption{sdkResource.WithRoleProfile(roleProfile(ctx, role))}
+	roleResource, err := sdkResource.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, traitOpts, sdkResource.WithAnnotation(annos))
+	if err != nil {
+		return nil, nil, err
+	}
+	return roleResource, nil, nil
+}
