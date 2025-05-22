@@ -24,6 +24,9 @@ jobs:
         run: go build -o connector ./cmd/baton-google-workspace
 
       - name: Run and save output
+        env:
+          BATON_ADMINISTRATOR_EMAIL: admin@example.com
+          BATON_CUSTOMER_ID: 1234567890
         run: ./connector capabilities > baton_capabilities.json
 
       - name: Commit changes
