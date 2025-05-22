@@ -353,7 +353,6 @@ func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 		SupportedEventTypes: []v2.EventType{
 			v2.EventType_EVENT_TYPE_RESOURCE_CHANGE,
 		},
-		StartAt: v2.EventFeedStartAt_EVENT_FEED_START_AT_HEAD,
 	}
 }
 

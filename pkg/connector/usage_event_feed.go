@@ -23,7 +23,6 @@ func (e *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 		SupportedEventTypes: []v2.EventType{
 			v2.EventType_EVENT_TYPE_USAGE,
 		},
-		StartAt: v2.EventFeedStartAt_EVENT_FEED_START_AT_TAIL,
 	}
 }
 
