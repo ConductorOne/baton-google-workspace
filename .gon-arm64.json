@@ -1,5 +1,5 @@
 {
-  "source": ["./dist/macos-arm64_darwin_arm64/baton-google-workspace"],
+  "source": ["./dist/macos-arm64_darwin_arm64_v8.0/baton-google-workspace"],
   "bundle_id": "com.conductorone.baton-google-workspace",
   "apple_id": {
     "username" : "justin.gallardo@conductorone.com"
