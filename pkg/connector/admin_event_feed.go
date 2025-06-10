@@ -158,7 +158,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 			return nil, nil
 		}
 		events = append(events, evt)
-	case "ADD_GROUP_MEMBER", "REMOVE_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
+	case "ADD_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
 		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
 		if err != nil {
 			return nil, err
@@ -182,9 +182,7 @@ func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier in
 
 	events := make([]*v2.Event, 0)
 	switch activityEvt.Name {
-	case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "DELETE_ACCOUNT_INFO_DUMP", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME",
-		"REMOVE_DISPLAY_NAME", "CHANGE_FIRST_NAME", "CHANGE_LAST_NAME", "ARCHIVE_USER", "CREATE_USER", "DELETE_USER", "RENAME_USER", "SUSPEND_USER",
-		"UNARCHIVE_USER", "UNDELETE_USER", "UNSUSPEND_USER", "CANCEL_USER_INVITE":
+	case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME", "CHANGE_FIRST_NAME", "CHANGE_LAST_NAME", "CREATE_USER", "RENAME_USER":
 		evt, err := f.newUserChangedEvent(ctx, uniqueQualifier, occurredAt, "USER_EMAIL", activityEvt)
 		if err != nil {
 			return nil, err
