@@ -339,3 +339,13 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 	}
 	return scope, false
 }
+
+func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
+	usageEventFeed := newUsageEventFeed(c)
+	adminEventFeed := newAdminEventFeed(c)
+
+	return []connectorbuilder.EventFeed{
+		usageEventFeed,
+		adminEventFeed,
+	}
+}
