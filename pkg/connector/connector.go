@@ -320,7 +320,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 					zap.String("scope", scope),
 					zap.String("upgraded_scope", upgradedScope),
 				)
-				return getService(ctx, c, upgradedScope, newService)
+				return getService[T](ctx, c, upgradedScope, newService)
 			}
 		}
 		return nil, err
