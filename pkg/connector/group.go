@@ -67,7 +67,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 
 	groups, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: cannot get groups: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(groups.Groups))
@@ -134,7 +134,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 			}
 		}
 
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: can't get members: %w", err)
 	}
 
 	var rv []*v2.Grant
@@ -248,7 +248,7 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 
 	g, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve group: %s, %w", resourceId.Resource, err)
 	}
 
 	// TODO: If o.domainId is set, check if the group is still in the domain.

@@ -56,7 +56,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 
 	roles, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: can't get roles: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(roles.Items))
@@ -123,7 +123,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 				return nil, "", nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no role found with id %s", resource.Id.Resource))
 			}
 		}
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: can't get role assignment: %w", err)
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
@@ -233,7 +233,7 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	role, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve role: %s, %w", resourceId.Resource, err)
 	}
 
 	tempRoleId := strconv.FormatInt(role.RoleId, 10)
