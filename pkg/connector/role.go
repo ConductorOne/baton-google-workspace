@@ -123,7 +123,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 				return nil, "", nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no role found with id %s", resource.Id.Resource))
 			}
 		}
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: can't get role assignment: %w", err)
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
