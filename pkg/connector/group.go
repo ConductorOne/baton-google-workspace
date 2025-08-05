@@ -248,7 +248,7 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 
 	g, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve group: %s, %w", resourceId.Resource, err)
 	}
 
 	// TODO: If o.domainId is set, check if the group is still in the domain.

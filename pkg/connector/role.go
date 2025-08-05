@@ -233,7 +233,7 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	role, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve role: %s, %w", resourceId.Resource, err) 
 	}
 
 	tempRoleId := strconv.FormatInt(role.RoleId, 10)

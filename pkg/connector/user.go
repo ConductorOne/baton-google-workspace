@@ -227,7 +227,7 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	user, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve user: %s, %w", resourceId.Resource, err)
 	}
 
 	if o.domain != "" {
