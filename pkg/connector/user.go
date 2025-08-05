@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -78,7 +79,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 
 	users, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: can't get users: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(users.Users))

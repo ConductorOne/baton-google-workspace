@@ -56,7 +56,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 
 	roles, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("google-workspace: can't get roles: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(roles.Items))

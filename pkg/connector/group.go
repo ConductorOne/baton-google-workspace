@@ -67,7 +67,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 
 	groups, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("github-workspace: cannot get groups: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(groups.Groups))
