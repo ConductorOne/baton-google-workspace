@@ -377,3 +377,27 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	)
 	return userResource, err
 }
+
+func (o *userResourceType) Deleted(ctx context.Context, resourceId *v2.ResourceId) (bool, error) {
+	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
+
+	user, err := r.Context(ctx).Do()
+	if err != nil {
+		return false, err
+	}
+
+	// if the user is already suspended, return true
+	if user.Suspended {
+		return true, nil
+	}
+
+	_, err = o.userService.Users.Update(resourceId.Resource, &admin.User{
+		Suspended: true,
+	}).Context(ctx).Do()
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, err
+}
