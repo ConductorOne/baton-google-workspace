@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -49,6 +51,33 @@ var (
 		Id:          "enterprise_application",
 		DisplayName: "Enterprise Application",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+	}
+	updateUserStatusActionSchema = &v2.BatonActionSchema{
+		Name: "update_user_status",
+		Arguments: []*config.Field{
+			{
+				Name:        "resource_id",
+				DisplayName: "User Resource ID",
+				Description: "The ID of the user resource to update the status of",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "is_suspended",
+				DisplayName: "Is Suspended",
+				Description: "Update the user status to suspended or active",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user resource status was updated successfully",
+				Field:       &config.Field_BoolField{},
+			},
+		},
 	}
 )
 
@@ -348,4 +377,17 @@ func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.Eve
 		usageEventFeed,
 		adminEventFeed,
 	}
+}
+
+func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorbuilder.CustomActionManager, error) {
+	l := ctxzap.Extract(ctx)
+
+	actionManager := actions.NewActionManager(ctx)
+	err := actionManager.RegisterAction(ctx, "update_user_status", updateUserStatusActionSchema, c.updateUserStatus)
+	if err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return nil, err
+	}
+
+	return actionManager, nil
 }
