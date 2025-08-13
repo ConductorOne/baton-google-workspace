@@ -31,9 +31,12 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	userId := guidField.StringValue
 
 	// update user.isSuspended state
-	userService.Users.Update(userId, &admin.User{
+	_, err = userService.Users.Update(userId, &admin.User{
 		Suspended: isSuspended,
 	}).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	response := structpb.Struct{
 		Fields: map[string]*structpb.Value{
