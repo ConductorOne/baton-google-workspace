@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	admin "google.golang.org/api/admin/directory/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -31,7 +30,7 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	userId := guidField.StringValue
 
 	// update user.isSuspended state
-	_, err = userService.Users.Update(userId, &admin.User{
+	_, err = userService.Users.Update(userId, &directoryAdmin.User{
 		Suspended: isSuspended,
 	}).Context(ctx).Do()
 	if err != nil {
