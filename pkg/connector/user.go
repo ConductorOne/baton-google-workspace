@@ -378,7 +378,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	return userResource, err
 }
 
-func (o *userResourceType) Deleted(ctx context.Context, resourceId *v2.ResourceId) (bool, error) {
+func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (bool, error) {
 	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
 
 	user, err := r.Context(ctx).Do()
