@@ -43,11 +43,6 @@ func main() {
 func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	if err := ValidateConfig(v); err != nil {
-		l.Error("error validating config", zap.Error(err))
-		return nil, err
-	}
-
 	// Get configuration values
 	customerID := v.GetString(CustomerIDField.FieldName)
 	domain := v.GetString(DomainField.FieldName)
@@ -56,6 +51,21 @@ func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, e
 	credentialsJSON := v.GetString(CredentialsJSONField.FieldName)
 
 	var jsonCredentials []byte
+
+	var isCapabilitiesCommand bool
+	for _, arg := range os.Args {
+		if arg == "capabilities" {
+			isCapabilitiesCommand = true
+			break
+		}
+	}
+
+	if !isCapabilitiesCommand {
+		if err := ValidateConfig(v); err != nil {
+			l.Error("error validating config", zap.Error(err))
+			return nil, err
+		}
+	}
 
 	if credentialsJSONFilePath != "" {
 		var err error
