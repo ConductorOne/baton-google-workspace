@@ -43,11 +43,6 @@ func main() {
 func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	if err := ValidateConfig(v); err != nil {
-		l.Error("error validating config", zap.Error(err))
-		return nil, err
-	}
-
 	// Get configuration values
 	customerID := v.GetString(CustomerIDField.FieldName)
 	domain := v.GetString(DomainField.FieldName)
