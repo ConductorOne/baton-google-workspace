@@ -52,7 +52,13 @@ func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, e
 
 	var jsonCredentials []byte
 
-	isCapabilitiesCommand := len(os.Args) > 2 && os.Args[1] == "capabilities"
+	var isCapabilitiesCommand bool
+	for _, arg := range os.Args {
+		if arg == "capabilities" {
+			isCapabilitiesCommand = true
+			break
+		}
+	}
 
 	if !isCapabilitiesCommand {
 		if err := ValidateConfig(v); err != nil {
