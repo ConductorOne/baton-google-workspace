@@ -52,6 +52,15 @@ func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, e
 
 	var jsonCredentials []byte
 
+	isCapabilitiesCommand := len(os.Args) > 2 && os.Args[1] == "capabilities"
+
+	if !isCapabilitiesCommand {
+		if err := ValidateConfig(v); err != nil {
+			l.Error("error validating config", zap.Error(err))
+			return nil, err
+		}
+	}
+
 	if credentialsJSONFilePath != "" {
 		var err error
 		jsonCredentials, err = os.ReadFile(credentialsJSONFilePath)
