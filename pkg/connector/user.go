@@ -378,17 +378,21 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	return userResource, err
 }
 
-func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (bool, error) {
+func (o *userResourceType) Create(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+	return nil, nil, nil
+}
+
+func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
 	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
 
 	user, err := r.Context(ctx).Do()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	// if the user is already suspended, return true
 	if user.Suspended {
-		return true, nil
+		return nil, nil
 	}
 
 	_, err = o.userService.Users.Update(resourceId.Resource, &admin.User{
@@ -396,8 +400,8 @@ func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId
 	}).Context(ctx).Do()
 
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return true, err
+	return nil, err
 }
