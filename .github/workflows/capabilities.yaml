@@ -25,8 +25,10 @@ jobs:
 
       - name: Run and save output
         env:
-          BATON_ADMINISTRATOR_EMAIL: admin@example.com
-          BATON_CUSTOMER_ID: 1234567890
+          BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
+          BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
+          BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
+          BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
         run: ./connector capabilities > baton_capabilities.json
 
       - name: Commit changes
