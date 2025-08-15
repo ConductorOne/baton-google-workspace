@@ -41,6 +41,11 @@ var (
 		field.WithDescription("JSON credentials for the Google Workspace account. Mutually exclusive with file path"),
 	)
 
+	SyncTokensField = field.BoolField(
+		"sync-tokens",
+		field.WithDescription("Sync third party tokens for the Google Workspace account."),
+	)
+
 	// Collection of all configuration fields.
 	ConfigurationFields = []field.SchemaField{
 		CustomerIDField,
@@ -48,6 +53,7 @@ var (
 		AdministratorEmailField,
 		CredentialsJSONFilePathField,
 		CredentialsJSONField,
+		SyncTokensField,
 	}
 
 	// Configuration combines fields into a single configuration object.

@@ -49,6 +49,7 @@ func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, e
 	administratorEmail := v.GetString(AdministratorEmailField.FieldName)
 	credentialsJSONFilePath := v.GetString(CredentialsJSONFilePathField.FieldName)
 	credentialsJSON := v.GetString(CredentialsJSONField.FieldName)
+	syncTokens := v.GetBool(SyncTokensField.FieldName)
 
 	var jsonCredentials []byte
 
@@ -83,6 +84,7 @@ func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, e
 		AdministratorEmail: administratorEmail,
 		Domain:             domain,
 		Credentials:        jsonCredentials,
+		SyncTokens:         syncTokens,
 	}
 
 	// Create the Google Workspace connector
