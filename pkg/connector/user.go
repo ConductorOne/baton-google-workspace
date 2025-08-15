@@ -22,6 +22,7 @@ type userResourceType struct {
 	userService  *admin.Service
 	customerId   string
 	domain       string
+	syncTokens   bool
 }
 
 func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -112,12 +113,13 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ *paginati
 	return nil, "", nil, nil
 }
 
-func userBuilder(userService *admin.Service, customerId string, domain string) *userResourceType {
+func userBuilder(userService *admin.Service, customerId string, domain string, syncTokens bool) *userResourceType {
 	return &userResourceType{
 		resourceType: resourceTypeUser,
 		userService:  userService,
 		customerId:   customerId,
 		domain:       domain,
+		syncTokens:   syncTokens,
 	}
 }
 
@@ -364,19 +366,31 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 	)
 
-	userResource, err := sdkResource.NewUserResource(
-		user.Name.FullName,
-		resourceTypeUser,
-		user.Id,
-		traitOpts,
+	rsOption := []sdkResource.ResourceOption{
 		sdkResource.WithAnnotation(
 			&v2.V1Identifier{
 				Id: user.Id,
 			},
 		),
-		sdkResource.WithAnnotation(&v2.ChildResourceType{
-			ResourceTypeId: resourceTypeUserToken.Id,
-		}),
+	}
+
+	if o.syncTokens {
+		rsOption = append(
+			rsOption,
+			sdkResource.WithAnnotation(
+				&v2.ChildResourceType{
+					ResourceTypeId: resourceTypeUserToken.Id,
+				},
+			),
+		)
+	}
+
+	userResource, err := sdkResource.NewUserResource(
+		user.Name.FullName,
+		resourceTypeUser,
+		user.Id,
+		traitOpts,
+		rsOption...,
 	)
 	return userResource, err
 }
