@@ -1,4 +1,4 @@
-![Baton Logo](./docs/images/baton-logo.png)
+    ![Baton Logo](./docs/images/baton-logo.png)
 
 # `baton-google-workspace` [![Go Reference](https://pkg.go.dev/badge/github.com/conductorone/baton-google-workspace.svg)](https://pkg.go.dev/github.com/conductorone/baton-google-workspace) ![main ci](https://github.com/conductorone/baton-google-workspace/actions/workflows/main.yaml/badge.svg)
 

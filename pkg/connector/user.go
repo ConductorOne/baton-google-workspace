@@ -374,6 +374,9 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 				Id: user.Id,
 			},
 		),
+		sdkResource.WithAnnotation(&v2.ChildResourceType{
+			ResourceTypeId: resourceTypeUserToken.Id,
+		}),
 	)
 	return userResource, err
 }

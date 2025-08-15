@@ -79,6 +79,11 @@ var (
 			},
 		},
 	}
+
+	resourceTypeUserToken = &v2.ResourceType{
+		Id:          "user_token",
+		DisplayName: "User Tokens",
+	}
 )
 
 type Config struct {
@@ -296,6 +301,9 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 			))
 		}
 	}
+
+	rs = append(rs, newUserTokenResource(userService))
+
 	return rs
 }
 
