@@ -3,16 +3,20 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
 
 	mapset "github.com/deckarep/golang-set/v2"
 )
@@ -378,30 +382,78 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	return userResource, err
 }
 
-func (o *userResourceType) Create(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
-	return nil, nil, nil
+func (o *userResourceType) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
+	return &v2.CredentialDetailsAccountProvisioning{
+		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
+		},
+		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
+	}, nil, nil
+}
+
+func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.AccountInfo, credentialOptions *v2.CredentialOptions) (
+	connectorbuilder.CreateAccountResponse,
+	[]*v2.PlaintextData,
+	annotations.Annotations,
+	error,
+) {
+	pMap := accountInfo.Profile.AsMap()
+	email, ok := pMap["email"].(string)
+	if !ok || email == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: email not found in profile")
+	}
+
+	givenName, ok := pMap["given_name"].(string)
+	if !ok || givenName == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: given_name not found in profile")
+	}
+
+	familyName, ok := pMap["family_name"].(string)
+	if !ok || familyName == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: family_name not found in profile")
+	}
+
+	user := &admin.User{
+		PrimaryEmail: email,
+		Name: &admin.UserName{
+			GivenName:  givenName,
+			FamilyName: familyName,
+		},
+		ChangePasswordAtNextLogin: true,
+	}
+
+	// Handle password if provided
+	if password, exists := pMap["password"].(string); exists && password != "" {
+		user.Password = password
+	}
+
+	user, err := o.userService.Users.Insert(user).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to create account: %w", err)
+	}
+
+	// Convert the created user to a baton resource
+	userResource, err := o.userResource(ctx, user)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
+	}
+
+	return &v2.CreateAccountResponse_SuccessResult{
+		Resource: userResource,
+	}, nil, nil, nil
 }
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
-	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
-
-	user, err := r.Context(ctx).Do()
+	err := o.userService.Users.Delete(resourceId.Resource).Context(ctx).Do()
 	if err != nil {
-		return nil, err
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("google-workspace: failed to delete user %s: %w", resourceId.Resource, err)
 	}
 
-	// if the user is already suspended, return true
-	if user.Suspended {
-		return nil, nil
-	}
-
-	_, err = o.userService.Users.Update(resourceId.Resource, &admin.User{
-		Suspended: true,
-	}).Context(ctx).Do()
-
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, err
+	return nil, nil
 }
