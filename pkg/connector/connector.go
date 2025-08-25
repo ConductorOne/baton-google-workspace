@@ -83,6 +83,9 @@ var (
 	resourceTypeUserToken = &v2.ResourceType{
 		Id:          "user_token",
 		DisplayName: "User Tokens",
+		Traits: []v2.ResourceType_Trait{
+			v2.ResourceType_TRAIT_APP,
+		},
 	}
 )
 
@@ -306,7 +309,9 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	}
 
 	if c.syncTokens {
-		rs = append(rs, newUserTokenResource(userService))
+		if userTokenService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope); err == nil {
+			rs = append(rs, newUserTokenResource(userTokenService))
+		}
 	}
 
 	return rs

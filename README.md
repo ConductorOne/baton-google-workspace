@@ -37,13 +37,32 @@ baton resources
 # Data Model
 
 `baton-google-workspace` will pull down information about the following Google Workspace resources:
+
 - Groups
 - Users
 - Roles
+- Tokens
+
+## Scope Permissions
+
+In Admin Console → Security → API controls → Manage domain-wide delegation, authorize the service account client ID with
+those scopes.
+
+- https://www.googleapis.com/auth/admin.directory.rolemanagement
+- https://www.googleapis.com/auth/admin.directory.user.alias.readonly
+- https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly
+- https://www.googleapis.com/auth/admin.directory.group.member.readonly
+- https://www.googleapis.com/auth/admin.directory.group.readonly
+- https://www.googleapis.com/auth/admin.directory.user.readonly
+- https://www.googleapis.com/auth/admin.directory.domain.readonly
+- https://www.googleapis.com/auth/admin.reports.audit.readonly
+- https://www.googleapis.com/auth/admin.directory.user.security
 
 # Contributing, Support and Issues
 
-We started Baton because we were tired of taking screenshots and manually building spreadsheets. We welcome contributions, and ideas, no matter how small -- our goal is to make identity and permissions sprawl less painful for everyone. If you have questions, problems, or ideas: Please open a Github Issue!
+We started Baton because we were tired of taking screenshots and manually building spreadsheets. We welcome
+contributions, and ideas, no matter how small -- our goal is to make identity and permissions sprawl less painful for
+everyone. If you have questions, problems, or ideas: Please open a Github Issue!
 
 See [CONTRIBUTING.md](https://github.com/ConductorOne/baton/blob/main/CONTRIBUTING.md) for more details.
 
