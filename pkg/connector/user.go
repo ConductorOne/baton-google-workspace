@@ -3,9 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -16,7 +14,6 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
-	"google.golang.org/api/googleapi"
 
 	mapset "github.com/deckarep/golang-set/v2"
 )
@@ -444,16 +441,25 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 }
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
-	err := o.userService.Users.Delete(resourceId.Resource).Context(ctx).Do()
+	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
+
+	user, err := r.Context(ctx).Do()
 	if err != nil {
-		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil
-			}
-		}
-		return nil, fmt.Errorf("google-workspace: failed to delete user %s: %w", resourceId.Resource, err)
+		return nil, err
 	}
 
-	return nil, nil
+	// if the user is already suspended, return true
+	if user.Suspended {
+		return nil, nil
+	}
+
+	_, err = o.userService.Users.Update(resourceId.Resource, &admin.User{
+		Suspended: true,
+	}).Context(ctx).Do()
+
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, err
 }
