@@ -190,6 +190,50 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	return &v2.ConnectorMetadata{
 		DisplayName: "Google Workspace",
 		Annotations: annos,
+		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
+			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
+				"email": {
+					DisplayName: "Email",
+					Required:    true,
+					Description: "The email address for the new user account. Must be unique within the domain.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "user@example.com",
+					Order:       1,
+				},
+				"given_name": {
+					DisplayName: "First Name",
+					Required:    true,
+					Description: "The user's first name.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "John",
+					Order:       2,
+				},
+				"family_name": {
+					DisplayName: "Last Name",
+					Required:    true,
+					Description: "The user's last name.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "Doe",
+					Order:       3,
+				},
+				"password": {
+					DisplayName: "Initial Password",
+					Required:    false,
+					Description: "Optional initial password. If not provided, user will be required to set password on first login.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "Leave empty to require password setup on first login",
+					Order:       4,
+				},
+			},
+		},
 	}, nil
 }
 
@@ -268,6 +312,7 @@ func (c *GoogleWorkspace) Asset(ctx context.Context, asset *v2.AssetRef) (string
 }
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
+	l := ctxzap.Extract(ctx)
 	rs := []connectorbuilder.ResourceSyncer{}
 	// We don't care about the error here, as we handle the case where the service is nil in the syncer
 	roleProvisioningService, _ := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
@@ -275,8 +320,18 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}
+	if err != nil {
+		l.Warn("google-workspace: failed to initialize role service, skipping role syncer",
+			zap.Error(err),
+		)
+	}
 
-	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
+	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	if err != nil {
+		l.Warn("google-workspace: failed to initialize user service, skipping user syncer",
+			zap.Error(err),
+		)
+	}
 	if err == nil {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
 	}
