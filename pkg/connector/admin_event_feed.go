@@ -12,6 +12,8 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	directory "google.golang.org/api/admin/directory/v1"
 	reports "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
@@ -166,7 +168,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 		}
 		events = append(events, evt)
 	case "ADD_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
-		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
+		evt, err := f.newGroupMemberGrantEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", "USER_EMAIL", activityEvt)
 		if err != nil {
 			return nil, err
 		}
@@ -234,6 +236,77 @@ func (f *adminEventFeed) newGroupChangedEvent(
 					ResourceType: resourceTypeGroup.Id,
 					Resource:     group.Id,
 				},
+			},
+		},
+	}, nil
+}
+
+func (f *adminEventFeed) newGroupMemberGrantEvent(
+	ctx context.Context,
+	uniqueQualifier int64,
+	occurredAt *timestamppb.Timestamp,
+	groupEmailName string,
+	userEmailName string,
+	activityEvent *reports.ActivityEvents,
+) (*v2.Event, error) {
+	groupEmail := getValueFromParameters(groupEmailName, activityEvent.Parameters)
+
+	if groupEmail == "" {
+		return nil, nil
+	}
+
+	group, err := f.lookupGroup(ctx, groupEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if group == nil || group.Id == "" {
+		return nil, nil
+	}
+
+	userEmail := getValueFromParameters(userEmailName, activityEvent.Parameters)
+	if userEmail == "" {
+		return nil, nil
+	}
+
+	user, err := f.lookupUser(ctx, userEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if user == nil || user.Id == "" {
+		return nil, nil
+	}
+
+	// group email is also not the display name
+	groupResource, err := sdkResource.NewGroupResource(group.DisplayName, resourceTypeGroup, group.Id, nil, sdkResource.WithAnnotation(&v2.V1Identifier{Id: group.Id}))
+	if err != nil {
+		return nil, err
+	}
+	entitlement := sdkEntitlement.NewAssignmentEntitlement(groupResource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
+
+	userResource, err := sdkResource.NewUserResource(
+		user.DisplayName, // mJP do we really need this ? it was user.Name.FullName
+		resourceTypeUser,
+		user.Id,
+		nil,
+		sdkResource.WithAnnotation(
+			&v2.V1Identifier{
+				Id: user.Id,
+			},
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &v2.Event{
+		Id:         strconv.FormatInt(uniqueQualifier, 10),
+		OccurredAt: occurredAt,
+		Event: &v2.Event_CreateGrantEvent{
+			CreateGrantEvent: &v2.CreateGrantEvent{
+				Entitlement: entitlement,
+				Principal:   userResource,
 			},
 		},
 	}, nil
@@ -366,6 +439,7 @@ func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 		Id: "admin_event_feed",
 		SupportedEventTypes: []v2.EventType{
 			v2.EventType_EVENT_TYPE_RESOURCE_CHANGE,
+			v2.EventType_EVENT_TYPE_CREATE_GRANT,
 		},
 	}
 }
