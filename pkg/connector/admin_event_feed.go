@@ -167,7 +167,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 			return nil, nil
 		}
 		events = append(events, evt)
-	case "ADD_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
+	case "ADD_GROUP_MEMBER":
 		evt, err := f.newGroupMemberGrantEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", "USER_EMAIL", activityEvt)
 		if err != nil {
 			return nil, err
@@ -176,7 +176,15 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 			return nil, nil
 		}
 		events = append(events, evt)
-
+	case "UPDATE_GROUP_MEMBER":
+		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
 	// We're unable to look up the id for a deleted group, so we skip it
 	case "DELETE_GROUP":
 	default:
@@ -286,7 +294,7 @@ func (f *adminEventFeed) newGroupMemberGrantEvent(
 	entitlement := sdkEntitlement.NewAssignmentEntitlement(groupResource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
 
 	userResource, err := sdkResource.NewUserResource(
-		user.DisplayName, // mJP do we really need this ? it was user.Name.FullName
+		user.DisplayName,
 		resourceTypeUser,
 		user.Id,
 		nil,
