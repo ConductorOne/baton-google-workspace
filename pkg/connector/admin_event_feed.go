@@ -12,6 +12,8 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	directory "google.golang.org/api/admin/directory/v1"
 	reports "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
@@ -21,14 +23,21 @@ import (
 	"go.uber.org/zap"
 )
 
+type cacheEntry struct {
+	Id          string
+	DisplayName string
+}
+
+type cacheMap map[string]cacheEntry
+
 type adminEventFeed struct {
 	connector *GoogleWorkspace
 
-	groupIdCache map[string]string
-	userIdCache  map[string]string
+	groupCache cacheMap
+	userCache  cacheMap
 
-	groupIdMtx sync.Mutex
-	userIdMtx  sync.Mutex
+	groupMtx sync.Mutex
+	userMtx  sync.Mutex
 }
 
 func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
@@ -158,7 +167,16 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 			return nil, nil
 		}
 		events = append(events, evt)
-	case "ADD_GROUP_MEMBER", "UPDATE_GROUP_MEMBER":
+	case "ADD_GROUP_MEMBER":
+		evt, err := f.newGroupMemberGrantEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", "USER_EMAIL", activityEvt)
+		if err != nil {
+			return nil, err
+		}
+		if evt == nil {
+			return nil, nil
+		}
+		events = append(events, evt)
+	case "UPDATE_GROUP_MEMBER":
 		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
 		if err != nil {
 			return nil, err
@@ -167,7 +185,6 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 			return nil, nil
 		}
 		events = append(events, evt)
-
 	// We're unable to look up the id for a deleted group, so we skip it
 	case "DELETE_GROUP":
 	default:
@@ -210,12 +227,11 @@ func (f *adminEventFeed) newGroupChangedEvent(
 		return nil, nil
 	}
 
-	groupId, err := f.lookupGroupId(ctx, groupEmail)
+	group, err := f.lookupGroup(ctx, groupEmail)
 	if err != nil {
 		return nil, err
 	}
-
-	if groupId == "" {
+	if group == nil || group.Id == "" {
 		return nil, nil
 	}
 
@@ -226,8 +242,79 @@ func (f *adminEventFeed) newGroupChangedEvent(
 			ResourceChangeEvent: &v2.ResourceChangeEvent{
 				ResourceId: &v2.ResourceId{
 					ResourceType: resourceTypeGroup.Id,
-					Resource:     groupId,
+					Resource:     group.Id,
 				},
+			},
+		},
+	}, nil
+}
+
+func (f *adminEventFeed) newGroupMemberGrantEvent(
+	ctx context.Context,
+	uniqueQualifier int64,
+	occurredAt *timestamppb.Timestamp,
+	groupEmailName string,
+	userEmailName string,
+	activityEvent *reports.ActivityEvents,
+) (*v2.Event, error) {
+	groupEmail := getValueFromParameters(groupEmailName, activityEvent.Parameters)
+
+	if groupEmail == "" {
+		return nil, nil
+	}
+
+	group, err := f.lookupGroup(ctx, groupEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if group == nil || group.Id == "" {
+		return nil, nil
+	}
+
+	userEmail := getValueFromParameters(userEmailName, activityEvent.Parameters)
+	if userEmail == "" {
+		return nil, nil
+	}
+
+	user, err := f.lookupUser(ctx, userEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if user == nil || user.Id == "" {
+		return nil, nil
+	}
+
+	// group email is also not the display name
+	groupResource, err := sdkResource.NewGroupResource(group.DisplayName, resourceTypeGroup, group.Id, nil, sdkResource.WithAnnotation(&v2.V1Identifier{Id: group.Id}))
+	if err != nil {
+		return nil, err
+	}
+	entitlement := sdkEntitlement.NewAssignmentEntitlement(groupResource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
+
+	userResource, err := sdkResource.NewUserResource(
+		user.DisplayName,
+		resourceTypeUser,
+		user.Id,
+		nil,
+		sdkResource.WithAnnotation(
+			&v2.V1Identifier{
+				Id: user.Id,
+			},
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &v2.Event{
+		Id:         strconv.FormatInt(uniqueQualifier, 10),
+		OccurredAt: occurredAt,
+		Event: &v2.Event_CreateGrantEvent{
+			CreateGrantEvent: &v2.CreateGrantEvent{
+				Entitlement: entitlement,
+				Principal:   userResource,
 			},
 		},
 	}, nil
@@ -246,12 +333,12 @@ func (f *adminEventFeed) newUserChangedEvent(
 		return nil, nil
 	}
 
-	userId, err := f.lookupUserId(ctx, userEmail)
+	user, err := f.lookupUser(ctx, userEmail)
 	if err != nil {
 		return nil, err
 	}
 
-	if userId == "" {
+	if user == nil || user.Id == "" {
 		return nil, nil
 	}
 
@@ -262,26 +349,26 @@ func (f *adminEventFeed) newUserChangedEvent(
 			ResourceChangeEvent: &v2.ResourceChangeEvent{
 				ResourceId: &v2.ResourceId{
 					ResourceType: resourceTypeUser.Id,
-					Resource:     userId,
+					Resource:     user.Id,
 				},
 			},
 		},
 	}, nil
 }
 
-func (f *adminEventFeed) lookupUserId(ctx context.Context, email string) (string, error) {
-	f.userIdMtx.Lock()
-	defer f.userIdMtx.Unlock()
+func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEntry, error) {
+	f.userMtx.Lock()
+	defer f.userMtx.Unlock()
 
-	if id, ok := f.userIdCache[email]; ok {
-		return id, nil
+	if entry, ok := f.userCache[email]; ok {
+		return &entry, nil
 	}
 
 	l := ctxzap.Extract(ctx)
 
 	userService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryUserReadonlyScope)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	user, err := userService.Users.Get(email).Do()
@@ -290,36 +377,41 @@ func (f *adminEventFeed) lookupUserId(ctx context.Context, email string) (string
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusNotFound {
 				l.Info("google-workspace: user no longer exists", zap.String("email", email))
-				f.userIdCache[email] = ""
-				return "", nil
+				delete(f.userCache, email)
+				return nil, nil
 			}
 		}
-		return "", fmt.Errorf("google-workspace: failed to get user %s: %w", email, err)
+		return nil, fmt.Errorf("google-workspace: failed to get user %s: %w", email, err)
 	}
 
-	f.userIdCache[email] = user.Id
+	entry := cacheEntry{
+		Id:          user.Id,
+		DisplayName: user.Name.DisplayName,
+	}
+
+	f.userCache[email] = entry
 
 	if user.Id == "" {
 		l.Warn("google-workspace: user has no id", zap.String("email", user.PrimaryEmail))
-		return "", nil
+		return nil, nil
 	}
 
-	return user.Id, nil
+	return &entry, nil
 }
 
-func (f *adminEventFeed) lookupGroupId(ctx context.Context, email string) (string, error) {
-	f.groupIdMtx.Lock()
-	defer f.groupIdMtx.Unlock()
+func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheEntry, error) {
+	f.groupMtx.Lock()
+	defer f.groupMtx.Unlock()
 
-	if id, ok := f.groupIdCache[email]; ok {
-		return id, nil
+	if entry, ok := f.groupCache[email]; ok {
+		return &entry, nil
 	}
 
 	l := ctxzap.Extract(ctx)
 
 	groupService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	group, err := groupService.Groups.Get(email).Do()
@@ -328,21 +420,26 @@ func (f *adminEventFeed) lookupGroupId(ctx context.Context, email string) (strin
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusNotFound {
 				l.Info("google-workspace: group no longer exists", zap.String("email", email))
-				f.groupIdCache[email] = ""
-				return "", nil
+				delete(f.groupCache, email)
+				return nil, nil
 			}
 		}
-		return "", fmt.Errorf("google-workspace: failed to get group %s: %w", email, err)
+		return nil, fmt.Errorf("google-workspace: failed to get group %s: %w", email, err)
 	}
 
-	f.groupIdCache[email] = group.Id
+	entry := cacheEntry{
+		Id:          group.Id,
+		DisplayName: group.Name,
+	}
+
+	f.groupCache[email] = entry
 
 	if group.Id == "" {
 		l.Warn("google-workspace: group has no id", zap.String("email", group.Email))
-		return "", nil
+		return nil, nil
 	}
 
-	return group.Id, nil
+	return &entry, nil
 }
 
 func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
@@ -350,14 +447,15 @@ func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 		Id: "admin_event_feed",
 		SupportedEventTypes: []v2.EventType{
 			v2.EventType_EVENT_TYPE_RESOURCE_CHANGE,
+			v2.EventType_EVENT_TYPE_CREATE_GRANT,
 		},
 	}
 }
 
 func newAdminEventFeed(connector *GoogleWorkspace) *adminEventFeed {
 	return &adminEventFeed{
-		connector:    connector,
-		groupIdCache: make(map[string]string),
-		userIdCache:  make(map[string]string),
+		connector:  connector,
+		groupCache: make(cacheMap),
+		userCache:  make(cacheMap),
 	}
 }
