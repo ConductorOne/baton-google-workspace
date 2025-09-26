@@ -1,9 +1,9 @@
 module github.com/conductorone/baton-google-workspace
 
-go 1.23.4
+go 1.25
 
 require (
-	github.com/conductorone/baton-sdk v0.3.34
+	github.com/conductorone/baton-sdk v0.3.55
 	github.com/deckarep/golang-set/v2 v2.8.0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
