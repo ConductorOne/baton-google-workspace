@@ -69,11 +69,13 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("google-workspace: cannot get groups: %w", err)
 	}
-
 	if len(groups.Groups) == 0 {
-		l.Warn("google-workspace: no groups found", zap.Int("status_code", groups.ServerResponse.HTTPStatusCode), zap.Any("header", groups.ServerResponse.Header), zap.String("request", bag.PageToken()))
+		l.Warn("no groups found", zap.Int("status", groups.ServerResponse.HTTPStatusCode),
+			zap.Any("header", groups.ServerResponse.Header), zap.String("req", bag.PageToken()))
 	} else {
-		l.Debug("google-workspace: groups found", zap.Any("groups", len(groups.Groups)), zap.Int("status_code", groups.ServerResponse.HTTPStatusCode), zap.Any("header", groups.ServerResponse.Header), zap.String("request", bag.PageToken()))
+		l.Debug("groups found", zap.Int("count", len(groups.Groups)),
+			zap.Int("status", groups.ServerResponse.HTTPStatusCode),
+			zap.Any("header", groups.ServerResponse.Header), zap.String("req", bag.PageToken()))
 	}
 
 	rv := make([]*v2.Resource, 0, len(groups.Groups))
