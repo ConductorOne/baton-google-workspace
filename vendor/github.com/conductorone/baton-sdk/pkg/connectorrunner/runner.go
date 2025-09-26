@@ -228,7 +228,7 @@ func (c *connectorRunner) run(ctx context.Context) error {
 	}
 
 	if stopForLoop {
-		return fmt.Errorf("unable to communicate with gRPC server")
+		return fmt.Errorf("Unable to communicate with gRPC server")
 	}
 
 	return nil
@@ -343,7 +343,6 @@ type runnerConfig struct {
 	targetedSyncResourceIDs             []string
 	externalResourceC1Z                 string
 	externalResourceEntitlementIdFilter string
-	skipEntitlementsAndGrants           bool
 }
 
 // WithRateLimiterConfig sets the RateLimiterConfig for a runner.
@@ -642,13 +641,6 @@ func WithSyncCompactor(outputPath string, filePaths []string, syncIDs []string) 
 	}
 }
 
-func WithSkipEntitlementsAndGrants(skip bool) Option {
-	return func(ctx context.Context, cfg *runnerConfig) error {
-		cfg.skipEntitlementsAndGrants = skip
-		return nil
-	}
-}
-
 // NewConnectorRunner creates a new connector runner.
 func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Option) (*connectorRunner, error) {
 	runner := &connectorRunner{}
@@ -753,7 +745,6 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 				local.WithExternalResourceC1Z(cfg.externalResourceC1Z),
 				local.WithExternalResourceEntitlementIdFilter(cfg.externalResourceEntitlementIdFilter),
 				local.WithTargetedSyncResourceIDs(cfg.targetedSyncResourceIDs),
-				local.WithSkipEntitlementsAndGrants(cfg.skipEntitlementsAndGrants),
 			)
 			if err != nil {
 				return nil, err

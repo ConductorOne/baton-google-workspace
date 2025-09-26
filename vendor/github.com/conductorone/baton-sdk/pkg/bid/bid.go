@@ -132,11 +132,8 @@ func resourcePartToStr(r *v2.Resource) (string, error) {
 	}
 	resourceType := escapeParts(rid.GetResourceType())
 	resource := escapeParts(rid.GetResource())
-	if resourceType == "" {
-		return "", NewBidStringError(r, "resource type is empty")
-	}
-	if resource == "" {
-		return "", NewBidStringError(r, "resource id is empty")
+	if resourceType == "" || resource == "" {
+		return "", NewBidStringError(r, "resource type or id is empty")
 	}
 	prid := r.GetParentResourceId()
 	if prid == nil {

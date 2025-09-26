@@ -6,6 +6,7 @@ import (
 	"time"
 
 	ratelimitV1 "github.com/conductorone/baton-sdk/pb/c1/ratelimit/v1"
+	v1 "github.com/conductorone/baton-sdk/pb/c1/ratelimit/v1"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	rl "go.uber.org/ratelimit"
 	"go.uber.org/zap"
@@ -21,20 +22,20 @@ type MemRateLimiter struct {
 // TODO
 func (m *MemRateLimiter) Do(ctx context.Context, req *ratelimitV1.DoRequest) (*ratelimitV1.DoResponse, error) {
 	if m.limiter == nil {
-		return &ratelimitV1.DoResponse{
+		return &v1.DoResponse{
 			RequestToken: req.RequestToken,
-			Description: &ratelimitV1.RateLimitDescription{
-				Status: ratelimitV1.RateLimitDescription_STATUS_EMPTY,
+			Description: &v1.RateLimitDescription{
+				Status: v1.RateLimitDescription_STATUS_EMPTY,
 			},
 		}, nil
 	}
 
 	m.limiter.Take()
 
-	return &ratelimitV1.DoResponse{
+	return &v1.DoResponse{
 		RequestToken: req.RequestToken,
-		Description: &ratelimitV1.RateLimitDescription{
-			Status: ratelimitV1.RateLimitDescription_STATUS_EMPTY,
+		Description: &v1.RateLimitDescription{
+			Status: v1.RateLimitDescription_STATUS_EMPTY,
 		},
 	}, nil
 }
