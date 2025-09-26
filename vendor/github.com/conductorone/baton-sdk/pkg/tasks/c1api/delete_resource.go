@@ -42,8 +42,7 @@ func (g *deleteResourceTaskHandler) HandleTask(ctx context.Context) error {
 
 	cc := g.helpers.ConnectorClient()
 	resp, err := cc.DeleteResource(ctx, &v2.DeleteResourceRequest{
-		ResourceId:       t.GetResourceId(),
-		ParentResourceId: t.GetParentResourceId(),
+		ResourceId: t.GetResourceId(),
 	})
 	if err != nil {
 		l.Error("failed delete resource task", zap.Error(err))

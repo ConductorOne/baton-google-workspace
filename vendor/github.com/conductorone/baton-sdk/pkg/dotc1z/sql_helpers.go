@@ -14,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/connectorstore"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 )
@@ -181,13 +180,13 @@ func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req
 	default:
 		var latestSyncRun *syncRun
 		var err error
-		latestSyncRun, err = c.getFinishedSync(ctx, 0, connectorstore.SyncTypeFull)
+		latestSyncRun, err = c.getFinishedSync(ctx, 0, SyncTypeFull)
 		if err != nil {
 			return nil, "", err
 		}
 
 		if latestSyncRun == nil {
-			latestSyncRun, err = c.getLatestUnfinishedSync(ctx, connectorstore.SyncTypeAny)
+			latestSyncRun, err = c.getLatestUnfinishedSync(ctx)
 			if err != nil {
 				return nil, "", err
 			}
@@ -254,9 +253,6 @@ func (c *C1File) listConnectorObjects(ctx context.Context, tableName string, req
 		}
 		lastRow = rowId
 		ret = append(ret, data)
-	}
-	if rows.Err() != nil {
-		return nil, "", rows.Err()
 	}
 
 	nextPageToken := ""
@@ -470,13 +466,13 @@ func (c *C1File) getResourceObject(ctx context.Context, resourceID *v2.ResourceI
 	default:
 		var latestSyncRun *syncRun
 		var err error
-		latestSyncRun, err = c.getFinishedSync(ctx, 0, connectorstore.SyncTypeFull)
+		latestSyncRun, err = c.getFinishedSync(ctx, 0, SyncTypeFull)
 		if err != nil {
 			return err
 		}
 
 		if latestSyncRun == nil {
-			latestSyncRun, err = c.getLatestUnfinishedSync(ctx, connectorstore.SyncTypeAny)
+			latestSyncRun, err = c.getLatestUnfinishedSync(ctx)
 			if err != nil {
 				return err
 			}
@@ -530,13 +526,13 @@ func (c *C1File) getConnectorObject(ctx context.Context, tableName string, id st
 	default:
 		var latestSyncRun *syncRun
 		var err error
-		latestSyncRun, err = c.getFinishedSync(ctx, 0, connectorstore.SyncTypeAny)
+		latestSyncRun, err = c.getFinishedSync(ctx, 0, SyncTypeAny)
 		if err != nil {
 			return fmt.Errorf("error getting finished sync: %w", err)
 		}
 
 		if latestSyncRun == nil {
-			latestSyncRun, err = c.getLatestUnfinishedSync(ctx, connectorstore.SyncTypeAny)
+			latestSyncRun, err = c.getLatestUnfinishedSync(ctx)
 			if err != nil {
 				return fmt.Errorf("error getting latest unfinished sync: %w", err)
 			}
