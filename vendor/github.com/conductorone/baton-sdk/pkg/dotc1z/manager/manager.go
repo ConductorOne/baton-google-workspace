@@ -18,8 +18,7 @@ type Manager interface {
 }
 
 type managerOptions struct {
-	tmpDir         string
-	decoderOptions []dotc1z.DecoderOption
+	tmpDir string
 }
 
 type ManagerOption func(*managerOptions)
@@ -27,12 +26,6 @@ type ManagerOption func(*managerOptions)
 func WithTmpDir(tmpDir string) ManagerOption {
 	return func(o *managerOptions) {
 		o.tmpDir = tmpDir
-	}
-}
-
-func WithDecoderOptions(opts ...dotc1z.DecoderOption) ManagerOption {
-	return func(o *managerOptions) {
-		o.decoderOptions = opts
 	}
 }
 
@@ -53,17 +46,11 @@ func New(ctx context.Context, filePath string, opts ...ManagerOption) (Manager, 
 		if options.tmpDir != "" {
 			s3Opts = append(s3Opts, s3.WithTmpDir(options.tmpDir))
 		}
-		if len(options.decoderOptions) > 0 {
-			s3Opts = append(s3Opts, s3.WithDecoderOptions(options.decoderOptions...))
-		}
 		return s3.NewS3Manager(ctx, filePath, s3Opts...)
 	default:
 		var localOpts []local.Option
 		if options.tmpDir != "" {
 			localOpts = append(localOpts, local.WithTmpDir(options.tmpDir))
-		}
-		if len(options.decoderOptions) > 0 {
-			localOpts = append(localOpts, local.WithDecoderOptions(options.decoderOptions...))
 		}
 		return local.New(ctx, filePath, localOpts...)
 	}

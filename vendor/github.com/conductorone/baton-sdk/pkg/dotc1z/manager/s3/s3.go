@@ -19,11 +19,10 @@ import (
 var tracer = otel.Tracer("baton-sdk/pkg.dotc1z.manager.s3")
 
 type s3Manager struct {
-	client         *us3.S3Client
-	fileName       string
-	tmpFile        string
-	tmpDir         string
-	decoderOptions []dotc1z.DecoderOption
+	client   *us3.S3Client
+	fileName string
+	tmpFile  string
+	tmpDir   string
 }
 
 type Option func(*s3Manager)
@@ -31,12 +30,6 @@ type Option func(*s3Manager)
 func WithTmpDir(tmpDir string) Option {
 	return func(o *s3Manager) {
 		o.tmpDir = tmpDir
-	}
-}
-
-func WithDecoderOptions(opts ...dotc1z.DecoderOption) Option {
-	return func(o *s3Manager) {
-		o.decoderOptions = opts
 	}
 }
 
@@ -123,14 +116,7 @@ func (s *s3Manager) LoadC1Z(ctx context.Context) (*dotc1z.C1File, error) {
 		return nil, err
 	}
 
-	opts := []dotc1z.C1ZOption{
-		dotc1z.WithTmpDir(s.tmpDir),
-		dotc1z.WithPragma("journal_mode", "WAL"),
-	}
-	if len(s.decoderOptions) > 0 {
-		opts = append(opts, dotc1z.WithDecoderOptions(s.decoderOptions...))
-	}
-	return dotc1z.NewC1ZFile(ctx, s.tmpFile, opts...)
+	return dotc1z.NewC1ZFile(ctx, s.tmpFile, dotc1z.WithTmpDir(s.tmpDir), dotc1z.WithPragma("journal_mode", "WAL"))
 }
 
 // SaveC1Z saves a file to the AWS S3 bucket.

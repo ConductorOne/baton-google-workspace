@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/conductorone/baton-sdk/pkg/connectorstore"
 	"github.com/doug-martin/goqu/v9"
 	"github.com/segmentio/ksuid"
 )
@@ -31,7 +30,7 @@ func (c *C1File) GenerateSyncDiff(ctx context.Context, baseSyncID string, applie
 	// Generate a new unique ID for the diff sync
 	diffSyncID := ksuid.New().String()
 
-	if err := c.insertSyncRun(ctx, diffSyncID, connectorstore.SyncTypePartial, baseSyncID); err != nil {
+	if err := c.insertSyncRun(ctx, diffSyncID, SyncTypePartial, baseSyncID); err != nil {
 		return "", err
 	}
 
