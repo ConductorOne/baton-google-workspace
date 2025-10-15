@@ -182,7 +182,7 @@ func newTestConnector() *GoogleWorkspace {
 	}
 }
 
-func TestLockUnlock_IdempotentAndPayload(t *testing.T) {
+func TestDisableEnableUser_IdempotentAndPayload(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{"alice": {Suspended: false, PrimaryEmail: "alice@example.com"}}}
 	server := newTestServer(state)
 	defer server.Close()
@@ -191,31 +191,31 @@ func TestLockUnlock_IdempotentAndPayload(t *testing.T) {
 	c := newTestConnector()
 	primeServiceCache(c, dir, nil)
 
-	// lock user
+	// disable user
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"resource_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 	}}
-	if _, _, err := c.lockUser(context.Background(), args); err != nil {
-		t.Fatalf("lockUser: %v", err)
+	if _, _, err := c.disableUserActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("disableUser: %v", err)
 	}
 	if !state.users["alice"].Suspended {
 		t.Fatalf("expected alice to be suspended")
 	}
 	// call again should not PUT again
 	prevPut := state.putCount
-	if _, _, err := c.lockUser(context.Background(), args); err != nil {
-		t.Fatalf("lockUser second: %v", err)
+	if _, _, err := c.disableUserActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("disableUser second: %v", err)
 	}
 	if state.putCount != prevPut {
-		t.Fatalf("expected no additional PUT on idempotent lock, got %d vs %d", state.putCount, prevPut)
+		t.Fatalf("expected no additional PUT on idempotent disable, got %d vs %d", state.putCount, prevPut)
 	}
 
-	// unlock user
-	argsUnlock := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"resource_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+	// enable user
+	argsEnable := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 	}}
-	if _, _, err := c.unlockUser(context.Background(), argsUnlock); err != nil {
-		t.Fatalf("unlockUser: %v", err)
+	if _, _, err := c.enableUserActionHandler(context.Background(), argsEnable); err != nil {
+		t.Fatalf("enableUser: %v", err)
 	}
 	if state.users["alice"].Suspended {
 		t.Fatalf("expected alice to be active")

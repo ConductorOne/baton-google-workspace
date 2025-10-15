@@ -57,11 +57,11 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	return &response, nil, nil
 }
 
-// lockUser suspends a user (idempotent: if already suspended, returns success).
-func (c *GoogleWorkspace) lockUser(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	guidField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
+// disableUserActionHandler suspends a user (idempotent: if already suspended, returns success).
+func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing resource ID")
+		return nil, nil, fmt.Errorf("missing user ID")
 	}
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
@@ -76,7 +76,7 @@ func (c *GoogleWorkspace) lockUser(ctx context.Context, args *structpb.Struct) (
 	if err != nil {
 		return nil, nil, err
 	}
-	if u.Suspended { // already locked
+	if u.Suspended { // already suspended
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
 			"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		}}
@@ -100,11 +100,11 @@ func (c *GoogleWorkspace) lockUser(ctx context.Context, args *structpb.Struct) (
 	return &response, nil, nil
 }
 
-// unlockUser unsuspends a user (idempotent: if already active, returns success).
-func (c *GoogleWorkspace) unlockUser(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	guidField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
+// enableUserActionHandler unsuspends a user (idempotent: if already active, returns success).
+func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing resource ID")
+		return nil, nil, fmt.Errorf("missing user ID")
 	}
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
@@ -119,7 +119,7 @@ func (c *GoogleWorkspace) unlockUser(ctx context.Context, args *structpb.Struct)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !u.Suspended { // already unlocked
+	if !u.Suspended { // already active
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
 			"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		}}

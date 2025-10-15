@@ -221,15 +221,15 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
 	}
-	lockUserActionSchema = &v2.BatonActionSchema{
-		Name:        "lock_user",
-		DisplayName: "Lock User",
+	disableUserActionSchema = &v2.BatonActionSchema{
+		Name:        "disable_user",
+		DisplayName: "Disable User",
 		Description: "Suspend a user account.",
 		Arguments: []*config.Field{
 			{
-				Name:        "resource_id",
+				Name:        "user_id",
 				DisplayName: "User Resource ID",
-				Description: "The ID of the user resource to lock.",
+				Description: "The ID of the user resource to disable (suspend).",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -238,21 +238,21 @@ var (
 			{
 				Name:        "success",
 				DisplayName: "Success",
-				Description: "Whether the user was locked successfully.",
+				Description: "Whether the user was disabled (suspended) successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_DISABLE},
 	}
-	unlockUserActionSchema = &v2.BatonActionSchema{
-		Name:        "unlock_user",
-		DisplayName: "Unlock User",
+	enableUserActionSchema = &v2.BatonActionSchema{
+		Name:        "enable_user",
+		DisplayName: "Enable User",
 		Description: "Unsuspend a user account.",
 		Arguments: []*config.Field{
 			{
-				Name:        "resource_id",
+				Name:        "user_id",
 				DisplayName: "User Resource ID",
-				Description: "The ID of the user resource to unlock.",
+				Description: "The ID of the user resource to enable (unsuspend).",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -261,7 +261,7 @@ var (
 			{
 				Name:        "success",
 				DisplayName: "Success",
-				Description: "Whether the user was unlocked successfully.",
+				Description: "Whether the user was enabled (unsuspended) successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 		},
@@ -590,11 +590,11 @@ func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorb
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
-	if err := actionManager.RegisterAction(ctx, "lock_user", lockUserActionSchema, c.lockUser); err != nil {
+	if err := actionManager.RegisterAction(ctx, disableUserActionSchema.Name, disableUserActionSchema, c.disableUserActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
-	if err := actionManager.RegisterAction(ctx, "unlock_user", unlockUserActionSchema, c.unlockUser); err != nil {
+	if err := actionManager.RegisterAction(ctx, enableUserActionSchema.Name, enableUserActionSchema, c.enableUserActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
