@@ -39,7 +39,8 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 
 	// update user.isSuspended state
 	_, err = userService.Users.Update(userId, &directoryAdmin.User{
-		Suspended: isSuspended,
+		Suspended:       isSuspended,
+		ForceSendFields: []string{"Suspended"},
 	}).Context(ctx).Do()
 	if err != nil {
 		return nil, nil, err
@@ -82,7 +83,13 @@ func (c *GoogleWorkspace) lockUser(ctx context.Context, args *structpb.Struct) (
 		return &response, nil, nil
 	}
 
-	_, err = userService.Users.Update(userId, &directoryAdmin.User{Suspended: true}).Context(ctx).Do()
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			Suspended:       true,
+			ForceSendFields: []string{"Suspended"},
+		},
+	).Context(ctx).Do()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -119,7 +126,13 @@ func (c *GoogleWorkspace) unlockUser(ctx context.Context, args *structpb.Struct)
 		return &response, nil, nil
 	}
 
-	_, err = userService.Users.Update(userId, &directoryAdmin.User{Suspended: false}).Context(ctx).Do()
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			Suspended:       false,
+			ForceSendFields: []string{"Suspended"},
+		},
+	).Context(ctx).Do()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -156,7 +169,13 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	}
 	prev := u.PrimaryEmail
 
-	_, err = userService.Users.Update(userId, &directoryAdmin.User{PrimaryEmail: newPrimary}).Context(ctx).Do()
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			PrimaryEmail:    newPrimary,
+			ForceSendFields: []string{"PrimaryEmail"},
+		},
+	).Context(ctx).Do()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,33 +199,21 @@ func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *stru
 		return nil, nil, fmt.Errorf("missing target_resource_id")
 	}
 
+	// Validate non-empty and different user keys
+	src := strings.TrimSpace(sourceField.StringValue)
+	dst := strings.TrimSpace(targetField.StringValue)
+	if src == "" || dst == "" {
+		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be non-empty")
+	}
+	if strings.EqualFold(src, dst) {
+		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be different")
+	}
+
 	// Build Drive params from privacy_levels
 	params := []*datatransferAdmin.ApplicationTransferParam{}
-	allowed := map[string]bool{"PRIVATE": true, "SHARED": true}
-	levels := []string{"PRIVATE", "SHARED"}
-	if v, present := args.Fields["privacy_levels"]; present {
-		if ss, ok := v.GetKind().(*structpb.Value_ListValue); ok {
-			normalized := make([]string, 0, len(ss.ListValue.Values))
-			seen := map[string]bool{}
-			for _, lv := range ss.ListValue.Values {
-				if sv, ok := lv.GetKind().(*structpb.Value_StringValue); ok {
-					s := strings.TrimSpace(strings.ToUpper(sv.StringValue))
-					if s == "" {
-						continue
-					}
-					if !allowed[s] {
-						return nil, nil, fmt.Errorf("invalid privacy_levels value '%s': allowed values are PRIVATE, SHARED", sv.StringValue)
-					}
-					if !seen[s] {
-						normalized = append(normalized, s)
-						seen[s] = true
-					}
-				}
-			}
-			if len(normalized) > 0 {
-				levels = normalized
-			}
-		}
+	levels, err := parseDrivePrivacyLevels(args)
+	if err != nil {
+		return nil, nil, err
 	}
 	params = append(params, &datatransferAdmin.ApplicationTransferParam{Key: "PRIVACY_LEVEL", Value: levels})
 
@@ -224,11 +231,21 @@ func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *struct
 		return nil, nil, fmt.Errorf("missing target_resource_id")
 	}
 
+	// Validate non-empty and different user keys
+	src := strings.TrimSpace(sourceField.StringValue)
+	dst := strings.TrimSpace(targetField.StringValue)
+	if src == "" || dst == "" {
+		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be non-empty")
+	}
+	if strings.EqualFold(src, dst) {
+		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be different")
+	}
+
 	params := []*datatransferAdmin.ApplicationTransferParam{}
-	if v, present := args.Fields["release_resources"]; present {
-		if b, ok := v.GetKind().(*structpb.Value_BoolValue); ok && b.BoolValue {
-			params = append(params, &datatransferAdmin.ApplicationTransferParam{Key: "RELEASE_RESOURCES", Value: []string{"TRUE"}})
-		}
+	if p, err := buildReleaseResourcesParam(args); err != nil {
+		return nil, nil, err
+	} else if p != nil {
+		params = append(params, p)
 	}
 
 	return c.dataTransferInsert(ctx, appIdGoogleCalendar, sourceField.StringValue, targetField.StringValue, params)
@@ -249,7 +266,7 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 		}
 		transfers, err := listCall.Context(ctx).Do()
 		if err != nil {
-			break
+			return nil, nil, err
 		}
 		if transfers != nil {
 			for _, t := range transfers.DataTransfers {
@@ -295,4 +312,61 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 		"status":      {Kind: &structpb.Value_StringValue{StringValue: created.OverallTransferStatusCode}},
 	}}
 	return resp, nil, nil
+}
+
+// buildReleaseResourcesParam returns the RELEASE_RESOURCES param if the optional
+// release_resources boolean is present and true. It validates type strictly.
+func buildReleaseResourcesParam(args *structpb.Struct) (*datatransferAdmin.ApplicationTransferParam, error) {
+	v, present := args.Fields["release_resources"]
+	if !present {
+		return nil, nil
+	}
+	b, ok := v.GetKind().(*structpb.Value_BoolValue)
+	if !ok {
+		return nil, fmt.Errorf("release_resources must be a boolean")
+	}
+	if !b.BoolValue {
+		return nil, nil
+	}
+	return &datatransferAdmin.ApplicationTransferParam{Key: "RELEASE_RESOURCES", Value: []string{"TRUE"}}, nil
+}
+
+// parseDrivePrivacyLevels parses the optional privacy_levels argument, validating values and type.
+// Returns default ["PRIVATE","SHARED"] if argument is absent.
+func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
+	// Defaults
+	allowed := map[string]bool{"PRIVATE": true, "SHARED": true}
+	defaults := []string{"PRIVATE", "SHARED"}
+
+	v, present := args.Fields["privacy_levels"]
+	if !present {
+		return defaults, nil
+	}
+	ss, ok := v.GetKind().(*structpb.Value_ListValue)
+	if !ok {
+		return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are PRIVATE, SHARED")
+	}
+	normalized := make([]string, 0, len(ss.ListValue.Values))
+	seen := map[string]bool{}
+	for _, lv := range ss.ListValue.Values {
+		sv, ok := lv.GetKind().(*structpb.Value_StringValue)
+		if !ok {
+			return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are PRIVATE, SHARED")
+		}
+		s := strings.TrimSpace(strings.ToUpper(sv.StringValue))
+		if s == "" {
+			continue
+		}
+		if !allowed[s] {
+			return nil, fmt.Errorf("invalid privacy_levels value '%s': allowed values are PRIVATE, SHARED", sv.StringValue)
+		}
+		if !seen[s] {
+			normalized = append(normalized, s)
+			seen[s] = true
+		}
+	}
+	if len(normalized) == 0 {
+		return nil, fmt.Errorf("privacy_levels list must include at least one value: PRIVATE or SHARED")
+	}
+	return normalized, nil
 }
