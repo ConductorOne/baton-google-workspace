@@ -18,6 +18,7 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/option"
@@ -78,6 +79,193 @@ var (
 				Field:       &config.Field_BoolField{},
 			},
 		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	transferUserDriveFilesActionSchema = &v2.BatonActionSchema{
+		Name:        "transfer_user_drive_files",
+		DisplayName: "Transfer User Drive Files",
+		Description: "Initiate a Google Drive ownership transfer from one user to another.",
+		Arguments: []*config.Field{
+			{
+				Name:        "resource_id",
+				DisplayName: "Source User Resource ID",
+				Description: "The ID of the user resource to transfer Drive ownership from.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "target_resource_id",
+				DisplayName: "Target User Resource ID",
+				Description: "The ID of the user resource to receive Drive ownership.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "privacy_levels",
+				DisplayName: "Drive Privacy Levels",
+				Description: "One or more of PRIVATE, SHARED. Defaults to both.",
+				Field:       &config.Field_StringSliceField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the transfer request was created successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "transfer_id",
+				DisplayName: "Transfer ID",
+				Description: "The ID of the Data Transfer request.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "status",
+				DisplayName: "Transfer Status",
+				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	transferUserCalendarActionSchema = &v2.BatonActionSchema{
+		Name:        "transfer_user_calendar",
+		DisplayName: "Transfer User Calendar",
+		Description: "Initiate a Google Calendar transfer from one user to another.",
+		Arguments: []*config.Field{
+			{
+				Name:        "resource_id",
+				DisplayName: "Source User Resource ID",
+				Description: "The ID of the user resource to transfer calendar data from.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "target_resource_id",
+				DisplayName: "Target User Resource ID",
+				Description: "The ID of the user resource to receive calendar data.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "release_resources",
+				DisplayName: "Release Resources",
+				Description: "If true, sets RELEASE_RESOURCES=TRUE (release resources for future events).",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the transfer request was created successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "transfer_id",
+				DisplayName: "Transfer ID",
+				Description: "The ID of the Data Transfer request.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "status",
+				DisplayName: "Transfer Status",
+				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	changeUserPrimaryEmailActionSchema = &v2.BatonActionSchema{
+		Name:        "change_user_primary_email",
+		DisplayName: "Change User Primary Email",
+		Description: "Update a user's primary email address.",
+		Arguments: []*config.Field{
+			{
+				Name:        "resource_id",
+				DisplayName: "User Resource ID",
+				Description: "The ID of the user resource to update.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "new_primary_email",
+				DisplayName: "New Primary Email",
+				Description: "The new primary email address (must be within a verified domain).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the primary email was updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_primary_email",
+				DisplayName: "Previous Primary Email",
+				Description: "The user's previous primary email address.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_primary_email",
+				DisplayName: "New Primary Email",
+				Description: "The user's updated primary email address.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	lockUserActionSchema = &v2.BatonActionSchema{
+		Name:        "lock_user",
+		DisplayName: "Lock User",
+		Description: "Suspend a user account.",
+		Arguments: []*config.Field{
+			{
+				Name:        "resource_id",
+				DisplayName: "User Resource ID",
+				Description: "The ID of the user resource to lock.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user was locked successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_DISABLE},
+	}
+	unlockUserActionSchema = &v2.BatonActionSchema{
+		Name:        "unlock_user",
+		DisplayName: "Unlock User",
+		Description: "Unsuspend a user account.",
+		Arguments: []*config.Field{
+			{
+				Name:        "resource_id",
+				DisplayName: "User Resource ID",
+				Description: "The ID of the user resource to unlock.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user was unlocked successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
 )
 
@@ -160,6 +348,10 @@ func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.S
 
 func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*directoryAdmin.Service, error) {
 	return getService(ctx, c, scope, directoryAdmin.NewService)
+}
+
+func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope string) (*datatransferAdmin.Service, error) {
+	return getService(ctx, c, scope, datatransferAdmin.NewService)
 }
 
 func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
@@ -385,6 +577,28 @@ func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorb
 	actionManager := actions.NewActionManager(ctx)
 	err := actionManager.RegisterAction(ctx, "update_user_status", updateUserStatusActionSchema, c.updateUserStatus)
 	if err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return nil, err
+	}
+
+	// Register additional actions
+	if err := actionManager.RegisterAction(ctx, "transfer_user_drive_files", transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return nil, err
+	}
+	if err := actionManager.RegisterAction(ctx, "change_user_primary_email", changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return nil, err
+	}
+	if err := actionManager.RegisterAction(ctx, "lock_user", lockUserActionSchema, c.lockUser); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return nil, err
+	}
+	if err := actionManager.RegisterAction(ctx, "unlock_user", unlockUserActionSchema, c.unlockUser); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return nil, err
+	}
+	if err := actionManager.RegisterAction(ctx, "transfer_user_calendar", transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
