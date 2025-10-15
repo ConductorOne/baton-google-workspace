@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/mail"
 	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -154,13 +155,18 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return nil, nil, fmt.Errorf("missing new_primary_email")
 	}
 
+	userId := guidField.StringValue
+	newPrimary := newEmailField.StringValue
+
+	// Validate that newPrimary is a valid email address
+	if _, err := mail.ParseAddress(newPrimary); err != nil {
+		return nil, nil, fmt.Errorf("invalid email address '%s': %w", newPrimary, err)
+	}
+
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	userId := guidField.StringValue
-	newPrimary := newEmailField.StringValue
 
 	// fetch current for return payload
 	u, err := userService.Users.Get(userId).Context(ctx).Do()
@@ -168,6 +174,14 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return nil, nil, err
 	}
 	prev := u.PrimaryEmail
+	if prev == newPrimary { // Already primary email
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success":                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"previous_primary_email": {Kind: &structpb.Value_StringValue{StringValue: prev}},
+			"new_primary_email":      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
+		}}
+		return &response, nil, nil
+	}
 
 	_, err = userService.Users.Update(
 		userId,

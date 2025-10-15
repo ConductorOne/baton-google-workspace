@@ -247,6 +247,55 @@ func TestChangePrimaryEmail(t *testing.T) {
 	}
 }
 
+func TestChangePrimaryEmail_InvalidEmail(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{"bob": {Suspended: false, PrimaryEmail: "bob@old.example.com"}}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Test with invalid email format
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"resource_id":       {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
+		"new_primary_email": {Kind: &structpb.Value_StringValue{StringValue: "invalid-email"}},
+	}}
+	_, _, err := c.changeUserPrimaryEmail(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid email format")
+	}
+	if !strings.Contains(err.Error(), "invalid email address") {
+		t.Fatalf("expected error message to contain 'invalid email address', got: %v", err)
+	}
+
+	// Test with empty email
+	argsEmpty := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"resource_id":       {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
+		"new_primary_email": {Kind: &structpb.Value_StringValue{StringValue: ""}},
+	}}
+	_, _, err = c.changeUserPrimaryEmail(context.Background(), argsEmpty)
+	if err == nil {
+		t.Fatalf("expected error for empty email")
+	}
+	if !strings.Contains(err.Error(), "invalid email address") {
+		t.Fatalf("expected error message to contain 'invalid email address', got: %v", err)
+	}
+
+	// Test with malformed email (missing @)
+	argsMalformed := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"resource_id":       {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
+		"new_primary_email": {Kind: &structpb.Value_StringValue{StringValue: "bob.example.com"}},
+	}}
+	_, _, err = c.changeUserPrimaryEmail(context.Background(), argsMalformed)
+	if err == nil {
+		t.Fatalf("expected error for malformed email")
+	}
+	if !strings.Contains(err.Error(), "invalid email address") {
+		t.Fatalf("expected error message to contain 'invalid email address', got: %v", err)
+	}
+}
+
 func TestTransferDrive_IdempotentAndPrivacyLevels(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{"src": {}, "dst": {}}, transfers: []*transferRecord{}}
 	server := newTestServer(state)

@@ -586,7 +586,7 @@ func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorb
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
-	if err := actionManager.RegisterAction(ctx, "change_user_primary_email", changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
+	if err := actionManager.RegisterAction(ctx, changeUserPrimaryEmailActionSchema.Name, changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
