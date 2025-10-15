@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/doug-martin/goqu/v9"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	// NOTE: required to register the dialect for goqu.
 	//
 	// If you remove this import, goqu.Dialect("sqlite3") will
@@ -21,6 +24,7 @@ import (
 	_ "github.com/glebarez/go-sqlite"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	reader_v2 "github.com/conductorone/baton-sdk/pb/c1/reader/v2"
 	"github.com/conductorone/baton-sdk/pkg/connectorstore"
 )
 
@@ -223,16 +227,32 @@ func (c *C1File) init(ctx context.Context) error {
 }
 
 // Stats introspects the database and returns the count of objects for the given sync run.
-func (c *C1File) Stats(ctx context.Context) (map[string]int64, error) {
+// If syncId is empty, it will use the latest sync run of the given type.
+func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
 	ctx, span := tracer.Start(ctx, "C1File.Stats")
 	defer span.End()
 
 	counts := make(map[string]int64)
 
-	syncID, err := c.LatestSyncID(ctx)
+	var err error
+	if syncId == "" {
+		syncId, err = c.LatestSyncID(ctx, syncType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	resp, err := c.GetSync(ctx, &reader_v2.SyncsReaderServiceGetSyncRequest{SyncId: syncId})
 	if err != nil {
 		return nil, err
 	}
+	if resp == nil || resp.Sync == nil {
+		return nil, status.Errorf(codes.NotFound, "sync '%s' not found", syncId)
+	}
+	sync := resp.Sync
+	if syncType != connectorstore.SyncTypeAny && syncType != connectorstore.SyncType(sync.SyncType) {
+		return nil, status.Errorf(codes.InvalidArgument, "sync '%s' is not of type '%s'", syncId, syncType)
+	}
+	syncType = connectorstore.SyncType(sync.SyncType)
 
 	counts["resource_types"] = 0
 
@@ -256,7 +276,7 @@ func (c *C1File) Stats(ctx context.Context) (map[string]int64, error) {
 	for _, rt := range rtStats {
 		resourceCount, err := c.db.From(resources.Name()).
 			Where(goqu.C("resource_type_id").Eq(rt.Id)).
-			Where(goqu.C("sync_id").Eq(syncID)).
+			Where(goqu.C("sync_id").Eq(syncId)).
 			CountContext(ctx)
 		if err != nil {
 			return nil, err
@@ -264,22 +284,23 @@ func (c *C1File) Stats(ctx context.Context) (map[string]int64, error) {
 		counts[rt.Id] = resourceCount
 	}
 
-	entitlementsCount, err := c.db.From(entitlements.Name()).
-		Where(goqu.C("sync_id").Eq(syncID)).
-		CountContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	counts["entitlements"] = entitlementsCount
+	if syncType != connectorstore.SyncTypeResourcesOnly {
+		entitlementsCount, err := c.db.From(entitlements.Name()).
+			Where(goqu.C("sync_id").Eq(syncId)).
+			CountContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		counts["entitlements"] = entitlementsCount
 
-	grantsCount, err := c.db.From(grants.Name()).
-		Where(goqu.C("sync_id").Eq(syncID)).
-		CountContext(ctx)
-	if err != nil {
-		return nil, err
+		grantsCount, err := c.db.From(grants.Name()).
+			Where(goqu.C("sync_id").Eq(syncId)).
+			CountContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		counts["grants"] = grantsCount
 	}
-
-	counts["grants"] = grantsCount
 
 	return counts, nil
 }
@@ -331,4 +352,63 @@ func (c *C1FileAttached) DetachFile(dbName string) (*C1FileAttached, error) {
 		safe: false,
 		file: c.file,
 	}, nil
+}
+
+// GrantStats introspects the database and returns the count of grants for the given sync run.
+// If syncId is empty, it will use the latest sync run of the given type.
+func (c *C1File) GrantStats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
+	ctx, span := tracer.Start(ctx, "C1File.GrantStats")
+	defer span.End()
+
+	var err error
+	if syncId == "" {
+		syncId, err = c.LatestSyncID(ctx, syncType)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		lastSync, err := c.GetSync(ctx, &reader_v2.SyncsReaderServiceGetSyncRequest{SyncId: syncId})
+		if err != nil {
+			return nil, err
+		}
+		if lastSync == nil {
+			return nil, status.Errorf(codes.NotFound, "sync '%s' not found", syncId)
+		}
+		if syncType != connectorstore.SyncTypeAny && syncType != connectorstore.SyncType(lastSync.Sync.SyncType) {
+			return nil, status.Errorf(codes.InvalidArgument, "sync '%s' is not of type '%s'", syncId, syncType)
+		}
+	}
+
+	var allResourceTypes []*v2.ResourceType
+	pageToken := ""
+	for {
+		resp, err := c.ListResourceTypes(ctx, &v2.ResourceTypesServiceListResourceTypesRequest{PageToken: pageToken})
+		if err != nil {
+			return nil, err
+		}
+
+		allResourceTypes = append(allResourceTypes, resp.List...)
+
+		if resp.NextPageToken == "" {
+			break
+		}
+
+		pageToken = resp.NextPageToken
+	}
+
+	stats := make(map[string]int64)
+
+	for _, resourceType := range allResourceTypes {
+		grantsCount, err := c.db.From(grants.Name()).
+			Where(goqu.C("sync_id").Eq(syncId)).
+			Where(goqu.C("resource_type_id").Eq(resourceType.Id)).
+			CountContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		stats[resourceType.Id] = grantsCount
+	}
+
+	return stats, nil
 }
