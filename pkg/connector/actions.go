@@ -349,11 +349,11 @@ func buildReleaseResourcesParam(args *structpb.Struct) (*datatransferAdmin.Appli
 }
 
 // parseDrivePrivacyLevels parses the optional privacy_levels argument, validating values and type.
-// Returns default ["PRIVATE","SHARED"] if argument is absent.
+// Returns default ["private","shared"] if argument is absent.
 func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	// Defaults
-	allowed := map[string]bool{"PRIVATE": true, "SHARED": true}
-	defaults := []string{"PRIVATE", "SHARED"}
+	allowed := map[string]bool{"private": true, "shared": true}
+	defaults := []string{"private", "shared"}
 
 	v, present := args.Fields["privacy_levels"]
 	if !present {
@@ -361,21 +361,21 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	}
 	ss, ok := v.GetKind().(*structpb.Value_ListValue)
 	if !ok {
-		return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are PRIVATE, SHARED")
+		return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are private, shared")
 	}
 	normalized := make([]string, 0, len(ss.ListValue.Values))
 	seen := map[string]bool{}
 	for _, lv := range ss.ListValue.Values {
 		sv, ok := lv.GetKind().(*structpb.Value_StringValue)
 		if !ok {
-			return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are PRIVATE, SHARED")
+			return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are private, shared")
 		}
-		s := strings.TrimSpace(strings.ToUpper(sv.StringValue))
+		s := strings.TrimSpace(strings.ToLower(sv.StringValue))
 		if s == "" {
 			continue
 		}
 		if !allowed[s] {
-			return nil, fmt.Errorf("invalid privacy_levels value '%s': allowed values are PRIVATE, SHARED", sv.StringValue)
+			return nil, fmt.Errorf("invalid privacy_levels value '%s': allowed values are private, shared", sv.StringValue)
 		}
 		if !seen[s] {
 			normalized = append(normalized, s)
@@ -383,7 +383,7 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 		}
 	}
 	if len(normalized) == 0 {
-		return nil, fmt.Errorf("privacy_levels list must include at least one value: PRIVATE or SHARED")
+		return nil, fmt.Errorf("privacy_levels list must include at least one value: private or shared")
 	}
 	return normalized, nil
 }

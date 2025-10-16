@@ -103,7 +103,7 @@ var (
 			{
 				Name:        "privacy_levels",
 				DisplayName: "Drive Privacy Levels",
-				Description: "One or more of PRIVATE, SHARED. Defaults to both.",
+				Description: "One or more of private, shared. Defaults to both.",
 				Field:       &config.Field_StringSliceField{},
 				IsRequired:  false,
 			},
@@ -582,7 +582,7 @@ func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorb
 	}
 
 	// Register additional actions
-	if err := actionManager.RegisterAction(ctx, "transfer_user_drive_files", transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
+	if err := actionManager.RegisterAction(ctx, transferUserDriveFilesActionSchema.Name, transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
@@ -598,7 +598,7 @@ func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorb
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
-	if err := actionManager.RegisterAction(ctx, "transfer_user_calendar", transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
+	if err := actionManager.RegisterAction(ctx, transferUserCalendarActionSchema.Name, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return nil, err
 	}
