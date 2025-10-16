@@ -274,6 +274,8 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 
 	pageToken := ""
 	for {
+		// Go through the transfers list and check if there is a transfer in progress for the given appID, source and target users.
+		// If there is, return the transfer ID and status.
 		listCall := dtService.Transfers.List().OldOwnerUserId(oldOwnerUserId).NewOwnerUserId(newOwnerUserId)
 		if pageToken != "" {
 			listCall = listCall.PageToken(pageToken)
@@ -284,7 +286,7 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 		}
 		if transfers != nil {
 			for _, t := range transfers.DataTransfers {
-				if t.OverallTransferStatusCode == "NEW" || t.OverallTransferStatusCode == "IN_PROGRESS" {
+				if strings.EqualFold(t.OverallTransferStatusCode, "new") || strings.EqualFold(t.OverallTransferStatusCode, "inProgress") {
 					for _, adt := range t.ApplicationDataTransfers {
 						if adt.ApplicationId == appID {
 							resp := &structpb.Struct{Fields: map[string]*structpb.Value{
@@ -304,6 +306,7 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 		pageToken = transfers.NextPageToken
 	}
 
+	// If no transfer is in progress, create a new transfer.
 	transfer := &datatransferAdmin.DataTransfer{
 		OldOwnerUserId: oldOwnerUserId,
 		NewOwnerUserId: newOwnerUserId,
