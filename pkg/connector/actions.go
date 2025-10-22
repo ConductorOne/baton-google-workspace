@@ -131,7 +131,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		userId,
 		&directoryAdmin.User{
 			Suspended:       false,
-			ForceSendFields: []string{"Suspended"},
+			ForceSendFields: []string{"Suspended"}, // This is needed becasuse the SDK would omit any field that has the field type default value (false).
 		},
 	).Context(ctx).Do()
 	if err != nil {
@@ -174,7 +174,7 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return nil, nil, err
 	}
 	prev := u.PrimaryEmail
-	if prev == newPrimary { // Already primary email
+	if emailsEqual(prev, newPrimary) { // Already primary email
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
 			"success":                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 			"previous_primary_email": {Kind: &structpb.Value_StringValue{StringValue: prev}},
