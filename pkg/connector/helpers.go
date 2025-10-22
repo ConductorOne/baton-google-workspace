@@ -2,6 +2,7 @@ package connector
 
 import (
 	"fmt"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -48,4 +49,10 @@ func V1GrantID(entitlementID string, userID string) string {
 
 func V1MembershipEntitlementID(resourceID string) string {
 	return fmt.Sprintf(MembershipEntitlementIDTemplate, resourceID)
+}
+
+// emailsEqual compares two email addresses after trimming whitespace and case-insensitive comparison.
+func emailsEqual(email1 string, email2 string) bool {
+	// Trim whitespace and use EqualFold for efficient case-insensitive comparison
+	return strings.EqualFold(strings.TrimSpace(email1), strings.TrimSpace(email2))
 }
