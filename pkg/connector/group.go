@@ -86,11 +86,16 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 			l.Error("google-workspace: group had no id", zap.String("name", g.Name))
 			continue
 		}
-		annos := &v2.V1Identifier{
-			Id: g.Id,
-		}
 		traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
-		groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, sdkResource.WithAnnotation(annos))
+		resourceOpts := []sdkResource.ResourceOption{
+			sdkResource.WithAnnotation(&v2.V1Identifier{
+				Id: g.Id,
+			}),
+			sdkResource.WithAnnotation(&v2.RawId{
+				Id: g.Id,
+			}),
+		}
+		groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -268,11 +273,16 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 		l.Error("google-workspace: group had no id", zap.String("name", g.Name))
 		return nil, nil, nil
 	}
-	annos := &v2.V1Identifier{
-		Id: g.Id,
-	}
 	traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
-	groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, sdkResource.WithAnnotation(annos))
+	resourceOpts := []sdkResource.ResourceOption{
+		sdkResource.WithAnnotation(&v2.V1Identifier{
+			Id: g.Id,
+		}),
+		sdkResource.WithAnnotation(&v2.RawId{
+			Id: g.Id,
+		}),
+	}
+	groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
 	if err != nil {
 		return nil, nil, err
 	}

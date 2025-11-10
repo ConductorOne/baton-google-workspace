@@ -287,7 +287,15 @@ func (f *adminEventFeed) newGroupMemberGrantEvent(
 	}
 
 	// group email is also not the display name
-	groupResource, err := sdkResource.NewGroupResource(group.DisplayName, resourceTypeGroup, group.Id, nil, sdkResource.WithAnnotation(&v2.V1Identifier{Id: group.Id}))
+	resourceOpts := []sdkResource.ResourceOption{
+		sdkResource.WithAnnotation(&v2.V1Identifier{
+			Id: group.Id,
+		}),
+		sdkResource.WithAnnotation(&v2.RawId{
+			Id: group.Id,
+		}),
+	}
+	groupResource, err := sdkResource.NewGroupResource(group.DisplayName, resourceTypeGroup, group.Id, nil, resourceOpts...)
 	if err != nil {
 		return nil, err
 	}
