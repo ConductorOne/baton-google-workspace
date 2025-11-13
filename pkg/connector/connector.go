@@ -267,6 +267,14 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
+
+	resourceTypeUserToken = &v2.ResourceType{
+		Id:          "user_token",
+		DisplayName: "User Tokens",
+		Traits: []v2.ResourceType_Trait{
+			v2.ResourceType_TRAIT_APP,
+		},
+	}
 )
 
 type Config struct {
@@ -274,6 +282,7 @@ type Config struct {
 	AdministratorEmail string
 	Domain             string
 	Credentials        []byte
+	SyncTokens         bool
 }
 
 type GoogleWorkspace struct {
@@ -290,6 +299,7 @@ type GoogleWorkspace struct {
 	primaryDomain string
 	domainsCache  []string
 	reportService *reportsAdmin.Service
+	syncTokens    bool
 }
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
@@ -361,6 +371,7 @@ func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 		credentials:        config.Credentials,
 		serviceCache:       map[string]any{},
 		domain:             config.Domain,
+		syncTokens:         config.SyncTokens,
 	}
 	return rv, nil
 }
@@ -470,7 +481,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
-		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
+		rs = append(rs, userBuilder(userService, c.customerID, c.domain, c.syncTokens))
 	}
 
 	// We don't care about the error here, as we handle the case where the service is nil in the syncer
@@ -488,6 +499,13 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 			))
 		}
 	}
+
+	if c.syncTokens {
+		if userTokenService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope); err == nil {
+			rs = append(rs, newUserTokenResource(userTokenService))
+		}
+	}
+
 	return rs
 }
 
