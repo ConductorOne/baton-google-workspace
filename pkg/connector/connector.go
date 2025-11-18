@@ -382,6 +382,50 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	return &v2.ConnectorMetadata{
 		DisplayName: "Google Workspace",
 		Annotations: annos,
+		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
+			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
+				"email": {
+					DisplayName: "Email",
+					Required:    true,
+					Description: "The email address for the new user account. Must be unique within the domain.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "user@example.com",
+					Order:       1,
+				},
+				"given_name": {
+					DisplayName: "First Name",
+					Required:    true,
+					Description: "The user's first name.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "John",
+					Order:       2,
+				},
+				"family_name": {
+					DisplayName: "Last Name",
+					Required:    true,
+					Description: "The user's last name.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "Doe",
+					Order:       3,
+				},
+				"changePasswordAtNextLogin": {
+					DisplayName: "Change Password at Next Login",
+					Required:    false,
+					Description: "If true, the user will be required to change their password at next login, if false it will use a random password.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
+						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
+					},
+					Placeholder: "Leave empty to use a random password",
+					Order:       4,
+				},
+			},
+		},
 	}, nil
 }
 
@@ -468,9 +512,11 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}
 
+	// We don't care about the error here, as we handle the case where the service is nil in the syncer
+	userProvisioningService, _ := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
-		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
+		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService))
 	}
 
 	// We don't care about the error here, as we handle the case where the service is nil in the syncer
