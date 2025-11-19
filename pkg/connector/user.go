@@ -429,12 +429,29 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		ChangePasswordAtNextLogin: changePasswordAtNextLogin,
 	}
 
-	generatedPassword, err := crypto.GeneratePassword(ctx, credentialOptions)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: failed to generate password: %w", err)
+	if credentialOptions == nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: credentialOptions cannot be nil")
 	}
 
-	user.Password = generatedPassword
+	var password string
+	var plaintextData []*v2.PlaintextData
+	var err error
+
+	if credentialOptions.GetNoPassword() != nil {
+		password = ""
+	} else {
+		password, err = crypto.GeneratePassword(ctx, credentialOptions)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to generate password: %w", err)
+		}
+		plaintextData = append(plaintextData, &v2.PlaintextData{
+			Name:        "password",
+			Description: "Generated password for the new account",
+			Bytes:       []byte(password),
+		})
+	}
+
+	user.Password = password
 
 	if o.userProvisioningService == nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
@@ -453,7 +470,7 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	return &v2.CreateAccountResponse_SuccessResult{
 		Resource:              userResource,
 		IsCreateAccountResult: true,
-	}, nil, nil, nil
+	}, plaintextData, nil, nil
 }
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {

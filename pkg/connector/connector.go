@@ -417,11 +417,11 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 				"changePasswordAtNextLogin": {
 					DisplayName: "Change Password at Next Login",
 					Required:    false,
-					Description: "If true, the user will be required to change their password at next login, if false it will use a random password.",
+					Description: "If true, the user will be required to change their password at next login. A random password is always generated.",
 					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
 						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
 					},
-					Placeholder: "Leave empty to use a random password",
+					Placeholder: "false",
 					Order:       4,
 				},
 			},
