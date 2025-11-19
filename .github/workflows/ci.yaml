@@ -34,3 +34,91 @@ jobs:
         uses: guyarb/golang-test-annotations@v0.8.0
         with:
           test-results: test.json
+  connector-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build connector
+        run: go build -o baton-google-workspace ./cmd/baton-google-workspace
+      - name: Test connector capabilities
+        env:
+          BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
+        run: |
+          ./baton-google-workspace capabilities
+      - name: Test connector sync (if all secrets provided)
+        if: ${{ secrets.BATON_CREDENTIALS_JSON != '' && secrets.BATON_CUSTOMER_ID != '' && secrets.BATON_ADMINISTRATOR_EMAIL != '' }}
+        env:
+          BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
+          BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
+          BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
+          BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
+        run: |
+          ./baton-google-workspace sync --file /tmp/sync-test.c1z
+  provisioning-tests:
+    runs-on: ubuntu-latest
+    env:
+      BATON_LOG_LEVEL: debug
+      BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
+      BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
+      BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
+      BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
+      CONNECTOR_NAME: baton-google-workspace
+      CONNECTOR_ACCOUNT_LOGIN: ${{ vars.PRIMARY_EMAIL }}
+      CREATE_ACCOUNT_FLAGS: >-
+        --customer-id='${{ env.BATON_CUSTOMER_ID }}'
+        --administrator-email='${{ env.BATON_ADMINISTRATOR_EMAIL }}'
+        --provisioning
+        --file=/tmp/provisioning-test.c1z
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install baton CLI
+        run: |
+          curl -sSL https://github.com/ConductorOne/baton/releases/latest/download/baton_linux_amd64.tar.gz | tar -xz
+          sudo mv baton /usr/local/bin/
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Build connector
+        run: go build -o ${{ env.CONNECTOR_NAME }} ./cmd/baton-google-workspace
+      - name: Initial sync
+        run: |
+          ./${{ env.CONNECTOR_NAME }} sync --file=/tmp/provisioning-test.c1z
+      - name: Create account
+        run: |
+          ./${{ env.CONNECTOR_NAME }} ${{ env.CREATE_ACCOUNT_FLAGS }} \
+            --create-account-email="${{ vars.PRIMARY_EMAIL }}" \
+            --create-account-profile='{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
+      - name: Sync after create
+        run: |
+          ./${{ env.CONNECTOR_NAME }} sync --file=/tmp/provisioning-test.c1z
+      - name: Check account was created
+        id: check_account
+        run: |
+          baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json | jq -r --arg email "${{ vars.PRIMARY_EMAIL }}" '.resources[] | select(.resource.annotations[0].profile.email == $email) | .resource.id.resource' > account_id.txt
+          CREATED_ACCOUNT_ID=$(cat account_id.txt)
+          echo "account_id=${CREATED_ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          if [ -z "$CREATED_ACCOUNT_ID" ]; then
+            echo "Error: Account was not created"
+            exit 1
+          fi
+          echo "Account created with ID: ${CREATED_ACCOUNT_ID}"
+      - name: Delete account
+        run: |
+          ./${{ env.CONNECTOR_NAME }} ${{ env.CREATE_ACCOUNT_FLAGS }} \
+            --delete-resource="${{ steps.check_account.outputs.account_id }}" \
+            --delete-resource-type="user"
+      - name: Sync after delete
+        run: |
+          ./${{ env.CONNECTOR_NAME }} sync --file=/tmp/provisioning-test.c1z
+      - name: Check account was deleted
+        run: |
+          baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json | jq -e --arg email "${{ vars.PRIMARY_EMAIL }}" '.resources | map(select(.resource.annotations[0].profile.email == $email)) | length == 0'
