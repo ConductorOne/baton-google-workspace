@@ -37,7 +37,7 @@ jobs:
         run: (set -o pipefail && go test -v -covermode=count -json ./... | tee test.json)
       - name: annotate go tests
         if: always()
-        uses: guyarb/golang-test-annotations@v0.8.0
+        uses: guyarb/golang-test-annotations@v0.6.0
         with:
           test-results: test.json
   connector-test:
