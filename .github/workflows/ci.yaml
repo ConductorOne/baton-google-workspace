@@ -107,25 +107,49 @@ jobs:
       - name: Sync after create
         run: |
           ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
+      - name: Wait for API propagation
+        run: |
+          echo "Waiting 10 seconds for Google Workspace API to propagate changes..."
+          sleep 10
       - name: Check account was created
         id: check_account
         run: |
           echo "Searching for user with email: ${{ vars.PRIMARY_EMAIL }}"
-          baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json > /tmp/users.json
-          CREATED_ACCOUNT_ID=$(jq -r --arg email "${{ vars.PRIMARY_EMAIL }}" '
-            .resources[]? | 
-            select(
-              .resource.annotations[]? | 
-              select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | 
-              (
-                ((.emails[]?.address // empty) == $email) or 
-                ((.login // "") == $email)
-              )
-            ) | 
-            .resource.id.resource
-          ' /tmp/users.json | head -n 1)
+          MAX_ATTEMPTS=5
+          ATTEMPT=1
+          CREATED_ACCOUNT_ID=""
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ -z "$CREATED_ACCOUNT_ID" ] || [ "$CREATED_ACCOUNT_ID" = "null" ]; do
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
+            ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
+            baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json > /tmp/users.json
+            CREATED_ACCOUNT_ID=$(jq -r --arg email "${{ vars.PRIMARY_EMAIL }}" '
+              .resources[]? | 
+              select(
+                .resource.annotations[]? | 
+                select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | 
+                (
+                  ((.emails[]?.address // empty) == $email) or 
+                  ((.login // "") == $email)
+                )
+              ) | 
+              .resource.id.resource
+            ' /tmp/users.json | head -n 1)
+            
+            if [ -n "$CREATED_ACCOUNT_ID" ] && [ "$CREATED_ACCOUNT_ID" != "null" ]; then
+              echo "Account found with ID: ${CREATED_ACCOUNT_ID}"
+              break
+            fi
+            
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "Account not found yet, waiting 5 seconds before retry..."
+              sleep 5
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+          
           if [ -z "$CREATED_ACCOUNT_ID" ] || [ "$CREATED_ACCOUNT_ID" = "null" ]; then
-            echo "Error: Account was not created"
+            echo "Error: Account was not created after $MAX_ATTEMPTS attempts"
             echo "Debug: All users and their emails:"
             jq -r '.resources[]? | 
               .resource as $res |
