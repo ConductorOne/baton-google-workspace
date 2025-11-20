@@ -65,7 +65,7 @@ jobs:
           BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
           BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
         run: |
-          ./baton-google-workspace sync --file /tmp/sync-test.c1z
+          ./baton-google-workspace --file /tmp/sync-test.c1z
   provisioning-tests:
     runs-on: ubuntu-latest
     env:
@@ -98,7 +98,7 @@ jobs:
         run: go build -o ${{ env.CONNECTOR_NAME }} ./cmd/baton-google-workspace
       - name: Initial sync
         run: |
-          ./${{ env.CONNECTOR_NAME }} sync --file=/tmp/provisioning-test.c1z
+          ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
       - name: Create account
         run: |
           ./${{ env.CONNECTOR_NAME }} ${{ env.CREATE_ACCOUNT_FLAGS }} \
@@ -106,7 +106,7 @@ jobs:
             --create-account-profile='{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
       - name: Sync after create
         run: |
-          ./${{ env.CONNECTOR_NAME }} sync --file=/tmp/provisioning-test.c1z
+          ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
       - name: Check account was created
         id: check_account
         run: |
@@ -125,7 +125,7 @@ jobs:
             --delete-resource-type="user"
       - name: Sync after delete
         run: |
-          ./${{ env.CONNECTOR_NAME }} sync --file=/tmp/provisioning-test.c1z
+          ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
       - name: Check account was deleted
         run: |
           baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json | jq -e --arg email "${{ vars.PRIMARY_EMAIL }}" '.resources | map(select(.resource.annotations[0].profile.email == $email)) | length == 0'
