@@ -434,6 +434,10 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		return nil, nil, nil, fmt.Errorf("google-workspace: credentialOptions cannot be nil")
 	}
 
+	if o.userProvisioningService == nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	}
+
 	var password string
 	var plaintextData []*v2.PlaintextData
 	var err error
@@ -457,10 +461,6 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	})
 
 	user.Password = password
-
-	if o.userProvisioningService == nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
-	}
 
 	user, err = o.userProvisioningService.Users.Insert(user).Context(ctx).Do()
 	if err != nil {
