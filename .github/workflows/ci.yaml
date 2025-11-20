@@ -90,8 +90,9 @@ jobs:
           go-version-file: go.mod
       - name: Install baton CLI
         run: |
-          curl -sSL https://github.com/ConductorOne/baton/releases/latest/download/baton_linux_amd64.tar.gz | tar -xz
-          sudo mv baton /usr/local/bin/
+          go install github.com/conductorone/baton/cmd/baton@latest
+          sudo mv $(go env GOPATH)/bin/baton /usr/local/bin/
+          baton version
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Build connector
