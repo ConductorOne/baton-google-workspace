@@ -112,21 +112,25 @@ jobs:
         run: |
           echo "Searching for user with email: ${{ vars.PRIMARY_EMAIL }}"
           baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json > /tmp/users.json
-          echo "Debug: First user structure:"
-          jq '.resources[0]' /tmp/users.json || true
           CREATED_ACCOUNT_ID=$(jq -r --arg email "${{ vars.PRIMARY_EMAIL }}" '
             .resources[]? | 
             select(
               .resource.annotations[]? | 
-              select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | 
-              .profile.email == $email
+              select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait) | 
+              (
+                ((.emails[]?.address // empty) == $email) or 
+                ((.login // "") == $email)
+              )
             ) | 
             .resource.id.resource
           ' /tmp/users.json | head -n 1)
           if [ -z "$CREATED_ACCOUNT_ID" ] || [ "$CREATED_ACCOUNT_ID" = "null" ]; then
             echo "Error: Account was not created"
             echo "Debug: All users and their emails:"
-            jq -r '.resources[]? | "ID: \(.resource.id.resource), Email: \(.resource.annotations[]? | select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | .profile.email // "N/A")"' /tmp/users.json || true
+            jq -r '.resources[]? | 
+              .resource as $res |
+              ($res.annotations[]? | select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait)) as $trait |
+              "ID: \($res.id.resource), Email: \((if $trait then ($trait.emails[]?.address // $trait.login // "N/A") else "N/A" end))"' /tmp/users.json || true
             exit 1
           fi
           echo "account_id=${CREATED_ACCOUNT_ID}" >> $GITHUB_OUTPUT
