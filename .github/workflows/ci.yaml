@@ -116,7 +116,7 @@ jobs:
             .resources[]? | 
             select(
               .resource.annotations[]? | 
-              select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait) | 
+              select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | 
               (
                 ((.emails[]?.address // empty) == $email) or 
                 ((.login // "") == $email)
@@ -129,8 +129,12 @@ jobs:
             echo "Debug: All users and their emails:"
             jq -r '.resources[]? | 
               .resource as $res |
-              ($res.annotations[]? | select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait)) as $trait |
-              "ID: \($res.id.resource), Email: \((if $trait then ($trait.emails[]?.address // $trait.login // "N/A") else "N/A" end))"' /tmp/users.json || true
+              ($res.annotations[]? | select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait")) as $trait |
+              if $trait then
+                "ID: \($res.id.resource), Email: \($trait.emails[]?.address // $trait.login // "N/A")"
+              else
+                "ID: \($res.id.resource), Email: N/A"
+              end' /tmp/users.json || true
             exit 1
           fi
           echo "account_id=${CREATED_ACCOUNT_ID}" >> $GITHUB_OUTPUT
