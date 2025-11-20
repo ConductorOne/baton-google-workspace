@@ -393,6 +393,7 @@ func (o *userResourceType) CreateAccountCapabilityDetails(
 	}, nil, nil
 }
 
+// https://developers.google.com/workspace/admin/directory/reference/rest/v1/users .
 func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.AccountInfo, credentialOptions *v2.LocalCredentialOptions) (
 	connectorbuilder.CreateAccountResponse,
 	[]*v2.PlaintextData,
@@ -437,19 +438,23 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	var plaintextData []*v2.PlaintextData
 	var err error
 
-	if credentialOptions.GetNoPassword() != nil {
-		password = ""
-	} else {
+	if credentialOptions.GetRandomPassword() != nil || credentialOptions.GetPlaintextPassword() != nil {
 		password, err = crypto.GeneratePassword(ctx, credentialOptions)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to generate password: %w", err)
-		}
-		plaintextData = append(plaintextData, &v2.PlaintextData{
-			Name:        "password",
-			Description: "Generated password for the new account",
-			Bytes:       []byte(password),
+	} else {
+		password, err = crypto.GenerateRandomPassword(&v2.LocalCredentialOptions_RandomPassword{
+			Length: 16,
 		})
 	}
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to generate password: %w", err)
+	}
+
+	plaintextData = append(plaintextData, &v2.PlaintextData{
+		Name:        "password",
+		Description: "Generated password for the new account",
+		Bytes:       []byte(password),
+	})
 
 	user.Password = password
 
