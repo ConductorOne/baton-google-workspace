@@ -512,6 +512,9 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 		l.Debug("google-workspace: failed to get role provisioning service", zap.Error(err))
 	}
 	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
+	if err != nil {
+		l.Debug("google-workspace: failed to get role service", zap.Error(err))
+	}
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}

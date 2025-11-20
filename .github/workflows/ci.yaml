@@ -42,38 +42,12 @@ jobs:
           test-results: test.json
   connector-test:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Build connector
-        run: go build -o baton-google-workspace ./cmd/baton-google-workspace
-      - name: Test connector capabilities
-        env:
-          BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
-          BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
-          BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
-        run: |
-          ./baton-google-workspace capabilities
-      - name: Test connector sync (if all secrets provided)
-        env:
-          BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
-          BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
-          BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
-          BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
-        run: |
-          ./baton-google-workspace --file /tmp/sync-test.c1z
-  provisioning-tests:
-    runs-on: ubuntu-latest
     env:
-      BATON_LOG_LEVEL: debug
       BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
       BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
       BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
       BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
+      BATON_LOG_LEVEL: debug
       CONNECTOR_NAME: baton-google-workspace
       CONNECTOR_ACCOUNT_LOGIN: ${{ vars.PRIMARY_EMAIL }}
       CREATE_ACCOUNT_FLAGS: >-
@@ -88,14 +62,20 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Build connector
+        run: go build -o baton-google-workspace ./cmd/baton-google-workspace
+      - name: Test connector capabilities
+        run: |
+          ./baton-google-workspace capabilities
+      - name: Test connector sync 
+        run: |
+          ./baton-google-workspace --file /tmp/sync-test.c1z
       - name: Install baton CLI
         run: |
           go install github.com/conductorone/baton/cmd/baton@latest
           sudo mv $(go env GOPATH)/bin/baton /usr/local/bin/
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Build connector
-        run: go build -o ${{ env.CONNECTOR_NAME }} ./cmd/baton-google-workspace
       - name: Initial sync
         run: |
           ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
