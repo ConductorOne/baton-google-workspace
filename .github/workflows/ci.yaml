@@ -54,6 +54,8 @@ jobs:
       - name: Test connector capabilities
         env:
           BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
+          BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
+          BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
         run: |
           ./baton-google-workspace capabilities
       - name: Test connector sync (if all secrets provided)
