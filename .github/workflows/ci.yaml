@@ -57,7 +57,6 @@ jobs:
         run: |
           ./baton-google-workspace capabilities
       - name: Test connector sync (if all secrets provided)
-        if: ${{ secrets.BATON_CREDENTIALS_JSON != '' && secrets.BATON_CUSTOMER_ID != '' && secrets.BATON_ADMINISTRATOR_EMAIL != '' }}
         env:
           BATON_CREDENTIALS_JSON: ${{ secrets.BATON_CREDENTIALS_JSON }}
           BATON_CUSTOMER_ID: ${{ secrets.BATON_CUSTOMER_ID }}
@@ -76,8 +75,8 @@ jobs:
       CONNECTOR_NAME: baton-google-workspace
       CONNECTOR_ACCOUNT_LOGIN: ${{ vars.PRIMARY_EMAIL }}
       CREATE_ACCOUNT_FLAGS: >-
-        --customer-id='${{ env.BATON_CUSTOMER_ID }}'
-        --administrator-email='${{ env.BATON_ADMINISTRATOR_EMAIL }}'
+        --customer-id='${{ secrets.BATON_CUSTOMER_ID }}'
+        --administrator-email='${{ secrets.BATON_ADMINISTRATOR_EMAIL }}'
         --provisioning
         --file=/tmp/provisioning-test.c1z
     steps:
