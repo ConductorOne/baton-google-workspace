@@ -506,33 +506,31 @@ func (c *GoogleWorkspace) Asset(ctx context.Context, asset *v2.AssetRef) (string
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	l := ctxzap.Extract(ctx)
 	rs := []connectorbuilder.ResourceSyncer{}
-	// We don't care about the error here, as we handle the case where the service is nil in the syncer
+	// We don't care about errors when getting services here, as we handle the case where the service is nil in the syncer
 	roleProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
 	if err != nil {
-		l.Debug("google-workspace: failed to get role provisioning service", zap.Error(err))
+		l.Error("google-workspace: failed to get role provisioning service", zap.Error(err))
 	}
 	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
 	if err != nil {
-		l.Debug("google-workspace: failed to get role service", zap.Error(err))
+		l.Error("google-workspace: failed to get role service", zap.Error(err))
 	}
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}
 
-	// We don't care about the error here, as we handle the case where the service is nil in the syncer
 	userProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		l.Debug("google-workspace: failed to get user provisioning service", zap.Error(err))
+		l.Error("google-workspace: failed to get user provisioning service", zap.Error(err))
 	}
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService))
 	}
 
-	// We don't care about the error here, as we handle the case where the service is nil in the syncer
 	groupProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
 	if err != nil {
-		l.Debug("google-workspace: failed to get group provisioning service", zap.Error(err))
+		l.Error("google-workspace: failed to get group provisioning service", zap.Error(err))
 	}
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err == nil {
