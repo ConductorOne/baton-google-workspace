@@ -59,7 +59,7 @@ var (
 			{
 				Name:        "resource_id",
 				DisplayName: "User Resource ID",
-				Description: "The ID of the user resource to update the status of",
+				Description: "ID of the user resource to update the status of",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -89,14 +89,14 @@ var (
 			{
 				Name:        "resource_id",
 				DisplayName: "Source User Resource ID",
-				Description: "The ID of the user resource to transfer Drive ownership from.",
+				Description: "ID of the user resource to transfer Drive ownership from.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
 			{
 				Name:        "target_resource_id",
 				DisplayName: "Target User Resource ID",
-				Description: "The ID of the user resource to receive Drive ownership.",
+				Description: "ID of the user resource to receive Drive ownership.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -118,7 +118,7 @@ var (
 			{
 				Name:        "transfer_id",
 				DisplayName: "Transfer ID",
-				Description: "The ID of the Data Transfer request.",
+				Description: "ID of the Data Transfer request.",
 				Field:       &config.Field_StringField{},
 			},
 			{
@@ -138,14 +138,14 @@ var (
 			{
 				Name:        "resource_id",
 				DisplayName: "Source User Resource ID",
-				Description: "The ID of the user resource to transfer calendar data from.",
+				Description: "ID of the user resource to transfer calendar data from.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
 			{
 				Name:        "target_resource_id",
 				DisplayName: "Target User Resource ID",
-				Description: "The ID of the user resource to receive calendar data.",
+				Description: "ID of the user resource to receive calendar data.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -167,7 +167,7 @@ var (
 			{
 				Name:        "transfer_id",
 				DisplayName: "Transfer ID",
-				Description: "The ID of the Data Transfer request.",
+				Description: "ID of the Data Transfer request.",
 				Field:       &config.Field_StringField{},
 			},
 			{
@@ -187,14 +187,14 @@ var (
 			{
 				Name:        "resource_id",
 				DisplayName: "User Resource ID",
-				Description: "The ID of the user resource to update.",
+				Description: "ID of the user resource to update.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
 			{
 				Name:        "new_primary_email",
 				DisplayName: "New Primary Email",
-				Description: "The new primary email address (must be within a verified domain).",
+				Description: "New primary email address (must be within a verified domain).",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -209,13 +209,13 @@ var (
 			{
 				Name:        "previous_primary_email",
 				DisplayName: "Previous Primary Email",
-				Description: "The user's previous primary email address.",
+				Description: "User's previous primary email address.",
 				Field:       &config.Field_StringField{},
 			},
 			{
 				Name:        "new_primary_email",
 				DisplayName: "New Primary Email",
-				Description: "The user's updated primary email address.",
+				Description: "User's updated primary email address.",
 				Field:       &config.Field_StringField{},
 			},
 		},
@@ -229,7 +229,7 @@ var (
 			{
 				Name:        "user_id",
 				DisplayName: "User Resource ID",
-				Description: "The ID of the user resource to disable (suspend).",
+				Description: "ID of the user resource to disable (suspend).",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -252,7 +252,7 @@ var (
 			{
 				Name:        "user_id",
 				DisplayName: "User Resource ID",
-				Description: "The ID of the user resource to enable (unsuspend).",
+				Description: "ID of the user resource to enable (unsuspend).",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
@@ -382,6 +382,50 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	return &v2.ConnectorMetadata{
 		DisplayName: "Google Workspace",
 		Annotations: annos,
+		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
+			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
+				"email": {
+					DisplayName: "Email",
+					Required:    true,
+					Description: "Email address for the new user account. Must be unique within the domain.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "user@example.com",
+					Order:       1,
+				},
+				"given_name": {
+					DisplayName: "First Name",
+					Required:    true,
+					Description: "User's first name.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "John",
+					Order:       2,
+				},
+				"family_name": {
+					DisplayName: "Last Name",
+					Required:    true,
+					Description: "User's last name.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "Doe",
+					Order:       3,
+				},
+				"changePasswordAtNextLogin": {
+					DisplayName: "Change Password at Next Login",
+					Required:    false,
+					Description: "If true, the user will be required to change their password at next login. A random password is always generated.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
+						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
+					},
+					Placeholder: "false",
+					Order:       4,
+				},
+			},
+		},
 	}, nil
 }
 
@@ -460,21 +504,34 @@ func (c *GoogleWorkspace) Asset(ctx context.Context, asset *v2.AssetRef) (string
 }
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
+	l := ctxzap.Extract(ctx)
 	rs := []connectorbuilder.ResourceSyncer{}
-	// We don't care about the error here, as we handle the case where the service is nil in the syncer
-	roleProvisioningService, _ := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
+	// We don't care about errors when getting services here, as we handle the case where the service is nil in the syncer
+	roleProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
+	if err != nil {
+		l.Error("google-workspace: failed to get role provisioning service", zap.Error(err))
+	}
 	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
+	if err != nil {
+		l.Error("google-workspace: failed to get role service", zap.Error(err))
+	}
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}
 
+	userProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	if err != nil {
+		l.Error("google-workspace: failed to get user provisioning service", zap.Error(err))
+	}
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err == nil {
-		rs = append(rs, userBuilder(userService, c.customerID, c.domain))
+		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService))
 	}
 
-	// We don't care about the error here, as we handle the case where the service is nil in the syncer
-	groupProvisioningService, _ := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
+	groupProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
+	if err != nil {
+		l.Error("google-workspace: failed to get group provisioning service", zap.Error(err))
+	}
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err == nil {
 		groupMemberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)

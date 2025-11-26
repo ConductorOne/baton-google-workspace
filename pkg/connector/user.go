@@ -8,6 +8,8 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -18,10 +20,11 @@ import (
 )
 
 type userResourceType struct {
-	resourceType *v2.ResourceType
-	userService  *admin.Service
-	customerId   string
-	domain       string
+	resourceType            *v2.ResourceType
+	userService             *admin.Service
+	userProvisioningService *admin.Service
+	customerId              string
+	domain                  string
 }
 
 func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -112,12 +115,13 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ *paginati
 	return nil, "", nil, nil
 }
 
-func userBuilder(userService *admin.Service, customerId string, domain string) *userResourceType {
+func userBuilder(userService *admin.Service, customerId string, domain string, userProvisioningService *admin.Service) *userResourceType {
 	return &userResourceType{
-		resourceType: resourceTypeUser,
-		userService:  userService,
-		customerId:   customerId,
-		domain:       domain,
+		resourceType:            resourceTypeUser,
+		userService:             userService,
+		userProvisioningService: userProvisioningService,
+		customerId:              customerId,
+		domain:                  domain,
 	}
 }
 
@@ -378,30 +382,111 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	return userResource, err
 }
 
-func (o *userResourceType) Create(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
-	return nil, nil, nil
+func (o *userResourceType) CreateAccountCapabilityDetails(
+	_ context.Context,
+) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
+	return &v2.CredentialDetailsAccountProvisioning{
+		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+		},
+		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+	}, nil, nil
+}
+
+// https://developers.google.com/workspace/admin/directory/reference/rest/v1/users .
+func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.AccountInfo, credentialOptions *v2.LocalCredentialOptions) (
+	connectorbuilder.CreateAccountResponse,
+	[]*v2.PlaintextData,
+	annotations.Annotations,
+	error,
+) {
+	pMap := accountInfo.Profile.AsMap()
+	email, ok := pMap["email"].(string)
+	if !ok || email == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: email not found in profile")
+	}
+
+	givenName, ok := pMap["given_name"].(string)
+	if !ok || givenName == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: given_name not found in profile")
+	}
+
+	familyName, ok := pMap["family_name"].(string)
+	if !ok || familyName == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: family_name not found in profile")
+	}
+
+	changePasswordAtNextLogin, ok := pMap["changePasswordAtNextLogin"].(bool)
+	if !ok {
+		changePasswordAtNextLogin = false
+	}
+
+	user := &admin.User{
+		PrimaryEmail: email,
+		Name: &admin.UserName{
+			GivenName:  givenName,
+			FamilyName: familyName,
+		},
+		ChangePasswordAtNextLogin: changePasswordAtNextLogin,
+	}
+
+	if credentialOptions == nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: credentialOptions cannot be nil")
+	}
+
+	if o.userProvisioningService == nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	}
+
+	var password string
+	var plaintextData []*v2.PlaintextData
+	var err error
+
+	if credentialOptions.GetRandomPassword() != nil || credentialOptions.GetPlaintextPassword() != nil {
+		password, err = crypto.GeneratePassword(ctx, credentialOptions)
+	} else {
+		password, err = crypto.GenerateRandomPassword(&v2.LocalCredentialOptions_RandomPassword{
+			Length: 16,
+		})
+	}
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to generate password: %w", err)
+	}
+
+	plaintextData = append(plaintextData, &v2.PlaintextData{
+		Name:        "password",
+		Description: "Generated password for the new account",
+		Bytes:       []byte(password),
+	})
+
+	user.Password = password
+
+	user, err = o.userProvisioningService.Users.Insert(user).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to create account: %w", err)
+	}
+
+	userResource, err := o.userResource(ctx, user)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
+	}
+
+	return &v2.CreateAccountResponse_SuccessResult{
+		Resource:              userResource,
+		IsCreateAccountResult: true,
+	}, plaintextData, nil, nil
 }
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
-	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
+	if o.userProvisioningService == nil {
+		return nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	}
 
-	user, err := r.Context(ctx).Do()
+	err := o.userProvisioningService.Users.Delete(resourceId.Resource).Context(ctx).Do()
 	if err != nil {
 		return nil, err
 	}
 
-	// if the user is already suspended, return true
-	if user.Suspended {
-		return nil, nil
-	}
-
-	_, err = o.userService.Users.Update(resourceId.Resource, &admin.User{
-		Suspended: true,
-	}).Context(ctx).Do()
-
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, err
+	return nil, nil
 }
