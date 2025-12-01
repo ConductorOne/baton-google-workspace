@@ -75,3 +75,4 @@ jobs:
             --customer-id='${{ secrets.BATON_CUSTOMER_ID }}'
             --administrator-email='${{ secrets.BATON_ADMINISTRATOR_EMAIL }}'
             --provisioning
+          sleep: 15
