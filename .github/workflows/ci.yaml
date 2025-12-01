@@ -48,13 +48,6 @@ jobs:
       BATON_ADMINISTRATOR_EMAIL: ${{ secrets.BATON_ADMINISTRATOR_EMAIL }}
       BATON_DOMAIN: ${{ secrets.BATON_DOMAIN }}
       BATON_LOG_LEVEL: debug
-      CONNECTOR_NAME: baton-google-workspace
-      CONNECTOR_ACCOUNT_LOGIN: ${{ vars.PRIMARY_EMAIL }}
-      CREATE_ACCOUNT_FLAGS: >-
-        --customer-id='${{ secrets.BATON_CUSTOMER_ID }}'
-        --administrator-email='${{ secrets.BATON_ADMINISTRATOR_EMAIL }}'
-        --provisioning
-        --file=/tmp/provisioning-test.c1z
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -71,86 +64,11 @@ jobs:
         run: |
           ./baton-google-workspace --file /tmp/sync-test.c1z
       - name: Install baton CLI
-        run: |
-          go install github.com/conductorone/baton/cmd/baton@latest
-          sudo mv $(go env GOPATH)/bin/baton /usr/local/bin/
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Initial sync
-        run: |
-          ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
-      - name: Create account
-        run: |
-          ./${{ env.CONNECTOR_NAME }} ${{ env.CREATE_ACCOUNT_FLAGS }} \
-            --create-account-email="${{ vars.PRIMARY_EMAIL }}" \
-            --create-account-profile='{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
-      - name: Sync after create
-        run: |
-          ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
-      - name: Wait for API propagation
-        run: |
-          echo "Waiting 10 seconds for Google Workspace API to propagate changes..."
-          sleep 10
-      - name: Check account was created
-        id: check_account
-        run: |
-          echo "Searching for user with email: ${{ vars.PRIMARY_EMAIL }}"
-          MAX_ATTEMPTS=5
-          ATTEMPT=1
-          CREATED_ACCOUNT_ID=""
-          
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ -z "$CREATED_ACCOUNT_ID" ] || [ "$CREATED_ACCOUNT_ID" = "null" ]; do
-            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
-            ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
-            baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json > /tmp/users.json
-            CREATED_ACCOUNT_ID=$(jq -r --arg email "${{ vars.PRIMARY_EMAIL }}" '
-              .resources[]? | 
-              select(
-                .resource.annotations[]? | 
-                select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | 
-                (
-                  ((.emails[]?.address // empty) == $email) or 
-                  ((.login // "") == $email)
-                )
-              ) | 
-              .resource.id.resource
-            ' /tmp/users.json | head -n 1)
-            
-            if [ -n "$CREATED_ACCOUNT_ID" ] && [ "$CREATED_ACCOUNT_ID" != "null" ]; then
-              echo "Account found with ID: ${CREATED_ACCOUNT_ID}"
-              break
-            fi
-            
-            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-              echo "Account not found yet, waiting 5 seconds before retry..."
-              sleep 5
-            fi
-            ATTEMPT=$((ATTEMPT + 1))
-          done
-          
-          if [ -z "$CREATED_ACCOUNT_ID" ] || [ "$CREATED_ACCOUNT_ID" = "null" ]; then
-            echo "Error: Account was not created after $MAX_ATTEMPTS attempts"
-            echo "Debug: All users and their emails:"
-            jq -r '.resources[]? | 
-              .resource as $res |
-              ($res.annotations[]? | select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait")) as $trait |
-              if $trait then
-                "ID: \($res.id.resource), Email: \($trait.emails[]?.address // $trait.login // "N/A")"
-              else
-                "ID: \($res.id.resource), Email: N/A"
-              end' /tmp/users.json || true
-            exit 1
-          fi
-          echo "account_id=${CREATED_ACCOUNT_ID}" >> $GITHUB_OUTPUT
-          echo "Account created with ID: ${CREATED_ACCOUNT_ID}"
-      - name: Delete account
-        run: |
-          ./${{ env.CONNECTOR_NAME }} ${{ env.CREATE_ACCOUNT_FLAGS }} \
-            --delete-resource="${{ steps.check_account.outputs.account_id }}" \
-            --delete-resource-type="user"
-      - name: Sync after delete
-        run: |
-          ./${{ env.CONNECTOR_NAME }} --file=/tmp/provisioning-test.c1z
-      - name: Check account was deleted
-        run: |
-          baton resources -f /tmp/provisioning-test.c1z -t user --output-format=json | jq -e --arg email "${{ vars.PRIMARY_EMAIL }}" '.resources | map(select(.resource.annotations[0].profile.email == $email)) | length == 0'
+        uses: ConductorOne/github-workflows/actions/get-baton@v2
+      - name: Test account provisioning
+        uses: ConductorOne/github-workflows/actions/account-provisioning@v3
+        with:
+          connector: ./baton-google-workspace
+          account-email: "${{ vars.PRIMARY_EMAIL }}"
+          account-profile: '{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
+          sleep: 15
