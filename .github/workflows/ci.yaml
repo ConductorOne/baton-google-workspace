@@ -69,10 +69,6 @@ jobs:
         uses: ConductorOne/github-workflows/actions/account-provisioning@felipelucero/add-sleep-option
         with:
           connector: ./baton-google-workspace
-          create-account-email: "${{ vars.PRIMARY_EMAIL }}"
-          create-account-profile: '{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
-          connector-flags: >-
-            --customer-id='${{ secrets.BATON_CUSTOMER_ID }}'
-            --administrator-email='${{ secrets.BATON_ADMINISTRATOR_EMAIL }}'
-            --provisioning
+          account-email: "${{ vars.PRIMARY_EMAIL }}"
+          account-profile: '{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
           sleep: 15
