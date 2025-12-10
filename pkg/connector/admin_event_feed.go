@@ -14,13 +14,12 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	directory "google.golang.org/api/admin/directory/v1"
 	reports "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 )
 
 type cacheEntry struct {
@@ -46,7 +45,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	var streamState *pagination.StreamState
 	s, err := f.connector.getReportService(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to get report service: %w", err)
 	}
 
 	req := s.Activities.List("all", "admin")
@@ -54,7 +53,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token: %w", err)
 	}
 
 	if cursor.StartAt != "" {
@@ -66,12 +65,12 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	r, err := req.Do()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list admin activities")
 	}
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to parse latest event time in admin event feed: %w", err)
 	}
 
 	events := make([]*v2.Event, 0)
@@ -92,14 +91,14 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 			case "GROUP_SETTINGS":
 				changeEvents, err := f.handleGroupEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
 				if err != nil {
-					l.Error("google-workspace: failed to handle group event", zap.Error(err))
+					l.Error("failed to handle group event", zap.Error(err))
 					continue
 				}
 				events = append(events, changeEvents...)
 			case "USER_SETTINGS":
 				changeEvents, err := f.handleUserEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
 				if err != nil {
-					l.Error("google-workspace: failed to handle user event", zap.Error(err))
+					l.Error("failed to handle user event", zap.Error(err))
 					continue
 				}
 				events = append(events, changeEvents...)
@@ -125,7 +124,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	cursorToken, err := cursor.marshal()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to marshal cursor token in admin event feed: %w", err)
 	}
 	streamState = &pagination.StreamState{
 		Cursor:  cursorToken,
@@ -143,7 +142,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 	case "CREATE_GROUP", "CHANGE_GROUP_DESCRIPTION", "CHANGE_GROUP_NAME":
 		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create group changed event: %w", err)
 		}
 		if evt == nil {
 			return nil, nil
@@ -152,7 +151,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 	case "CHANGE_GROUP_EMAIL":
 		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create group changed event (group email): %w", err)
 		}
 		if evt == nil {
 			return nil, nil
@@ -161,7 +160,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 
 		evt, err = f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "NEW_VALUE", activityEvt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create group changed event (new value): %w", err)
 		}
 		if evt == nil {
 			return nil, nil
@@ -170,7 +169,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 	case "ADD_GROUP_MEMBER":
 		evt, err := f.newGroupMemberGrantEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", "USER_EMAIL", activityEvt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create group member grant event: %w", err)
 		}
 		if evt == nil {
 			return nil, nil
@@ -179,7 +178,7 @@ func (f *adminEventFeed) handleGroupEvent(ctx context.Context, uniqueQualifier i
 	case "UPDATE_GROUP_MEMBER":
 		evt, err := f.newGroupChangedEvent(ctx, uniqueQualifier, occurredAt, "GROUP_EMAIL", activityEvt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create group changed event (update member): %w", err)
 		}
 		if evt == nil {
 			return nil, nil
@@ -202,7 +201,7 @@ func (f *adminEventFeed) handleUserEvent(ctx context.Context, uniqueQualifier in
 	case "ACCEPT_USER_INVITATION", "CHANGE_USER_ORGANIZATION", "ADD_DISPLAY_NAME", "CHANGE_DISPLAY_NAME", "CHANGE_FIRST_NAME", "CHANGE_LAST_NAME", "CREATE_USER", "RENAME_USER":
 		evt, err := f.newUserChangedEvent(ctx, uniqueQualifier, occurredAt, "USER_EMAIL", activityEvt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create user changed event: %w", err)
 		}
 		if evt == nil {
 			return nil, nil
@@ -265,7 +264,7 @@ func (f *adminEventFeed) newGroupMemberGrantEvent(
 
 	group, err := f.lookupGroup(ctx, groupEmail)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to lookup group %s: %w", groupEmail, err)
 	}
 
 	if group == nil || group.Id == "" {
@@ -279,7 +278,7 @@ func (f *adminEventFeed) newGroupMemberGrantEvent(
 
 	user, err := f.lookupUser(ctx, userEmail)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to lookup user %s in newGroupMemberGrantEvent: %w", userEmail, err)
 	}
 
 	if user == nil || user.Id == "" {
@@ -297,7 +296,7 @@ func (f *adminEventFeed) newGroupMemberGrantEvent(
 	}
 	groupResource, err := sdkResource.NewGroupResource(group.DisplayName, resourceTypeGroup, group.Id, nil, resourceOpts...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create group resource for grant event: %w", err)
 	}
 	entitlement := sdkEntitlement.NewAssignmentEntitlement(groupResource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
 
@@ -313,7 +312,7 @@ func (f *adminEventFeed) newGroupMemberGrantEvent(
 		),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create user resource for grant event: %w", err)
 	}
 
 	return &v2.Event{
@@ -343,7 +342,7 @@ func (f *adminEventFeed) newUserChangedEvent(
 
 	user, err := f.lookupUser(ctx, userEmail)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to lookup user %s in newUserChangedEvent: %w", userEmail, err)
 	}
 
 	if user == nil || user.Id == "" {
@@ -376,7 +375,7 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 
 	userService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryUserReadonlyScope)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get directory service for user lookup in event feed: %w", err)
 	}
 
 	user, err := userService.Users.Get(email).Do()
@@ -384,12 +383,12 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusNotFound {
-				l.Info("google-workspace: user no longer exists", zap.String("email", email))
+				l.Info("user no longer exists", zap.String("email", email))
 				delete(f.userCache, email)
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("google-workspace: failed to get user %s: %w", email, err)
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user in event feed lookup: %s", email))
 	}
 
 	entry := cacheEntry{
@@ -400,7 +399,7 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 	f.userCache[email] = entry
 
 	if user.Id == "" {
-		l.Warn("google-workspace: user has no id", zap.String("email", user.PrimaryEmail))
+		l.Warn("user has no id", zap.String("email", user.PrimaryEmail))
 		return nil, nil
 	}
 
@@ -419,7 +418,7 @@ func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheE
 
 	groupService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get directory service for group lookup in event feed: %w", err)
 	}
 
 	group, err := groupService.Groups.Get(email).Do()
@@ -427,12 +426,12 @@ func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheE
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusNotFound {
-				l.Info("google-workspace: group no longer exists", zap.String("email", email))
+				l.Info("group no longer exists", zap.String("email", email))
 				delete(f.groupCache, email)
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("google-workspace: failed to get group %s: %w", email, err)
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get group: %s", email))
 	}
 
 	entry := cacheEntry{
@@ -443,7 +442,7 @@ func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheE
 	f.groupCache[email] = entry
 
 	if group.Id == "" {
-		l.Warn("google-workspace: group has no id", zap.String("email", group.Email))
+		l.Warn("group has no id", zap.String("email", group.Email))
 		return nil, nil
 	}
 
