@@ -511,6 +511,22 @@ func isAuthorizationError(err error) bool {
 	return errors.As(err, &ae)
 }
 
+// logServiceInitError logs an error that occurred while initializing a service for resource syncers.
+// Authorization errors are logged at debug level as they are expected when scopes are not available.
+// Other errors (network, context cancellation, etc.) are logged at error level with more detail.
+func logServiceInitError(l *zap.Logger, err error, scope, purpose string) {
+	if isAuthorizationError(err) {
+		l.Debug("google-workspace: service not available due to missing authorization scope",
+			zap.String("scope", scope),
+			zap.Error(err))
+	} else {
+		l.Error("google-workspace: failed to initialize service for resource syncer",
+			zap.String("scope", scope),
+			zap.String("purpose", purpose),
+			zap.Error(err))
+	}
+}
+
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	l := ctxzap.Extract(ctx)
 	rs := []connectorbuilder.ResourceSyncer{}
@@ -519,29 +535,11 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	// Authorization errors are expected when scopes are not available and are handled gracefully
 	roleProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
 	if err != nil {
-		if isAuthorizationError(err) {
-			l.Debug("google-workspace: role provisioning service not available due to missing authorization scope",
-				zap.String("scope", directoryAdmin.AdminDirectoryRolemanagementScope),
-				zap.Error(err))
-		} else {
-			l.Error("google-workspace: failed to initialize role provisioning service for resource syncer",
-				zap.String("scope", directoryAdmin.AdminDirectoryRolemanagementScope),
-				zap.String("purpose", "role resource provisioning"),
-				zap.Error(err))
-		}
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning")
 	}
 	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
 	if err != nil {
-		if isAuthorizationError(err) {
-			l.Debug("google-workspace: role service not available due to missing authorization scope",
-				zap.String("scope", directoryAdmin.AdminDirectoryRolemanagementReadonlyScope),
-				zap.Error(err))
-		} else {
-			l.Error("google-workspace: failed to initialize role service for resource syncer",
-				zap.String("scope", directoryAdmin.AdminDirectoryRolemanagementReadonlyScope),
-				zap.String("purpose", "role resource synchronization"),
-				zap.Error(err))
-		}
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization")
 	}
 	if err == nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
@@ -551,29 +549,11 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	// Authorization errors are expected when scopes are not available and are handled gracefully
 	userProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		if isAuthorizationError(err) {
-			l.Debug("google-workspace: user provisioning service not available due to missing authorization scope",
-				zap.String("scope", directoryAdmin.AdminDirectoryUserScope),
-				zap.Error(err))
-		} else {
-			l.Error("google-workspace: failed to initialize user provisioning service for resource syncer",
-				zap.String("scope", directoryAdmin.AdminDirectoryUserScope),
-				zap.String("purpose", "user resource provisioning"),
-				zap.Error(err))
-		}
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning")
 	}
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err != nil {
-		if isAuthorizationError(err) {
-			l.Debug("google-workspace: user service not available due to missing authorization scope",
-				zap.String("scope", directoryAdmin.AdminDirectoryUserReadonlyScope),
-				zap.Error(err))
-		} else {
-			l.Error("google-workspace: failed to initialize user service for resource syncer",
-				zap.String("scope", directoryAdmin.AdminDirectoryUserReadonlyScope),
-				zap.String("purpose", "user resource synchronization"),
-				zap.Error(err))
-		}
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization")
 	} else {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService))
 	}
@@ -582,42 +562,15 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	// Authorization errors are expected when scopes are not available and are handled gracefully
 	groupProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
 	if err != nil {
-		if isAuthorizationError(err) {
-			l.Debug("google-workspace: group provisioning service not available due to missing authorization scope",
-				zap.String("scope", directoryAdmin.AdminDirectoryGroupMemberScope),
-				zap.Error(err))
-		} else {
-			l.Error("google-workspace: failed to initialize group provisioning service for resource syncer",
-				zap.String("scope", directoryAdmin.AdminDirectoryGroupMemberScope),
-				zap.String("purpose", "group membership provisioning"),
-				zap.Error(err))
-		}
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning")
 	}
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
-		if isAuthorizationError(err) {
-			l.Debug("google-workspace: group service not available due to missing authorization scope",
-				zap.String("scope", directoryAdmin.AdminDirectoryGroupReadonlyScope),
-				zap.Error(err))
-		} else {
-			l.Error("google-workspace: failed to initialize group service for resource syncer",
-				zap.String("scope", directoryAdmin.AdminDirectoryGroupReadonlyScope),
-				zap.String("purpose", "group resource synchronization"),
-				zap.Error(err))
-		}
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
 	} else {
 		groupMemberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
 		if err != nil {
-			if isAuthorizationError(err) {
-				l.Debug("google-workspace: group member service not available due to missing authorization scope",
-					zap.String("scope", directoryAdmin.AdminDirectoryGroupMemberReadonlyScope),
-					zap.Error(err))
-			} else {
-				l.Error("google-workspace: failed to initialize group member service for resource syncer",
-					zap.String("scope", directoryAdmin.AdminDirectoryGroupMemberReadonlyScope),
-					zap.String("purpose", "group membership synchronization"),
-					zap.Error(err))
-			}
+			logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization")
 		} else {
 			rs = append(rs, groupBuilder(
 				groupService,
