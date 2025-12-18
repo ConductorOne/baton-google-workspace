@@ -347,12 +347,12 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
 	}
 	if user.CreationTime != "" {
-		if t, err := time.Parse("2006-01-02T15:04:05-0700", user.CreationTime); err == nil {
+		if t, err := time.Parse(time.RFC3339, user.CreationTime); err == nil {
 			traitOpts = append(traitOpts, sdkResource.WithCreatedAt(t))
 		}
 	}
 	if user.LastLoginTime != "" {
-		if t, err := time.Parse("2006-01-02T15:04:05-0700", user.LastLoginTime); err == nil {
+		if t, err := time.Parse(time.RFC3339, user.LastLoginTime); err == nil {
 			traitOpts = append(traitOpts, sdkResource.WithLastLogin(t))
 		}
 	}
