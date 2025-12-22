@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"time"
@@ -82,11 +82,11 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 	if token != nil && token.Cursor != "" {
 		data, err := base64.StdEncoding.DecodeString(token.Cursor)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to decode page token: %w", err)
 		}
 
 		if err := json.Unmarshal(data, pt); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to unmarshal page token JSON: %w", err)
 		}
 
 		pt.PageSize = token.Size
@@ -111,7 +111,7 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 func (pt *pageToken) marshal() (string, error) {
 	data, err := json.Marshal(pt)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal page token: %w", err)
 	}
 
 	basedToken := base64.StdEncoding.EncodeToString(data)
@@ -125,7 +125,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	var streamState *pagination.StreamState
 	s, err := f.c.getReportService(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to get report service in usage event feed: %w", err)
 	}
 
 	req := s.Activities.List("all", "token")
@@ -134,7 +134,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token in usage event feed: %w", err)
 	}
 
 	if cursor.StartAt != "" {
@@ -146,12 +146,12 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	r, err := req.Do()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list usage activities")
 	}
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to parse latest event time in usage event feed: %w", err)
 	}
 	events := []*v2.Event{}
 	for _, activity := range r.Items {
@@ -172,7 +172,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 				resource.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
 			)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, fmt.Errorf("failed to create user trait: %w", err)
 			}
 			event, err := newV2Event(activity, occurredAt, e, userTrait)
 			if err != nil {
@@ -196,7 +196,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	cursorToken, err := cursor.marshal()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to marshal cursor token in usage event feed: %w", err)
 	}
 	streamState = &pagination.StreamState{
 		Cursor:  cursorToken,
@@ -207,10 +207,10 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait) (*v2.Event, error) {
 	if !hasParameter("client_id", e.Parameters) {
-		return nil, errors.New("google-workspace-event-feed: no client id in parameters")
+		return nil, fmt.Errorf("no client_id in event parameters")
 	}
 	if !hasParameter("app_name", e.Parameters) {
-		return nil, errors.New("google-workspace-event-feed: no app name in parameters")
+		return nil, fmt.Errorf("no app_name in event parameters")
 	}
 
 	clientID := getValueFromParameters("client_id", e.Parameters)
