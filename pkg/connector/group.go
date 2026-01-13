@@ -11,7 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	uhttp "github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -37,11 +37,11 @@ func (o *groupResourceType) ResourceType(_ context.Context) *v2.ResourceType {
 	return o.resourceType
 }
 
-func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId, pt *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	bag := &pagination.Bag{}
-	err := bag.Unmarshal(pt.Token)
+	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -67,7 +67,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 
 	groups, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("google-workspace: cannot get groups: %w", err)
+		return nil, nil, fmt.Errorf("google-workspace: cannot get groups: %w", err)
 	}
 
 	serverResponse := groups.ServerResponse
@@ -86,29 +86,29 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 			l.Error("google-workspace: group had no id", zap.String("name", g.Name))
 			continue
 		}
-		traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
-		resourceOpts := []sdkResource.ResourceOption{
-			sdkResource.WithAnnotation(&v2.V1Identifier{
+		traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, g))}
+		resourceOpts := []rs.ResourceOption{
+			rs.WithAnnotation(&v2.V1Identifier{
 				Id: g.Id,
 			}),
-			sdkResource.WithAnnotation(&v2.RawId{
+			rs.WithAnnotation(&v2.RawId{
 				Id: g.Id,
 			}),
 		}
-		groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
+		groupResource, err := rs.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		rv = append(rv, groupResource)
 	}
 	nextPage, err := bag.NextToken(groups.NextPageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
-	return rv, nextPage, nil, nil
+	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	var annos annotations.Annotations
 	annos.Update(&v2.V1Identifier{
 		Id: V1MembershipEntitlementID(resource.Id.Resource),
@@ -117,14 +117,14 @@ func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resou
 	member.Description = fmt.Sprintf("Is member of the %s group in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Group Member", resource.DisplayName)
-	return []*v2.Entitlement{member}, "", nil, nil
+	return []*v2.Entitlement{member}, nil, nil
 }
 
-func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, pt *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, attrs rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	bag := &pagination.Bag{}
-	err := bag.Unmarshal(pt.Token)
+	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if bag.Current() == nil {
@@ -145,11 +145,11 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		if errors.As(err, &gerr) {
 			// Return no grants if the group no longer exists. This might happen if the group is deleted during a sync.
 			if gerr.Code == http.StatusNotFound {
-				return nil, "", nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
+				return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
 			}
 		}
 
-		return nil, "", nil, fmt.Errorf("google-workspace: can't get members: %w", err)
+		return nil, nil, fmt.Errorf("google-workspace: can't get members: %w", err)
 	}
 
 	var rv []*v2.Grant
@@ -157,9 +157,9 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 		v1Identifier := &v2.V1Identifier{
 			Id: V1GrantID(V1MembershipEntitlementID(resource.Id.Resource), member.Id),
 		}
-		gmID, err := sdkResource.NewResourceID(resourceTypeUser, member.Id)
+		gmID, err := rs.NewResourceID(resourceTypeUser, member.Id)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, sdkGrant.WithAnnotation(v1Identifier))
 		rv = append(rv, grant)
@@ -167,10 +167,10 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, p
 
 	nextPage, err := bag.NextToken(members.NextPageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	return rv, nextPage, nil, nil
+	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
 func groupBuilder(
@@ -273,16 +273,16 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 		l.Error("google-workspace: group had no id", zap.String("name", g.Name))
 		return nil, nil, nil
 	}
-	traitOpts := []sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(groupProfile(ctx, g))}
-	resourceOpts := []sdkResource.ResourceOption{
-		sdkResource.WithAnnotation(&v2.V1Identifier{
+	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, g))}
+	resourceOpts := []rs.ResourceOption{
+		rs.WithAnnotation(&v2.V1Identifier{
 			Id: g.Id,
 		}),
-		sdkResource.WithAnnotation(&v2.RawId{
+		rs.WithAnnotation(&v2.RawId{
 			Id: g.Id,
 		}),
 	}
-	groupResource, err := sdkResource.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
+	groupResource, err := rs.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
 	if err != nil {
 		return nil, nil, err
 	}
