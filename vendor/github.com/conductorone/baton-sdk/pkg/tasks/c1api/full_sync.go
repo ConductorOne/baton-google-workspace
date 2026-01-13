@@ -87,6 +87,7 @@ func (c *fullSyncTaskHandler) sync(ctx context.Context, c1zPath string) error {
 	if len(c.syncResourceTypeIDs) > 0 {
 		syncOpts = append(syncOpts, sdkSync.WithSyncResourceTypes(c.syncResourceTypeIDs))
 	}
+	cc := c.helpers.ConnectorClient()
 
 	if setSessionStore, ok := cc.(session.SetSessionStore); ok {
 		syncOpts = append(syncOpts, sdkSync.WithSessionStore(setSessionStore))

@@ -2313,6 +2313,148 @@ const file_c1_config_v1_config_proto_rawDesc = "" +
 	"+STRING_FIELD_TYPE_CONNECTOR_DERIVED_OPTIONS\x10\x03\x12!\n" +
 	"\x1dSTRING_FIELD_TYPE_FILE_UPLOAD\x10\x04B3Z1github.com/conductorone/baton-sdk/pb/c1/config/v1b\x06proto3"
 
+func (x *StringField) SetRules(v *StringRules) {
+	x.Rules = v
+}
+
+func (x *StringField) SetType(v StringFieldType) {
+	x.Type = v
+}
+
+func (x *StringField) SetAllowedExtensions(v []string) {
+	x.AllowedExtensions = v
+}
+
+func (x *StringField) SetOptions(v []*StringFieldOption) {
+	x.Options = v
+}
+
+func (x *StringField) HasRules() bool {
+	if x == nil {
+		return false
+	}
+	return x.Rules != nil
+}
+
+func (x *StringField) ClearRules() {
+	x.Rules = nil
+}
+
+type StringField_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	DefaultValue string
+	Rules        *StringRules
+	Type         StringFieldType
+	// only used for FileUpload atm, oneofs are evil
+	AllowedExtensions []string
+	Options           []*StringFieldOption
+}
+
+func (b0 StringField_builder) Build() *StringField {
+	m0 := &StringField{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.DefaultValue = b.DefaultValue
+	x.Rules = b.Rules
+	x.Type = b.Type
+	x.AllowedExtensions = b.AllowedExtensions
+	x.Options = b.Options
+	return m0
+}
+
+var File_c1_config_v1_config_proto protoreflect.FileDescriptor
+
+const file_c1_config_v1_config_proto_rawDesc = "" +
+	"\n" +
+	"\x19c1/config/v1/config.proto\x12\fc1.config.v1\x1a\x18c1/config/v1/rules.proto\x1a\x19google/protobuf/any.proto\"\xd0\x03\n" +
+	"\rConfiguration\x12+\n" +
+	"\x06fields\x18\x01 \x03(\v2\x13.c1.config.v1.FieldR\x06fields\x12:\n" +
+	"\vconstraints\x18\x02 \x03(\v2\x18.c1.config.v1.ConstraintR\vconstraints\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x19\n" +
+	"\bhelp_url\x18\x04 \x01(\tR\ahelpUrl\x12\x19\n" +
+	"\bicon_url\x18\x05 \x01(\tR\aiconUrl\x12!\n" +
+	"\fis_directory\x18\a \x01(\bR\visDirectory\x12\x1d\n" +
+	"\n" +
+	"catalog_id\x18\b \x01(\tR\tcatalogId\x12>\n" +
+	"\x1bsupports_external_resources\x18\t \x01(\bR\x19supportsExternalResources\x12>\n" +
+	"\x1brequires_external_connector\x18\n" +
+	" \x01(\bR\x19requiresExternalConnector\x12;\n" +
+	"\ffield_groups\x18\v \x03(\v2\x18.c1.config.v1.FieldGroupR\vfieldGroups\"\xea\x01\n" +
+	"\n" +
+	"Constraint\x120\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x1c.c1.config.v1.ConstraintKindR\x04kind\x12\x1f\n" +
+	"\vfield_names\x18\x02 \x03(\tR\n" +
+	"fieldNames\x122\n" +
+	"\x15secondary_field_names\x18\x03 \x03(\tR\x13secondaryFieldNames\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1b\n" +
+	"\thelp_text\x18\x05 \x01(\tR\bhelpText\x12$\n" +
+	"\x0eis_field_group\x18\x06 \x01(\bR\fisFieldGroup\"x\n" +
+	"\n" +
+	"FieldGroup\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1b\n" +
+	"\thelp_text\x18\x03 \x01(\tR\bhelpText\x12\x16\n" +
+	"\x06fields\x18\x04 \x03(\tR\x06fields\"\xab\x04\n" +
+	"\x05Field\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12 \n" +
+	"\vplaceholder\x18\x04 \x01(\tR\vplaceholder\x12\x1f\n" +
+	"\vis_required\x18\x05 \x01(\bR\n" +
+	"isRequired\x12\x15\n" +
+	"\x06is_ops\x18\x06 \x01(\bR\x05isOps\x12\x1b\n" +
+	"\tis_secret\x18\a \x01(\bR\bisSecret\x12>\n" +
+	"\fstring_field\x18d \x01(\v2\x19.c1.config.v1.StringFieldH\x00R\vstringField\x125\n" +
+	"\tint_field\x18e \x01(\v2\x16.c1.config.v1.IntFieldH\x00R\bintField\x128\n" +
+	"\n" +
+	"bool_field\x18f \x01(\v2\x17.c1.config.v1.BoolFieldH\x00R\tboolField\x12N\n" +
+	"\x12string_slice_field\x18g \x01(\v2\x1e.c1.config.v1.StringSliceFieldH\x00R\x10stringSliceField\x12H\n" +
+	"\x10string_map_field\x18h \x01(\v2\x1c.c1.config.v1.StringMapFieldH\x00R\x0estringMapFieldB\a\n" +
+	"\x05field\"n\n" +
+	"\bIntField\x12#\n" +
+	"\rdefault_value\x18\x01 \x01(\x03R\fdefaultValue\x123\n" +
+	"\x05rules\x18\x02 \x01(\v2\x18.c1.config.v1.Int64RulesH\x00R\x05rules\x88\x01\x01B\b\n" +
+	"\x06_rules\"n\n" +
+	"\tBoolField\x12#\n" +
+	"\rdefault_value\x18\x01 \x01(\bR\fdefaultValue\x122\n" +
+	"\x05rules\x18\x02 \x01(\v2\x17.c1.config.v1.BoolRulesH\x00R\x05rules\x88\x01\x01B\b\n" +
+	"\x06_rules\"\x7f\n" +
+	"\x10StringSliceField\x12#\n" +
+	"\rdefault_value\x18\x01 \x03(\tR\fdefaultValue\x12<\n" +
+	"\x05rules\x18\x02 \x01(\v2!.c1.config.v1.RepeatedStringRulesH\x00R\x05rules\x88\x01\x01B\b\n" +
+	"\x06_rules\"\xff\x01\n" +
+	"\x0eStringMapField\x12S\n" +
+	"\rdefault_value\x18\x01 \x03(\v2..c1.config.v1.StringMapField.DefaultValueEntryR\fdefaultValue\x127\n" +
+	"\x05rules\x18\x02 \x01(\v2\x1c.c1.config.v1.StringMapRulesH\x00R\x05rules\x88\x01\x01\x1aU\n" +
+	"\x11DefaultValueEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
+	"\x05value\x18\x02 \x01(\v2\x14.google.protobuf.AnyR\x05value:\x028\x01B\b\n" +
+	"\x06_rules\"`\n" +
+	"\x11StringFieldOption\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\"\x8f\x02\n" +
+	"\vStringField\x12#\n" +
+	"\rdefault_value\x18\x01 \x01(\tR\fdefaultValue\x124\n" +
+	"\x05rules\x18\x02 \x01(\v2\x19.c1.config.v1.StringRulesH\x00R\x05rules\x88\x01\x01\x121\n" +
+	"\x04type\x18\x03 \x01(\x0e2\x1d.c1.config.v1.StringFieldTypeR\x04type\x12-\n" +
+	"\x12allowed_extensions\x18\x04 \x03(\tR\x11allowedExtensions\x129\n" +
+	"\aoptions\x18\x05 \x03(\v2\x1f.c1.config.v1.StringFieldOptionR\aoptionsB\b\n" +
+	"\x06_rules*\xc4\x01\n" +
+	"\x0eConstraintKind\x12\x1f\n" +
+	"\x1bCONSTRAINT_KIND_UNSPECIFIED\x10\x00\x12%\n" +
+	"!CONSTRAINT_KIND_REQUIRED_TOGETHER\x10\x01\x12 \n" +
+	"\x1cCONSTRAINT_KIND_AT_LEAST_ONE\x10\x02\x12&\n" +
+	"\"CONSTRAINT_KIND_MUTUALLY_EXCLUSIVE\x10\x03\x12 \n" +
+	"\x1cCONSTRAINT_KIND_DEPENDENT_ON\x10\x04*\xc9\x01\n" +
+	"\x0fStringFieldType\x12&\n" +
+	"\"STRING_FIELD_TYPE_TEXT_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18STRING_FIELD_TYPE_RANDOM\x10\x01\x12\x1c\n" +
+	"\x18STRING_FIELD_TYPE_OAUTH2\x10\x02\x12/\n" +
+	"+STRING_FIELD_TYPE_CONNECTOR_DERIVED_OPTIONS\x10\x03\x12!\n" +
+	"\x1dSTRING_FIELD_TYPE_FILE_UPLOAD\x10\x04B3Z1github.com/conductorone/baton-sdk/pb/c1/config/v1b\x06proto3"
+
 var file_c1_config_v1_config_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_c1_config_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_c1_config_v1_config_proto_goTypes = []any{

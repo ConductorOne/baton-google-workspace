@@ -60,6 +60,12 @@ func WithSyncResourceTypeIDs(resourceTypeIDs []string) Option {
 	}
 }
 
+func WithSyncResourceTypeIDs(resourceTypeIDs []string) Option {
+	return func(m *localSyncer) {
+		m.syncResourceTypeIDs = resourceTypeIDs
+	}
+}
+
 func WithSkipEntitlementsAndGrants(skip bool) Option {
 	return func(m *localSyncer) {
 		m.skipEntitlementsAndGrants = skip

@@ -12,7 +12,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -36,12 +36,12 @@ func (o *roleResourceType) ResourceType(_ context.Context) *v2.ResourceType {
 	return o.resourceType
 }
 
-func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	l := ctxzap.Extract(ctx)
 	bag := &pagination.Bag{}
-	err := bag.Unmarshal(pt.Token)
+	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -56,7 +56,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 
 	roles, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("google-workspace: can't get roles: %w", err)
+		return nil, nil, fmt.Errorf("google-workspace: can't get roles: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(roles.Items))
@@ -69,21 +69,21 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 		annos := &v2.V1Identifier{
 			Id: tempRoleId,
 		}
-		traitOpts := []sdkResource.RoleTraitOption{sdkResource.WithRoleProfile(roleProfile(ctx, r))}
-		roleResource, err := sdkResource.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, traitOpts, sdkResource.WithAnnotation(annos))
+		traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(ctx, r))}
+		roleResource, err := rs.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		rv = append(rv, roleResource)
 	}
 	nextPage, err := bag.NextToken(roles.NextPageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
-	return rv, nextPage, nil, nil
+	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func (o *roleResourceType) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *roleResourceType) Entitlements(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	var annos annotations.Annotations
 	annos.Update(&v2.V1Identifier{
 		Id: V1MembershipEntitlementID(resource.Id.Resource),
@@ -92,14 +92,14 @@ func (o *roleResourceType) Entitlements(ctx context.Context, resource *v2.Resour
 	member.Description = fmt.Sprintf("Has the %s role in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Role Member", resource.DisplayName)
-	return []*v2.Entitlement{member}, "", nil, nil
+	return []*v2.Entitlement{member}, nil, nil
 }
 
-func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, attrs rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	bag := &pagination.Bag{}
-	err := bag.Unmarshal(pt.Token)
+	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if bag.Current() == nil {
@@ -120,10 +120,10 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 		if errors.As(err, &gerr) {
 			// Return no grants if the role no longer exists. This might happen if the role is deleted during a sync.
 			if gerr.Code == http.StatusNotFound {
-				return nil, "", nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no role found with id %s", resource.Id.Resource))
+				return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no role found with id %s", resource.Id.Resource))
 			}
 		}
-		return nil, "", nil, fmt.Errorf("google-workspace: can't get role assignment: %w", err)
+		return nil, nil, fmt.Errorf("google-workspace: can't get role assignment: %w", err)
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
@@ -131,9 +131,9 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 		v1Identifier := &v2.V1Identifier{
 			Id: tempRoleAssignmentId,
 		}
-		uID, err := sdkResource.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
+		uID, err := rs.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, sdkGrant.WithAnnotation(v1Identifier))
 		grant.Id = tempRoleAssignmentId
@@ -142,10 +142,10 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, pt
 
 	nextPage, err := bag.NextToken(roleAssignments.NextPageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	return rv, nextPage, nil, nil
+	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
 func roleBuilder(roleService *admin.Service, customerId string, roleProvisioningService *admin.Service) *roleResourceType {
@@ -244,8 +244,8 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 	annos := &v2.V1Identifier{
 		Id: tempRoleId,
 	}
-	traitOpts := []sdkResource.RoleTraitOption{sdkResource.WithRoleProfile(roleProfile(ctx, role))}
-	roleResource, err := sdkResource.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, traitOpts, sdkResource.WithAnnotation(annos))
+	traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(ctx, role))}
+	roleResource, err := rs.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
 	if err != nil {
 		return nil, nil, err
 	}
