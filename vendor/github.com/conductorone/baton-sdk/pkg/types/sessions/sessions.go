@@ -13,8 +13,7 @@ type SessionStore interface {
 	SetMany(ctx context.Context, values map[string][]byte, opt ...SessionStoreOption) error
 	Delete(ctx context.Context, key string, opt ...SessionStoreOption) error
 	Clear(ctx context.Context, opt ...SessionStoreOption) error
-	GetAll(ctx context.Context, opt ...SessionStoreOption) (map[string][]byte, error)
-	Close(ctx context.Context) error
+	GetAll(ctx context.Context, pageToken string, opt ...SessionStoreOption) (map[string][]byte, string, error)
 }
 
 type SessionStoreOption func(ctx context.Context, bag *SessionStoreBag) error
@@ -24,8 +23,9 @@ type SessionStoreConstructor func(ctx context.Context, opt ...SessionStoreConstr
 type SessionStoreConstructorOption func(ctx context.Context) (context.Context, error)
 
 type SessionStoreBag struct {
-	SyncID string
-	Prefix string
+	SyncID    string
+	Prefix    string
+	PageToken string
 }
 
 // SyncIDKey is the context key for storing the current sync ID.
@@ -39,6 +39,13 @@ func WithSyncID(syncID string) SessionStoreOption {
 	}
 }
 
+func WithPrefix(prefix string) SessionStoreOption {
+	return func(ctx context.Context, bag *SessionStoreBag) error {
+		bag.Prefix = prefix
+		return nil
+	}
+}
+
 // GetSyncID retrieves the sync ID from the context, returning empty string if not found.
 func GetSyncID(ctx context.Context) string {
 	if syncID, ok := ctx.Value(SyncIDKey{}).(string); ok {
@@ -47,6 +54,17 @@ func GetSyncID(ctx context.Context) string {
 	return ""
 }
 
+func WithPageToken(pageToken string) SessionStoreOption {
+	return func(ctx context.Context, bag *SessionStoreBag) error {
+		bag.PageToken = pageToken
+		return nil
+	}
+}
+
 func SetSyncIDInContext(ctx context.Context, syncID string) context.Context {
 	return context.WithValue(ctx, SyncIDKey{}, syncID)
+}
+
+type SetSessionStore interface {
+	SetSessionStore(ctx context.Context, store SessionStore)
 }
