@@ -2395,7 +2395,8 @@ const file_c1_config_v1_config_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1b\n" +
 	"\thelp_text\x18\x03 \x01(\tR\bhelpText\x12\x16\n" +
-	"\x06fields\x18\x04 \x03(\tR\x06fields\"\xab\x04\n" +
+	"\x06fields\x18\x04 \x03(\tR\x06fields\x12\x18\n" +
+	"\adefault\x18\x05 \x01(\bR\adefault\"\xf1\x06\n" +
 	"\x05Field\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
@@ -2410,8 +2411,36 @@ const file_c1_config_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"bool_field\x18f \x01(\v2\x17.c1.config.v1.BoolFieldH\x00R\tboolField\x12N\n" +
 	"\x12string_slice_field\x18g \x01(\v2\x1e.c1.config.v1.StringSliceFieldH\x00R\x10stringSliceField\x12H\n" +
-	"\x10string_map_field\x18h \x01(\v2\x1c.c1.config.v1.StringMapFieldH\x00R\x0estringMapFieldB\a\n" +
-	"\x05field\"n\n" +
+	"\x10string_map_field\x18h \x01(\v2\x1c.c1.config.v1.StringMapFieldH\x00R\x0estringMapField\x12K\n" +
+	"\x11resource_id_field\x18i \x01(\v2\x1d.c1.config.v1.ResourceIdFieldH\x00R\x0fresourceIdField\x12[\n" +
+	"\x17resource_id_slice_field\x18j \x01(\v2\".c1.config.v1.ResourceIdSliceFieldH\x00R\x14resourceIdSliceField\x12D\n" +
+	"\x0eresource_field\x18k \x01(\v2\x1b.c1.config.v1.ResourceFieldH\x00R\rresourceField\x12T\n" +
+	"\x14resource_slice_field\x18l \x01(\v2 .c1.config.v1.ResourceSliceFieldH\x00R\x12resourceSliceFieldB\a\n" +
+	"\x05field\"\x8a\x02\n" +
+	"\bResource\x129\n" +
+	"\vresource_id\x18\x01 \x01(\v2\x18.c1.config.v1.ResourceIdR\n" +
+	"resourceId\x12F\n" +
+	"\x12parent_resource_id\x18\x02 \x01(\v2\x18.c1.config.v1.ResourceIdR\x10parentResourceId\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x126\n" +
+	"\vannotations\x18\x05 \x03(\v2\x14.google.protobuf.AnyR\vannotations\"W\n" +
+	"\n" +
+	"ResourceId\x12(\n" +
+	"\x10resource_type_id\x18\x01 \x01(\tR\x0eresourceTypeId\x12\x1f\n" +
+	"\vresource_id\x18\x02 \x01(\tR\n" +
+	"resourceId\"L\n" +
+	"\rResourceField\x12;\n" +
+	"\rdefault_value\x18\x01 \x01(\v2\x16.c1.config.v1.ResourceR\fdefaultValue\"Q\n" +
+	"\x12ResourceSliceField\x12;\n" +
+	"\rdefault_value\x18\x01 \x03(\v2\x16.c1.config.v1.ResourceR\fdefaultValue\"\x94\x01\n" +
+	"\x0fResourceIdField\x12=\n" +
+	"\rdefault_value\x18\x01 \x01(\v2\x18.c1.config.v1.ResourceIdR\fdefaultValue\x128\n" +
+	"\x05rules\x18\x03 \x01(\v2\x1d.c1.config.v1.ResourceIDRulesH\x00R\x05rules\x88\x01\x01B\b\n" +
+	"\x06_rules\"\xa6\x01\n" +
+	"\x14ResourceIdSliceField\x12B\n" +
+	"\rdefault_value\x18\x01 \x03(\v2\x1d.c1.config.v1.ResourceIdFieldR\fdefaultValue\x12@\n" +
+	"\x05rules\x18\x02 \x01(\v2%.c1.config.v1.RepeatedResourceIdRulesH\x00R\x05rules\x88\x01\x01B\b\n" +
+	"\x06_rules\"n\n" +
 	"\bIntField\x12#\n" +
 	"\rdefault_value\x18\x01 \x01(\x03R\fdefaultValue\x123\n" +
 	"\x05rules\x18\x02 \x01(\v2\x18.c1.config.v1.Int64RulesH\x00R\x05rules\x88\x01\x01B\b\n" +
