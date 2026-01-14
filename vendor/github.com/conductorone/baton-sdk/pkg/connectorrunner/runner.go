@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/conductorone/baton-sdk/pkg/bid"
 	"github.com/conductorone/baton-sdk/pkg/synccompactor"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -19,6 +20,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	v1 "github.com/conductorone/baton-sdk/pb/c1/connectorapi/baton/v1"
 	ratelimitV1 "github.com/conductorone/baton-sdk/pb/c1/ratelimit/v1"
 	"github.com/conductorone/baton-sdk/pkg/tasks"
@@ -278,14 +280,20 @@ type revokeConfig struct {
 }
 
 type createAccountConfig struct {
-	login   string
-	email   string
-	profile *structpb.Struct
+	login          string
+	email          string
+	profile        *structpb.Struct
+	resourceTypeID string // Optional: if set, creates an account for the specified resource type.
 }
 
 type invokeActionConfig struct {
-	action string
-	args   *structpb.Struct
+	action         string
+	resourceTypeID string // Optional: if set, invokes a resource-scoped action
+	args           *structpb.Struct
+}
+
+type listActionSchemasConfig struct {
+	resourceTypeID string // Optional: filter by resource type
 }
 
 type deleteResourceConfig struct {
@@ -332,6 +340,7 @@ type runnerConfig struct {
 	tempDir                             string
 	createAccountConfig                 *createAccountConfig
 	invokeActionConfig                  *invokeActionConfig
+	listActionSchemasConfig             *listActionSchemasConfig
 	deleteResourceConfig                *deleteResourceConfig
 	rotateCredentialsConfig             *rotateCredentialsConfig
 	createTicketConfig                  *createTicketConfig
@@ -462,26 +471,43 @@ func WithOnDemandRevoke(c1zPath string, grantID string) Option {
 	}
 }
 
-func WithOnDemandCreateAccount(c1zPath string, login string, email string, profile *structpb.Struct) Option {
+func WithOnDemandCreateAccount(c1zPath string, login string, email string, profile *structpb.Struct, resourceTypeId string) Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.onDemand = true
 		cfg.c1zPath = c1zPath
 		cfg.createAccountConfig = &createAccountConfig{
-			login:   login,
-			email:   email,
-			profile: profile,
+			login:          login,
+			email:          email,
+			profile:        profile,
+			resourceTypeID: resourceTypeId,
 		}
 		return nil
 	}
 }
 
-func WithOnDemandInvokeAction(c1zPath string, action string, args *structpb.Struct) Option {
+// WithOnDemandInvokeAction creates an option for invoking an action.
+// If resourceTypeID is provided, it invokes a resource-scoped action.
+func WithOnDemandInvokeAction(c1zPath string, action string, resourceTypeID string, args *structpb.Struct) Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.onDemand = true
 		cfg.c1zPath = c1zPath
 		cfg.invokeActionConfig = &invokeActionConfig{
-			action: action,
-			args:   args,
+			action:         action,
+			resourceTypeID: resourceTypeID,
+			args:           args,
+		}
+		return nil
+	}
+}
+
+// WithOnDemandListActionSchemas creates an option for listing action schemas.
+// If resourceTypeID is provided, it filters schemas for that specific resource type.
+func WithOnDemandListActionSchemas(c1zPath string, resourceTypeID string) Option {
+	return func(ctx context.Context, cfg *runnerConfig) error {
+		cfg.onDemand = true
+		cfg.c1zPath = c1zPath
+		cfg.listActionSchemasConfig = &listActionSchemasConfig{
+			resourceTypeID: resourceTypeID,
 		}
 		return nil
 	}
@@ -552,7 +578,7 @@ func WithFullSyncDisabled() Option {
 	}
 }
 
-func WithTargetedSyncResourceIDs(resourceIDs []string) Option {
+func WithTargetedSyncResources(resourceIDs []string) Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.targetedSyncResourceIDs = resourceIDs
 		return nil
@@ -720,7 +746,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 	}
 
 	if len(cfg.targetedSyncResourceIDs) > 0 {
-		wrapperOpts = append(wrapperOpts, connector.WithTargetedSyncResourceIDs(cfg.targetedSyncResourceIDs))
+		wrapperOpts = append(wrapperOpts, connector.WithTargetedSyncResources(cfg.targetedSyncResourceIDs))
 	}
 
 	if cfg.sessionStoreEnabled {
@@ -736,10 +762,25 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 		return nil, err
 	}
 
+	resources := make([]*v2.Resource, 0, len(cfg.targetedSyncResourceIDs))
+	for _, resourceId := range cfg.targetedSyncResourceIDs {
+		r, err := bid.ParseResourceBid(resourceId)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, r)
+	}
+
 	runner.cw = cw
 
 	if cfg.onDemand {
-		if cfg.c1zPath == "" && cfg.eventFeedConfig == nil && cfg.createTicketConfig == nil && cfg.listTicketSchemasConfig == nil && cfg.getTicketConfig == nil && cfg.bulkCreateTicketConfig == nil {
+		if cfg.c1zPath == "" &&
+			cfg.eventFeedConfig == nil &&
+			cfg.createTicketConfig == nil &&
+			cfg.listTicketSchemasConfig == nil &&
+			cfg.getTicketConfig == nil &&
+			cfg.bulkCreateTicketConfig == nil &&
+			cfg.listActionSchemasConfig == nil {
 			return nil, errors.New("c1zPath must be set when in on-demand mode")
 		}
 
@@ -758,10 +799,13 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 			tm = local.NewRevoker(ctx, cfg.c1zPath, cfg.revokeConfig.grantID)
 
 		case cfg.createAccountConfig != nil:
-			tm = local.NewCreateAccountManager(ctx, cfg.c1zPath, cfg.createAccountConfig.login, cfg.createAccountConfig.email, cfg.createAccountConfig.profile)
+			tm = local.NewCreateAccountManager(ctx, cfg.c1zPath, cfg.createAccountConfig.login, cfg.createAccountConfig.email, cfg.createAccountConfig.profile, cfg.createAccountConfig.resourceTypeID)
 
 		case cfg.invokeActionConfig != nil:
-			tm = local.NewActionInvoker(ctx, cfg.c1zPath, cfg.invokeActionConfig.action, cfg.invokeActionConfig.args)
+			tm = local.NewActionInvoker(ctx, cfg.c1zPath, cfg.invokeActionConfig.action, cfg.invokeActionConfig.resourceTypeID, cfg.invokeActionConfig.args)
+
+		case cfg.listActionSchemasConfig != nil:
+			tm = local.NewListActionSchemas(ctx, cfg.listActionSchemasConfig.resourceTypeID)
 
 		case cfg.deleteResourceConfig != nil:
 			tm = local.NewResourceDeleter(ctx, cfg.c1zPath, cfg.deleteResourceConfig.resourceId, cfg.deleteResourceConfig.resourceType)
@@ -799,7 +843,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 				local.WithTmpDir(cfg.tempDir),
 				local.WithExternalResourceC1Z(cfg.externalResourceC1Z),
 				local.WithExternalResourceEntitlementIdFilter(cfg.externalResourceEntitlementIdFilter),
-				local.WithTargetedSyncResourceIDs(cfg.targetedSyncResourceIDs),
+				local.WithTargetedSyncResources(resources),
 				local.WithSkipEntitlementsAndGrants(cfg.skipEntitlementsAndGrants),
 				local.WithSkipGrants(cfg.skipGrants),
 				local.WithSyncResourceTypeIDs(cfg.syncResourceTypeIDs),
@@ -822,7 +866,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 		cfg.skipFullSync,
 		cfg.externalResourceC1Z,
 		cfg.externalResourceEntitlementIdFilter,
-		cfg.targetedSyncResourceIDs,
+		resources,
 		cfg.syncResourceTypeIDs,
 	)
 	if err != nil {

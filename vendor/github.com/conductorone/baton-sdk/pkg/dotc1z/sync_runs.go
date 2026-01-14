@@ -95,6 +95,42 @@ type syncRun struct {
 	ParentSyncID string
 }
 
+// getCachedViewSyncRun returns the cached sync run for read operations.
+// This avoids N+1 queries when paginating through listConnectorObjects.
+// The cache is invalidated when a sync starts or ends.
+func (c *C1File) getCachedViewSyncRun(ctx context.Context) (*syncRun, error) {
+	ctx, span := tracer.Start(ctx, "C1File.getCachedViewSyncRun")
+	defer span.End()
+
+	c.cachedViewSyncMu.Lock()
+	defer c.cachedViewSyncMu.Unlock()
+
+	if c.cachedViewSyncRun != nil || c.cachedViewSyncErr != nil {
+		return c.cachedViewSyncRun, c.cachedViewSyncErr
+	}
+
+	// First try to get a finished full sync
+	c.cachedViewSyncRun, c.cachedViewSyncErr = c.getFinishedSync(ctx, 0, connectorstore.SyncTypeFull)
+	if c.cachedViewSyncErr != nil {
+		return c.cachedViewSyncRun, c.cachedViewSyncErr
+	}
+
+	// If no finished sync, try to get an unfinished one
+	if c.cachedViewSyncRun == nil {
+		c.cachedViewSyncRun, c.cachedViewSyncErr = c.getLatestUnfinishedSync(ctx, connectorstore.SyncTypeAny)
+	}
+
+	return c.cachedViewSyncRun, c.cachedViewSyncErr
+}
+
+// invalidateCachedViewSyncRun clears the cached sync run so it will be recomputed on next access.
+func (c *C1File) invalidateCachedViewSyncRun() {
+	c.cachedViewSyncMu.Lock()
+	defer c.cachedViewSyncMu.Unlock()
+	c.cachedViewSyncRun = nil
+	c.cachedViewSyncErr = nil
+}
+
 func (c *C1File) getLatestUnfinishedSync(ctx context.Context, syncType connectorstore.SyncType) (*syncRun, error) {
 	ctx, span := tracer.Start(ctx, "C1File.getLatestUnfinishedSync")
 	defer span.End()
@@ -359,6 +395,10 @@ func (c *C1File) CheckpointSync(ctx context.Context, syncToken string) error {
 	ctx, span := tracer.Start(ctx, "C1File.CheckpointSync")
 	defer span.End()
 
+	if c.readOnly {
+		return ErrReadOnly
+	}
+
 	err := c.validateSyncDb(ctx)
 	if err != nil {
 		return err
@@ -468,6 +508,12 @@ func (c *C1File) StartOrResumeSync(ctx context.Context, syncType connectorstore.
 	return c.currentSyncID, true, nil
 }
 
+// SetSyncID sets the current sync ID. This is only intended for testing.
+func (c *C1File) SetSyncID(_ context.Context, syncID string) error {
+	c.currentSyncID = syncID
+	return nil
+}
+
 func (c *C1File) StartNewSync(ctx context.Context, syncType connectorstore.SyncType, parentSyncID string) (string, error) {
 	ctx, span := tracer.Start(ctx, "C1File.StartNewSync")
 	defer span.End()
@@ -506,11 +552,16 @@ func (c *C1File) StartNewSync(ctx context.Context, syncType connectorstore.SyncT
 	}
 
 	c.currentSyncID = syncID
+	c.invalidateCachedViewSyncRun()
 
 	return c.currentSyncID, nil
 }
 
 func (c *C1File) insertSyncRun(ctx context.Context, syncID string, syncType connectorstore.SyncType, parentSyncID string) error {
+	if c.readOnly {
+		return ErrReadOnly
+	}
+
 	q := c.db.Insert(syncRuns.Name())
 	q = q.Rows(goqu.Record{
 		"sync_id":        syncID,
@@ -560,6 +611,7 @@ func (c *C1File) EndSync(ctx context.Context) error {
 	}
 
 	c.currentSyncID = ""
+	c.invalidateCachedViewSyncRun()
 
 	return nil
 }
@@ -672,10 +724,12 @@ func (c *C1File) Cleanup(ctx context.Context) error {
 		}
 	}
 
+	l.Debug("vacuuming database")
 	err = c.Vacuum(ctx)
 	if err != nil {
 		return err
 	}
+	l.Debug("vacuum complete")
 
 	c.dbUpdated = true
 
