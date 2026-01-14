@@ -665,37 +665,33 @@ func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.Eve
 	}
 }
 
-func (c *GoogleWorkspace) RegisterActionManager(ctx context.Context) (connectorbuilder.CustomActionManager, error) {
+func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
 	l := ctxzap.Extract(ctx)
 
-	actionManager := actions.NewActionManager(ctx)
-	err := actionManager.RegisterAction(ctx, "update_user_status", updateUserStatusActionSchema, c.updateUserStatus)
-	if err != nil {
+	if err := registry.Register(ctx, updateUserStatusActionSchema, c.updateUserStatus); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return nil, err
+		return err
+	}
+	if err := registry.Register(ctx, transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, disableUserActionSchema, c.disableUserActionHandler); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, enableUserActionSchema, c.enableUserActionHandler); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
 	}
 
-	// Register additional actions
-	if err := actionManager.RegisterAction(ctx, transferUserDriveFilesActionSchema.Name, transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return nil, err
-	}
-	if err := actionManager.RegisterAction(ctx, changeUserPrimaryEmailActionSchema.Name, changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return nil, err
-	}
-	if err := actionManager.RegisterAction(ctx, disableUserActionSchema.Name, disableUserActionSchema, c.disableUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return nil, err
-	}
-	if err := actionManager.RegisterAction(ctx, enableUserActionSchema.Name, enableUserActionSchema, c.enableUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return nil, err
-	}
-	if err := actionManager.RegisterAction(ctx, transferUserCalendarActionSchema.Name, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return nil, err
-	}
-
-	return actionManager, nil
+	return nil
 }
