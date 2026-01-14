@@ -49,6 +49,12 @@ var (
 		WithHidden(true),
 		WithDescription("JSON-formatted object of map keys and values like '{ 'key': 'value' }'"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
+	createAccountResourceTypeField = StringField("create-account-resource-type",
+		WithHidden(true),
+		WithDescription("The resource type ID of the account to create"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
 	deleteResourceField     = StringField("delete-resource", WithHidden(true), WithDescription("The id of the resource to delete"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	deleteResourceTypeField = StringField("delete-resource-type", WithHidden(true), WithDescription("The type of the resource to delete"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	eventFeedField          = StringField("event-feed", WithHidden(true), WithDescription("Read feed events to stdout"), WithPersistent(true), WithExportTarget(ExportTargetNone))
@@ -109,6 +115,7 @@ var (
 		WithExportTarget(ExportTargetNone),
 		WithHidden(true),
 	)
+
 	syncResourceTypeIDs = StringSliceField("sync-resource-types",
 		WithDescription("The resource type IDs to sync"),
 		WithPersistent(true),
@@ -165,6 +172,52 @@ var (
 		WithExportTarget(ExportTargetNone),
 	)
 	invokeActionArgsField = StringField("invoke-action-args",
+		WithHidden(true),
+		WithDescription("JSON-formatted object of map keys and values like '{ 'key': 'value' }'"),
+		WithDefaultValue("{}"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	invokeActionResourceTypeField = StringField("invoke-action-resource-type",
+		WithHidden(true),
+		WithDescription("The resource type ID for resource-scoped actions"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+
+	listActionSchemasField = BoolField("list-action-schemas",
+		WithHidden(true),
+		WithDescription("List available action schemas"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	listActionSchemasResourceTypeField = StringField("list-action-schemas-resource-type",
+		WithHidden(true),
+		WithDescription("Filter action schemas by resource type ID"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+
+	listResourceActionsField = StringField("list-resource-actions",
+		WithDescription("The resource type ID to list actions for"),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+
+	invokeResourceActionField = StringField("invoke-resource-action",
+		WithDescription("The name of the action to invoke"),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	invokeResourceActionTypeField = StringField("invoke-resource-action-resource-type",
+		WithDescription("The resource type of the action to invoke"),
+		WithHidden(true),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+	invokeResourceActionArgsField = StringField("invoke-resource-action-args",
 		WithHidden(true),
 		WithDescription("JSON-formatted object of map keys and values like '{ 'key': 'value' }'"),
 		WithDefaultValue("{}"),
@@ -268,6 +321,7 @@ var DefaultFields = []SchemaField{
 	createAccountEmailField,
 	createAccountLoginField,
 	createAccountProfileField,
+	createAccountResourceTypeField,
 	deleteResourceField,
 	deleteResourceTypeField,
 	eventFeedField,
@@ -302,6 +356,13 @@ var DefaultFields = []SchemaField{
 	compactSyncsField,
 	invokeActionField,
 	invokeActionArgsField,
+	invokeActionResourceTypeField,
+	listActionSchemasField,
+	listActionSchemasResourceTypeField,
+	listResourceActionsField,
+	invokeResourceActionField,
+	invokeResourceActionTypeField,
+	invokeResourceActionArgsField,
 	ServerSessionStoreMaximumSizeField,
 
 	otelCollectorEndpoint,

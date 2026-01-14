@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -235,6 +234,7 @@ func MakeMainCommand[T field.Configurable](
 						login,
 						email,
 						profile,
+						v.GetString("create-account-resource-type"),
 					))
 			case v.GetString("create-account-login") != "":
 				// should only be here if no create-account-profile is provided, so lets make one.
@@ -252,6 +252,7 @@ func MakeMainCommand[T field.Configurable](
 						v.GetString("create-account-login"),
 						v.GetString("create-account-email"),
 						profile,
+						v.GetString("create-account-resource-type"),
 					))
 			case v.GetString("invoke-action") != "":
 				invokeActionArgsStr := v.GetString("invoke-action-args")
@@ -271,7 +272,15 @@ func MakeMainCommand[T field.Configurable](
 					connectorrunner.WithOnDemandInvokeAction(
 						v.GetString("file"),
 						v.GetString("invoke-action"),
+						v.GetString("invoke-action-resource-type"), // Optional resource type for resource-scoped actions
 						invokeActionArgsStruct,
+					))
+			case v.GetBool("list-action-schemas"):
+				opts = append(opts,
+					connectorrunner.WithActionsEnabled(),
+					connectorrunner.WithOnDemandListActionSchemas(
+						v.GetString("file"),
+						v.GetString("list-action-schemas-resource-type"), // Optional resource type filter
 					))
 			case v.GetString("delete-resource") != "":
 				opts = append(opts,
@@ -324,7 +333,7 @@ func MakeMainCommand[T field.Configurable](
 			default:
 				if len(v.GetStringSlice("sync-resources")) > 0 {
 					opts = append(opts,
-						connectorrunner.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")))
+						connectorrunner.WithTargetedSyncResources(v.GetStringSlice("sync-resources")))
 				}
 				if len(v.GetStringSlice("sync-resource-types")) > 0 {
 					opts = append(opts,
@@ -357,6 +366,7 @@ func MakeMainCommand[T field.Configurable](
 		}
 
 		opts = append(opts, connectorrunner.WithSkipEntitlementsAndGrants(v.GetBool("skip-entitlements-and-grants")))
+
 		if v.GetBool("skip-grants") {
 			opts = append(opts, connectorrunner.WithSkipGrants(v.GetBool("skip-grants")))
 		}
@@ -550,7 +560,7 @@ func MakeGRPCServerCommand[T field.Configurable](
 		}
 
 		if len(v.GetStringSlice("sync-resources")) > 0 {
-			copts = append(copts, connector.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")))
+			copts = append(copts, connector.WithTargetedSyncResources(v.GetStringSlice("sync-resources")))
 		}
 
 		if len(v.GetStringSlice("sync-resource-types")) > 0 {
@@ -674,11 +684,6 @@ func MakeConfigSchemaCommand[T field.Configurable](
 	getconnector GetConnectorFunc2[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		// Sort fields by FieldName
-		sort.Slice(confschema.Fields, func(i, j int) bool {
-			return confschema.Fields[i].FieldName < confschema.Fields[j].FieldName
-		})
-
 		// Use MarshalIndent for pretty printing
 		pb, err := json.MarshalIndent(&confschema, "", "  ")
 		if err != nil {
