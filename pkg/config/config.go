@@ -44,6 +44,7 @@ var (
 		"credentials-json",
 		field.WithDisplayName("Credentials JSON"),
 		field.WithDescription("JSON credentials for the Google Workspace account. Mutually exclusive with file path"),
+		field.WithExportTarget(field.ExportTargetCLIOnly),
 		field.WithIsSecret(true),
 	)
 
