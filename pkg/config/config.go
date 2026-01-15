@@ -31,10 +31,12 @@ var (
 	)
 
 	// CredentialsJSONFilePathField defines the path to JSON credentials file.
-	CredentialsJSONFilePathField = field.StringField(
+	CredentialsJSONFilePathField = field.FileUploadField(
 		"credentials-json-file-path",
-		field.WithDisplayName("Credentials JSON File Path"),
-		field.WithDescription("JSON credentials file name for the Google Workspace account. Mutually exclusive with credentials JSON"),
+		[]string{".json"},
+		field.WithDisplayName("Credentials JSON file"),
+		field.WithDescription("JSON credentials file or file path for the Google Workspace account. Mutually exclusive with credentials JSON"),
+		field.WithIsSecret(true),
 	)
 
 	// CredentialsJSONField defines the JSON credentials as a string.
@@ -44,6 +46,14 @@ var (
 		field.WithDescription("JSON credentials for the Google Workspace account. Mutually exclusive with file path"),
 		field.WithIsSecret(true),
 	)
+
+	// Field relationships define constraints between fields.
+	fieldRelationships = []field.SchemaFieldRelationship{
+		field.FieldsMutuallyExclusive(
+			CredentialsJSONFilePathField,
+			CredentialsJSONField,
+		),
+	}
 
 	// ConfigurationFields is the collection of all configuration fields.
 	ConfigurationFields = []field.SchemaField{
@@ -57,6 +67,7 @@ var (
 	// Configuration combines fields into a single configuration object with connector metadata.
 	Configuration = field.NewConfiguration(
 		ConfigurationFields,
+		field.WithConstraints(fieldRelationships...),
 		field.WithConnectorDisplayName("Google Workspace"),
 		field.WithIconUrl("/static/app-icons/google-workspace.svg"),
 		field.WithHelpUrl("/docs/baton/google-workspace"),
