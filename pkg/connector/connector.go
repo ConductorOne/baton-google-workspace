@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -356,16 +355,11 @@ func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope stri
 // New creates a new Google Workspace connector with the V2 interface.
 func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOpts) (connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error) {
 	var credentialBytes []byte
-	var err error
-
 	switch {
 	case config.CredentialsJson != "":
 		credentialBytes = []byte(config.CredentialsJson)
-	case config.CredentialsJsonFilePath != "":
-		credentialBytes, err = os.ReadFile(config.CredentialsJsonFilePath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to read credentials file: %w", err)
-		}
+	case len(config.CredentialsJsonFilePath) > 0:
+		credentialBytes = config.CredentialsJsonFilePath
 	default:
 		return nil, nil, fmt.Errorf("credentials-json or credentials-json-file-path is required")
 	}

@@ -7,7 +7,7 @@ type GoogleWorkspace struct {
 	CustomerId string `mapstructure:"customer-id"`
 	Domain string `mapstructure:"domain"`
 	AdministratorEmail string `mapstructure:"administrator-email"`
-	CredentialsJsonFilePath string `mapstructure:"credentials-json-file-path"`
+	CredentialsJsonFilePath []byte `mapstructure:"credentials-json-file-path"`
 	CredentialsJson string `mapstructure:"credentials-json"`
 }
 
