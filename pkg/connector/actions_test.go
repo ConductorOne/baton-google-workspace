@@ -19,6 +19,7 @@ import (
 type testUser struct {
 	Suspended    bool
 	PrimaryEmail string
+	OrgUnitPath  string
 }
 
 type transferRecord struct {
@@ -56,6 +57,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 			resp := &directoryAdmin.User{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
+				OrgUnitPath:  u.OrgUnitPath,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
@@ -71,11 +73,15 @@ func newTestServer(state *testServerState) *httptest.Server {
 			if body.PrimaryEmail != "" {
 				u.PrimaryEmail = body.PrimaryEmail
 			}
+			if body.OrgUnitPath != "" {
+				u.OrgUnitPath = body.OrgUnitPath
+			}
 			// Suspended is bool; accept as-is
 			u.Suspended = body.Suspended
 			resp := &directoryAdmin.User{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
+				OrgUnitPath:  u.OrgUnitPath,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		default:
@@ -357,5 +363,230 @@ func TestTransferCalendar_ReleaseResources(t *testing.T) {
 	}
 	if state.postCount != 1 {
 		t.Fatalf("expected 1 POST, got %d", state.postCount)
+	}
+}
+
+func TestMoveUserToOrgUnit_Success(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", OrgUnitPath: "/Engineering"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
+	}}
+	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	if err != nil {
+		t.Fatalf("moveUserToOrgUnit: %v", err)
+	}
+	if state.users["alice"].OrgUnitPath != "/Sales" {
+		t.Fatalf("expected org unit path updated to /Sales, got %s", state.users["alice"].OrgUnitPath)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if resp.GetFields()["previous_org_unit_path"].GetStringValue() != "/Engineering" {
+		t.Fatalf("expected previous_org_unit_path=/Engineering in response")
+	}
+	if resp.GetFields()["new_org_unit_path"].GetStringValue() != "/Sales" {
+		t.Fatalf("expected new_org_unit_path=/Sales in response")
+	}
+}
+
+func TestMoveUserToOrgUnit_Idempotent(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"bob": {Suspended: false, PrimaryEmail: "bob@example.com", OrgUnitPath: "/Sales"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
+	}}
+
+	// First call - user already at target org unit
+	prevPut := state.putCount
+	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	if err != nil {
+		t.Fatalf("moveUserToOrgUnit: %v", err)
+	}
+	if state.putCount != prevPut {
+		t.Fatalf("expected no PUT on idempotent move, got %d vs %d", state.putCount, prevPut)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if resp.GetFields()["previous_org_unit_path"].GetStringValue() != "/Sales" {
+		t.Fatalf("expected previous_org_unit_path=/Sales in response")
+	}
+	if resp.GetFields()["new_org_unit_path"].GetStringValue() != "/Sales" {
+		t.Fatalf("expected new_org_unit_path=/Sales in response")
+	}
+}
+
+func TestMoveUserToOrgUnit_RootOrgUnit(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"charlie": {Suspended: false, PrimaryEmail: "charlie@example.com", OrgUnitPath: "/Engineering"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Move user to root "/"
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "charlie"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/"}},
+	}}
+	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	if err != nil {
+		t.Fatalf("moveUserToOrgUnit: %v", err)
+	}
+	if state.users["charlie"].OrgUnitPath != "/" {
+		t.Fatalf("expected org unit path updated to /, got %s", state.users["charlie"].OrgUnitPath)
+	}
+	if resp.GetFields()["previous_org_unit_path"].GetStringValue() != "/Engineering" {
+		t.Fatalf("expected previous_org_unit_path=/Engineering in response")
+	}
+	if resp.GetFields()["new_org_unit_path"].GetStringValue() != "/" {
+		t.Fatalf("expected new_org_unit_path=/ in response")
+	}
+}
+
+func TestMoveUserToOrgUnit_EmptyOrgUnitPathTreatedAsRoot(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"david": {Suspended: false, PrimaryEmail: "david@example.com", OrgUnitPath: ""},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// User's current OrgUnitPath is empty (root), try to move to explicit "/"
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "david"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/"}},
+	}}
+
+	prevPut := state.putCount
+	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	if err != nil {
+		t.Fatalf("moveUserToOrgUnit: %v", err)
+	}
+	// Should be idempotent - empty string is treated as "/"
+	if state.putCount != prevPut {
+		t.Fatalf("expected no PUT when moving from empty (root) to / (root)")
+	}
+	if resp.GetFields()["previous_org_unit_path"].GetStringValue() != "/" {
+		t.Fatalf("expected previous_org_unit_path=/ in response (empty treated as root)")
+	}
+}
+
+func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", OrgUnitPath: "/Engineering"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Missing user_id
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
+	}}
+	_, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_id")
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+
+	// Missing org_unit_path
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+	}}
+	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing org_unit_path")
+	}
+	if !strings.Contains(err.Error(), "missing org_unit_path") {
+		t.Fatalf("expected error message to contain 'missing org_unit_path', got: %v", err)
+	}
+
+	// Empty user_id after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
+	}}
+	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty user_id")
+	}
+	if !strings.Contains(err.Error(), "user_id must be non-empty") {
+		t.Fatalf("expected error message to contain 'user_id must be non-empty', got: %v", err)
+	}
+
+	// Empty org_unit_path after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+	}}
+	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty org_unit_path")
+	}
+	if !strings.Contains(err.Error(), "org_unit_path must be non-empty") {
+		t.Fatalf("expected error message to contain 'org_unit_path must be non-empty', got: %v", err)
+	}
+
+	// org_unit_path without leading "/"
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "Sales"}},
+	}}
+	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for org_unit_path without leading /")
+	}
+	if !strings.Contains(err.Error(), "org_unit_path must start with '/'") {
+		t.Fatalf("expected error message to contain 'org_unit_path must start with '/'', got: %v", err)
+	}
+}
+
+func TestMoveUserToOrgUnit_UserNotFound(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
+	}}
+	_, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for user not found")
 	}
 }
