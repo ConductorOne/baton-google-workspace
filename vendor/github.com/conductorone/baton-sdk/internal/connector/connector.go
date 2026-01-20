@@ -176,13 +176,6 @@ func WithSyncResourceTypeIDs(resourceTypeIDs []string) Option {
 	}
 }
 
-func WithSyncResourceTypeIDs(resourceTypeIDs []string) Option {
-	return func(ctx context.Context, w *wrapper) error {
-		w.syncResourceTypeIDs = resourceTypeIDs
-		return nil
-	}
-}
-
 // NewConnectorWrapper returns a connector wrapper for running connector services locally.
 func NewWrapper(ctx context.Context, server interface{}, opts ...Option) (*wrapper, error) {
 	connectorServer, isServer := server.(types.ConnectorServer)

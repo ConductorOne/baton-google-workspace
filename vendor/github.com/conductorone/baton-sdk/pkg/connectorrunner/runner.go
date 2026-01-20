@@ -757,14 +757,6 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 		wrapperOpts = append(wrapperOpts, connector.WithSyncResourceTypeIDs(cfg.syncResourceTypeIDs))
 	}
 
-	if cfg.sessionStoreEnabled {
-		wrapperOpts = append(wrapperOpts, connector.WithSessionStoreEnabled())
-	}
-
-	if len(cfg.syncResourceTypeIDs) > 0 {
-		wrapperOpts = append(wrapperOpts, connector.WithSyncResourceTypeIDs(cfg.syncResourceTypeIDs))
-	}
-
 	cw, err := connector.NewWrapper(ctx, c, wrapperOpts...)
 	if err != nil {
 		return nil, err
