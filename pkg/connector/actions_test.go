@@ -366,7 +366,7 @@ func TestTransferCalendar_ReleaseResources(t *testing.T) {
 	}
 }
 
-func TestMoveUserToOrgUnit_Success(t *testing.T) {
+func TestMoveAccountToOrgUnit_Success(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{
 		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", OrgUnitPath: "/Engineering"},
 	}}
@@ -381,9 +381,9 @@ func TestMoveUserToOrgUnit_Success(t *testing.T) {
 		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
 	}}
-	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	resp, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err != nil {
-		t.Fatalf("moveUserToOrgUnit: %v", err)
+		t.Fatalf("moveAccountToOrgUnit: %v", err)
 	}
 	if state.users["alice"].OrgUnitPath != "/Sales" {
 		t.Fatalf("expected org unit path updated to /Sales, got %s", state.users["alice"].OrgUnitPath)
@@ -399,7 +399,7 @@ func TestMoveUserToOrgUnit_Success(t *testing.T) {
 	}
 }
 
-func TestMoveUserToOrgUnit_Idempotent(t *testing.T) {
+func TestMoveAccountToOrgUnit_Idempotent(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{
 		"bob": {Suspended: false, PrimaryEmail: "bob@example.com", OrgUnitPath: "/Sales"},
 	}}
@@ -417,9 +417,9 @@ func TestMoveUserToOrgUnit_Idempotent(t *testing.T) {
 
 	// First call - user already at target org unit
 	prevPut := state.putCount
-	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	resp, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err != nil {
-		t.Fatalf("moveUserToOrgUnit: %v", err)
+		t.Fatalf("moveAccountToOrgUnit: %v", err)
 	}
 	if state.putCount != prevPut {
 		t.Fatalf("expected no PUT on idempotent move, got %d vs %d", state.putCount, prevPut)
@@ -435,7 +435,7 @@ func TestMoveUserToOrgUnit_Idempotent(t *testing.T) {
 	}
 }
 
-func TestMoveUserToOrgUnit_RootOrgUnit(t *testing.T) {
+func TestMoveAccountToOrgUnit_RootOrgUnit(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{
 		"charlie": {Suspended: false, PrimaryEmail: "charlie@example.com", OrgUnitPath: "/Engineering"},
 	}}
@@ -451,9 +451,9 @@ func TestMoveUserToOrgUnit_RootOrgUnit(t *testing.T) {
 		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "charlie"}},
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/"}},
 	}}
-	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	resp, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err != nil {
-		t.Fatalf("moveUserToOrgUnit: %v", err)
+		t.Fatalf("moveAccountToOrgUnit: %v", err)
 	}
 	if state.users["charlie"].OrgUnitPath != "/" {
 		t.Fatalf("expected org unit path updated to /, got %s", state.users["charlie"].OrgUnitPath)
@@ -466,7 +466,7 @@ func TestMoveUserToOrgUnit_RootOrgUnit(t *testing.T) {
 	}
 }
 
-func TestMoveUserToOrgUnit_EmptyOrgUnitPathTreatedAsRoot(t *testing.T) {
+func TestMoveAccountToOrgUnit_EmptyOrgUnitPathTreatedAsRoot(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{
 		"david": {Suspended: false, PrimaryEmail: "david@example.com", OrgUnitPath: ""},
 	}}
@@ -484,9 +484,9 @@ func TestMoveUserToOrgUnit_EmptyOrgUnitPathTreatedAsRoot(t *testing.T) {
 	}}
 
 	prevPut := state.putCount
-	resp, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	resp, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err != nil {
-		t.Fatalf("moveUserToOrgUnit: %v", err)
+		t.Fatalf("moveAccountToOrgUnit: %v", err)
 	}
 	// Should be idempotent - empty string is treated as "/"
 	if state.putCount != prevPut {
@@ -497,7 +497,7 @@ func TestMoveUserToOrgUnit_EmptyOrgUnitPathTreatedAsRoot(t *testing.T) {
 	}
 }
 
-func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
+func TestMoveAccountToOrgUnit_ValidationErrors(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{
 		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", OrgUnitPath: "/Engineering"},
 	}}
@@ -512,7 +512,7 @@ func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
 	}}
-	_, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	_, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for missing user_id")
 	}
@@ -524,7 +524,7 @@ func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
 	args = &structpb.Struct{Fields: map[string]*structpb.Value{
 		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 	}}
-	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	_, _, err = c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for missing org_unit_path")
 	}
@@ -537,7 +537,7 @@ func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
 		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "   "}},
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
 	}}
-	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	_, _, err = c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for empty user_id")
 	}
@@ -550,7 +550,7 @@ func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
 		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "   "}},
 	}}
-	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	_, _, err = c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for empty org_unit_path")
 	}
@@ -563,7 +563,7 @@ func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
 		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "Sales"}},
 	}}
-	_, _, err = c.moveUserToOrgUnit(context.Background(), args)
+	_, _, err = c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for org_unit_path without leading /")
 	}
@@ -572,7 +572,7 @@ func TestMoveUserToOrgUnit_ValidationErrors(t *testing.T) {
 	}
 }
 
-func TestMoveUserToOrgUnit_UserNotFound(t *testing.T) {
+func TestMoveAccountToOrgUnit_UserNotFound(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{}}
 	server := newTestServer(state)
 	defer server.Close()
@@ -585,7 +585,7 @@ func TestMoveUserToOrgUnit_UserNotFound(t *testing.T) {
 		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
 		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/Sales"}},
 	}}
-	_, _, err := c.moveUserToOrgUnit(context.Background(), args)
+	_, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for user not found")
 	}

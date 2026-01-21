@@ -267,10 +267,10 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
-	moveUserToOrgUnitActionSchema = &v2.BatonActionSchema{
-		Name:        "move_user_to_org_unit",
-		DisplayName: "Move User to Organizational Unit",
-		Description: "Move a user to a different organizational unit in Google Workspace.",
+	moveAccountToOrgUnitActionSchema = &v2.BatonActionSchema{
+		Name:        "move_account_to_org_unit",
+		DisplayName: "Move Account to Organizational Unit",
+		Description: "Move an account to a different organizational unit in Google Workspace.",
 		Arguments: []*config.Field{
 			{
 				Name:        "user_id",
@@ -291,19 +291,19 @@ var (
 			{
 				Name:        "success",
 				DisplayName: "Success",
-				Description: "Whether the user was moved successfully.",
+				Description: "Whether the account was moved successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
 				Name:        "previous_org_unit_path",
 				DisplayName: "Previous Org Unit Path",
-				Description: "User's previous organizational unit path.",
+				Description: "Account's previous organizational unit path.",
 				Field:       &config.Field_StringField{},
 			},
 			{
 				Name:        "new_org_unit_path",
 				DisplayName: "New Org Unit Path",
-				Description: "User's new organizational unit path.",
+				Description: "Account's new organizational unit path.",
 				Field:       &config.Field_StringField{},
 			},
 		},
@@ -733,7 +733,7 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}
-	if err := registry.Register(ctx, moveUserToOrgUnitActionSchema, c.moveUserToOrgUnit); err != nil {
+	if err := registry.Register(ctx, moveAccountToOrgUnitActionSchema, c.moveAccountToOrgUnit); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}

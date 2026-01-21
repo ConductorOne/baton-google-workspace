@@ -404,8 +404,8 @@ func enhanceUserDirectoryScopeError(err error) error {
 	return err
 }
 
-// moveUserToOrgUnit transfers a user to a different organizational unit (idempotent).
-func (c *GoogleWorkspace) moveUserToOrgUnit(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+// moveAccountToOrgUnit transfers an account to a different organizational unit (idempotent).
+func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	// Extract user_id parameter
 	userIdField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
