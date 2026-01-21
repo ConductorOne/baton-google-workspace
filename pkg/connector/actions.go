@@ -2,7 +2,6 @@ package connector
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
-	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -390,20 +388,6 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	return normalized, nil
 }
 
-// enhanceUserDirectoryScopeError adds helpful context to 401 errors for user directory operations.
-func enhanceUserDirectoryScopeError(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	var gErr *googleapi.Error
-	if errors.As(err, &gErr) && gErr.Code == 401 {
-		return fmt.Errorf("%w\n\nMissing permissions. Please ensure:\n1. The service account has domain-wide delegation configured\n2. The OAuth scope 'https://www.googleapis.com/auth/admin.directory.user' is authorized\n3. The administrator email has necessary permissions in Google Workspace Admin Console\n\nTo configure:\n- Go to Google Workspace Admin Console → Security → API Controls → Domain-wide Delegation\n- Add the service account's Client ID with the scope: https://www.googleapis.com/auth/admin.directory.user", err)
-	}
-
-	return err
-}
-
 // moveAccountToOrgUnit transfers an account to a different organizational unit (idempotent).
 func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	// Extract user_id parameter
@@ -437,13 +421,13 @@ func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *struct
 	// Get Directory service with write scope
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		return nil, nil, enhanceUserDirectoryScopeError(err)
+		return nil, nil, err
 	}
 
 	// Fetch current user state for idempotency check
 	u, err := userService.Users.Get(userId).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, enhanceUserDirectoryScopeError(err)
+		return nil, nil, err
 	}
 
 	previousOrgUnitPath := u.OrgUnitPath
@@ -470,7 +454,7 @@ func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *struct
 		},
 	).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, enhanceUserDirectoryScopeError(err)
+		return nil, nil, err
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
