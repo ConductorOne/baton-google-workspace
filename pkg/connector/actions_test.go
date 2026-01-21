@@ -19,6 +19,7 @@ import (
 type testUser struct {
 	Suspended    bool
 	PrimaryEmail string
+	Archived     bool
 }
 
 type transferRecord struct {
@@ -56,6 +57,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 			resp := &directoryAdmin.User{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
+				Archived:     u.Archived,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
@@ -71,11 +73,13 @@ func newTestServer(state *testServerState) *httptest.Server {
 			if body.PrimaryEmail != "" {
 				u.PrimaryEmail = body.PrimaryEmail
 			}
-			// Suspended is bool; accept as-is
+			// Suspended and Archived are bools; accept as-is
 			u.Suspended = body.Suspended
+			u.Archived = body.Archived
 			resp := &directoryAdmin.User{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
+				Archived:     u.Archived,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		default:
@@ -357,5 +361,124 @@ func TestTransferCalendar_ReleaseResources(t *testing.T) {
 	}
 	if state.postCount != 1 {
 		t.Fatalf("expected 1 POST, got %d", state.postCount)
+	}
+}
+
+func TestArchiveUser_Success(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", Archived: false},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+	}}
+	resp, _, err := c.archiveUser(context.Background(), args)
+	if err != nil {
+		t.Fatalf("archiveUser: %v", err)
+	}
+	if !state.users["alice"].Archived {
+		t.Fatalf("expected alice to be archived")
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if resp.GetFields()["previous_archived_status"].GetBoolValue() {
+		t.Fatalf("expected previous_archived_status=false in response")
+	}
+	if !resp.GetFields()["new_archived_status"].GetBoolValue() {
+		t.Fatalf("expected new_archived_status=true in response")
+	}
+}
+
+func TestArchiveUser_Idempotent(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"bob": {Suspended: false, PrimaryEmail: "bob@example.com", Archived: true},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
+	}}
+
+	// User already archived - should not PUT
+	prevPut := state.putCount
+	resp, _, err := c.archiveUser(context.Background(), args)
+	if err != nil {
+		t.Fatalf("archiveUser: %v", err)
+	}
+	if state.putCount != prevPut {
+		t.Fatalf("expected no PUT on idempotent archive, got %d vs %d", state.putCount, prevPut)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if !resp.GetFields()["previous_archived_status"].GetBoolValue() {
+		t.Fatalf("expected previous_archived_status=true in response")
+	}
+	if !resp.GetFields()["new_archived_status"].GetBoolValue() {
+		t.Fatalf("expected new_archived_status=true in response")
+	}
+}
+
+func TestArchiveUser_ValidationErrors(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", Archived: false},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Missing user_id
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{}}
+	_, _, err := c.archiveUser(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_id")
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+
+	// Empty user_id after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+	}}
+	_, _, err = c.archiveUser(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty user_id")
+	}
+	if !strings.Contains(err.Error(), "user_id must be non-empty") {
+		t.Fatalf("expected error message to contain 'user_id must be non-empty', got: %v", err)
+	}
+}
+
+func TestArchiveUser_UserNotFound(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+	}}
+	_, _, err := c.archiveUser(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for user not found")
 	}
 }

@@ -387,3 +387,62 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	}
 	return normalized, nil
 }
+
+// archiveUser archives a user account using the simple archived=true method (idempotent).
+func (c *GoogleWorkspace) archiveUser(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract user_id parameter
+	userIdField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_id")
+	}
+
+	userId := strings.TrimSpace(userIdField.StringValue)
+
+	// Validate non-empty
+	if userId == "" {
+		return nil, nil, fmt.Errorf("user_id must be non-empty")
+	}
+
+	// Get Directory service with write scope
+	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Fetch current user state for idempotency check
+	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	previousArchivedStatus := u.Archived
+
+	// Check if already archived (idempotency)
+	if previousArchivedStatus {
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success":                  {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"previous_archived_status": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"new_archived_status":      {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		}}
+		return &response, nil, nil
+	}
+
+	// Archive the user
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			Archived:        true,
+			ForceSendFields: []string{"Archived"},
+		},
+	).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":                  {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"previous_archived_status": {Kind: &structpb.Value_BoolValue{BoolValue: false}},
+		"new_archived_status":      {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+	}}
+	return &response, nil, nil
+}

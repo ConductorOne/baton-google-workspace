@@ -267,6 +267,41 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
+	archiveUserActionSchema = &v2.BatonActionSchema{
+		Name:        "archive_user",
+		DisplayName: "Archive User",
+		Description: "Archive a user account in Google Workspace.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User Resource ID",
+				Description: "ID of the user resource to archive.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user was archived successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_archived_status",
+				DisplayName: "Previous Archived Status",
+				Description: "Whether the user was archived before the action.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "new_archived_status",
+				DisplayName: "New Archived Status",
+				Description: "Whether the user is archived after the action.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
 )
 
 type Config struct {
@@ -688,6 +723,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		return err
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, archiveUserActionSchema, c.archiveUser); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}
