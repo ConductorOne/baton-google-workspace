@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,9 +18,10 @@ import (
 )
 
 type testUser struct {
-	Suspended    bool
-	PrimaryEmail string
-	OrgUnitPath  string
+	Suspended     bool
+	PrimaryEmail  string
+	OrgUnitPath   string
+	RecoveryEmail string
 }
 
 type transferRecord struct {
@@ -55,33 +57,49 @@ func newTestServer(state *testServerState) *httptest.Server {
 				return
 			}
 			resp := &directoryAdmin.User{
-				Suspended:    u.Suspended,
-				PrimaryEmail: u.PrimaryEmail,
-				OrgUnitPath:  u.OrgUnitPath,
+				Suspended:     u.Suspended,
+				PrimaryEmail:  u.PrimaryEmail,
+				OrgUnitPath:   u.OrgUnitPath,
+				RecoveryEmail: u.RecoveryEmail,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
 			state.putCount++
+			// Read body as bytes so we can unmarshal twice
+			var bodyBytes []byte
+			if r.Body != nil {
+				bodyBytes, _ = io.ReadAll(r.Body)
+			}
+
+			// Unmarshal to both map (for field detection) and User struct
+			var rawMap map[string]interface{}
 			var body directoryAdmin.User
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.Unmarshal(bodyBytes, &rawMap)
+			_ = json.Unmarshal(bodyBytes, &body)
+
 			u := state.users[userKey]
 			if u == nil {
 				u = &testUser{}
 				state.users[userKey] = u
 			}
-			// Apply incoming fields (ForceSendFields is not needed in test server)
+			// Apply incoming fields
 			if body.PrimaryEmail != "" {
 				u.PrimaryEmail = body.PrimaryEmail
 			}
 			if body.OrgUnitPath != "" {
 				u.OrgUnitPath = body.OrgUnitPath
 			}
+			// RecoveryEmail: Check if field exists in JSON (handles both set and clear)
+			if _, hasRecoveryEmail := rawMap["recoveryEmail"]; hasRecoveryEmail {
+				u.RecoveryEmail = body.RecoveryEmail
+			}
 			// Suspended is bool; accept as-is
 			u.Suspended = body.Suspended
 			resp := &directoryAdmin.User{
-				Suspended:    u.Suspended,
-				PrimaryEmail: u.PrimaryEmail,
-				OrgUnitPath:  u.OrgUnitPath,
+				Suspended:     u.Suspended,
+				PrimaryEmail:  u.PrimaryEmail,
+				OrgUnitPath:   u.OrgUnitPath,
+				RecoveryEmail: u.RecoveryEmail,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		default:
@@ -588,5 +606,193 @@ func TestMoveAccountToOrgUnit_UserNotFound(t *testing.T) {
 	_, _, err := c.moveAccountToOrgUnit(context.Background(), args)
 	if err == nil {
 		t.Fatalf("expected error for user not found")
+	}
+}
+
+func TestUpdateEmergencyEmail_Success(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"alice": {Suspended: false, PrimaryEmail: "alice@example.com", RecoveryEmail: "oldrecovery@example.com"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":         {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: "newrecovery@example.com"}},
+	}}
+	resp, _, err := c.updateEmergencyEmail(context.Background(), args)
+	if err != nil {
+		t.Fatalf("updateEmergencyEmail: %v", err)
+	}
+	if state.users["alice"].RecoveryEmail != "newrecovery@example.com" {
+		t.Fatalf("expected recovery email updated to newrecovery@example.com, got %s", state.users["alice"].RecoveryEmail)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if resp.GetFields()["previous_emergency_email"].GetStringValue() != "oldrecovery@example.com" {
+		t.Fatalf("expected previous_emergency_email=oldrecovery@example.com in response")
+	}
+	if resp.GetFields()["new_emergency_email"].GetStringValue() != "newrecovery@example.com" {
+		t.Fatalf("expected new_emergency_email=newrecovery@example.com in response")
+	}
+}
+
+func TestUpdateEmergencyEmail_Idempotent(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"bob": {Suspended: false, PrimaryEmail: "bob@example.com", RecoveryEmail: "recovery@example.com"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":         {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: "recovery@example.com"}},
+	}}
+
+	// User already has target email - should not PUT
+	prevPut := state.putCount
+	resp, _, err := c.updateEmergencyEmail(context.Background(), args)
+	if err != nil {
+		t.Fatalf("updateEmergencyEmail: %v", err)
+	}
+	if state.putCount != prevPut {
+		t.Fatalf("expected no PUT on idempotent update, got %d vs %d", state.putCount, prevPut)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if resp.GetFields()["previous_emergency_email"].GetStringValue() != "recovery@example.com" {
+		t.Fatalf("expected previous_emergency_email=recovery@example.com in response")
+	}
+	if resp.GetFields()["new_emergency_email"].GetStringValue() != "recovery@example.com" {
+		t.Fatalf("expected new_emergency_email=recovery@example.com in response")
+	}
+}
+
+func TestUpdateEmergencyEmail_ValidationErrors(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"alice": {Suspended: false, PrimaryEmail: "alice@example.com"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Missing user_id
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: "recovery@example.com"}},
+	}}
+	_, _, err := c.updateEmergencyEmail(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_id")
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+
+	// Missing emergency_email
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+	}}
+	_, _, err = c.updateEmergencyEmail(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing emergency_email")
+	}
+	if !strings.Contains(err.Error(), "missing emergency_email") {
+		t.Fatalf("expected error message to contain 'missing emergency_email', got: %v", err)
+	}
+
+	// Empty user_id after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":         {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: "recovery@example.com"}},
+	}}
+	_, _, err = c.updateEmergencyEmail(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty user_id")
+	}
+	if !strings.Contains(err.Error(), "user_id must be non-empty") {
+		t.Fatalf("expected error message to contain 'user_id must be non-empty', got: %v", err)
+	}
+
+	// Invalid email format
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":         {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: "not-an-email"}},
+	}}
+	_, _, err = c.updateEmergencyEmail(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid email format")
+	}
+	if !strings.Contains(err.Error(), "valid email address") {
+		t.Fatalf("expected error message to contain 'valid email address', got: %v", err)
+	}
+}
+
+func TestUpdateEmergencyEmail_UserNotFound(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":         {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: "recovery@example.com"}},
+	}}
+	_, _, err := c.updateEmergencyEmail(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for user not found")
+	}
+}
+
+func TestUpdateEmergencyEmail_ClearEmail(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{
+		"charlie": {Suspended: false, PrimaryEmail: "charlie@example.com", RecoveryEmail: "recovery@example.com"},
+	}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Clear the email by passing empty string
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":         {Kind: &structpb.Value_StringValue{StringValue: "charlie"}},
+		"emergency_email": {Kind: &structpb.Value_StringValue{StringValue: ""}},
+	}}
+	prevPut := state.putCount
+	resp, _, err := c.updateEmergencyEmail(context.Background(), args)
+	if err != nil {
+		t.Fatalf("updateEmergencyEmail: %v", err)
+	}
+	if state.putCount == prevPut {
+		t.Fatalf("expected PUT call to clear email, but no PUT was made")
+	}
+	if state.users["charlie"].RecoveryEmail != "" {
+		t.Fatalf("expected recovery email cleared, got %s", state.users["charlie"].RecoveryEmail)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success=true in response")
+	}
+	if resp.GetFields()["previous_emergency_email"].GetStringValue() != "recovery@example.com" {
+		t.Fatalf("expected previous_emergency_email=recovery@example.com in response")
+	}
+	if resp.GetFields()["new_emergency_email"].GetStringValue() != "" {
+		t.Fatalf("expected new_emergency_email='' (empty) in response")
 	}
 }

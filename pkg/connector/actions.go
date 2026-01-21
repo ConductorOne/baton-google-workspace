@@ -464,3 +464,76 @@ func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *struct
 	}}
 	return &response, nil, nil
 }
+
+// updateEmergencyEmail updates an account's emergency contact email address (idempotent).
+func (c *GoogleWorkspace) updateEmergencyEmail(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract user_id parameter
+	userIdField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_id")
+	}
+
+	// Extract emergency_email parameter
+	emergencyEmailField, ok := args.Fields["emergency_email"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing emergency_email")
+	}
+
+	userId := strings.TrimSpace(userIdField.StringValue)
+	emergencyEmail := strings.TrimSpace(emergencyEmailField.StringValue)
+
+	// Validate user_id non-empty
+	if userId == "" {
+		return nil, nil, fmt.Errorf("user_id must be non-empty")
+	}
+
+	// Validate email format if not empty (empty string clears the field)
+	if emergencyEmail != "" {
+		if _, err := mail.ParseAddress(emergencyEmail); err != nil {
+			return nil, nil, fmt.Errorf("emergency_email must be a valid email address, or empty string to clear: %w", err)
+		}
+	}
+
+	// Get Directory service with write scope
+	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Fetch current user state for idempotency check
+	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	previousEmergencyEmail := u.RecoveryEmail
+
+	// Check if already set to target emergency email (idempotency)
+	if emailsEqual(previousEmergencyEmail, emergencyEmail) {
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success":                  {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"previous_emergency_email": {Kind: &structpb.Value_StringValue{StringValue: previousEmergencyEmail}},
+			"new_emergency_email":      {Kind: &structpb.Value_StringValue{StringValue: emergencyEmail}},
+		}}
+		return &response, nil, nil
+	}
+
+	// Update user's emergency email (RecoveryEmail field)
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			RecoveryEmail:   emergencyEmail,
+			ForceSendFields: []string{"RecoveryEmail"},
+		},
+	).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":                  {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"previous_emergency_email": {Kind: &structpb.Value_StringValue{StringValue: previousEmergencyEmail}},
+		"new_emergency_email":      {Kind: &structpb.Value_StringValue{StringValue: emergencyEmail}},
+	}}
+	return &response, nil, nil
+}

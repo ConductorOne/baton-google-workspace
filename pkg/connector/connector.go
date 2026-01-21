@@ -309,6 +309,48 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
 	}
+	updateEmergencyEmailActionSchema = &v2.BatonActionSchema{
+		Name:        "update_emergency_email",
+		DisplayName: "Update Emergency Email",
+		Description: "Update the emergency contact email address for an account in Google Workspace.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User Resource ID",
+				Description: "ID of the user resource to update.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "emergency_email",
+				DisplayName: "Emergency Email",
+				Description: "Emergency contact email address. Use empty string to clear.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the emergency email was updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_emergency_email",
+				DisplayName: "Previous Emergency Email",
+				Description: "Account's previous emergency contact email address.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_emergency_email",
+				DisplayName: "New Emergency Email",
+				Description: "Account's updated emergency contact email address.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
 )
 
 type Config struct {
@@ -734,6 +776,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		return err
 	}
 	if err := registry.Register(ctx, moveAccountToOrgUnitActionSchema, c.moveAccountToOrgUnit); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, updateEmergencyEmailActionSchema, c.updateEmergencyEmail); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}
