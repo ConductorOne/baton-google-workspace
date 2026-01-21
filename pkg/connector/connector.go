@@ -11,11 +11,14 @@ import (
 	"sync"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
@@ -23,8 +26,7 @@ import (
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/option"
 
-	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"go.uber.org/zap"
+	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
 )
 
 var (
@@ -285,10 +287,6 @@ type GoogleWorkspace struct {
 	mtx          sync.Mutex
 	serviceCache map[string]any
 
-	domainMtx sync.Mutex
-
-	primaryDomain string
-	domainsCache  []string
 	reportService *reportsAdmin.Service
 }
 
@@ -354,7 +352,33 @@ func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope stri
 	return getService(ctx, c, scope, datatransferAdmin.NewService)
 }
 
-func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
+// New creates a new Google Workspace connector with the V2 interface.
+func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOpts) (connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error) {
+	var credentialBytes []byte
+	switch {
+	case config.CredentialsJson != "":
+		credentialBytes = []byte(config.CredentialsJson)
+	case len(config.CredentialsJsonFilePath) > 0:
+		credentialBytes = config.CredentialsJsonFilePath
+	default:
+		return nil, nil, fmt.Errorf("credentials-json or credentials-json-file-path is required")
+	}
+
+	connector, err := NewConnector(ctx, Config{
+		CustomerID:         config.CustomerId,
+		AdministratorEmail: config.AdministratorEmail,
+		Domain:             config.Domain,
+		Credentials:        credentialBytes,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return connector, []connectorbuilder.Opt{}, nil
+}
+
+// NewConnector creates a new Google Workspace connector instance (internal constructor).
+func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 	rv := &GoogleWorkspace{
 		customerID:         config.CustomerID,
 		administratorEmail: config.AdministratorEmail,
@@ -370,10 +394,25 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	if err != nil {
 		return nil, err
 	}
-	primaryDomain, err := c.getPrimaryDomain(ctx)
+
+	service, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
 	if err != nil {
 		return nil, err
 	}
+
+	resp, err := service.Domains.List(c.customerID).Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+
+	var primaryDomain string
+	for _, d := range resp.Domains {
+		if d.IsPrimary {
+			primaryDomain = d.DomainName
+			break
+		}
+	}
+
 	var annos annotations.Annotations
 	annos.Update(&v2.ExternalLink{
 		Url: primaryDomain,
@@ -429,62 +468,18 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	}, nil
 }
 
-func (c *GoogleWorkspace) getPrimaryDomain(ctx context.Context) (string, error) {
-	c.domainMtx.Lock()
-	defer c.domainMtx.Unlock()
-
-	if c.primaryDomain != "" {
-		return c.primaryDomain, nil
-	}
-	err := c.fetchDomains(ctx)
-	if err != nil {
-		return "", err
-	}
-	return c.primaryDomain, nil
-}
-
-func (c *GoogleWorkspace) fetchDomains(ctx context.Context) error {
+func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations, error) {
 	service, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
 	if err != nil {
-		return fmt.Errorf("google-workspace: failed to initialize service for scope %s: %w", directoryAdmin.AdminDirectoryDomainReadonlyScope, err)
+		return nil, err
 	}
-
 	resp, err := service.Domains.List(c.customerID).Context(ctx).Do()
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	domains := make([]string, 0, len(resp.Domains))
 	for _, d := range resp.Domains {
 		domains = append(domains, d.DomainName)
-		if d.IsPrimary {
-			c.primaryDomain = d.DomainName
-		}
-	}
-	c.domainsCache = domains
-	return nil
-}
-
-func (c *GoogleWorkspace) getDomains(ctx context.Context) ([]string, error) {
-	c.domainMtx.Lock()
-	defer c.domainMtx.Unlock()
-
-	if c.domainsCache != nil {
-		return c.domainsCache, nil
-	}
-
-	err := c.fetchDomains(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return c.domainsCache, nil
-}
-
-func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations, error) {
-	domains, err := c.getDomains(ctx)
-	if err != nil {
-		return nil, err
 	}
 
 	if c.domain != "" {
@@ -527,9 +522,9 @@ func logServiceInitError(l *zap.Logger, err error, scope, purpose string) {
 	}
 }
 
-func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
+func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
 	l := ctxzap.Extract(ctx)
-	rs := []connectorbuilder.ResourceSyncer{}
+	rs := []connectorbuilder.ResourceSyncerV2{}
 
 	// Initialize role services for role resource syncer
 	// Authorization errors are expected when scopes are not available and are handled gracefully

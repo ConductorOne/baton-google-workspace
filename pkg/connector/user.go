@@ -11,7 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
@@ -51,12 +51,12 @@ func (o *userResourceType) userStatus(ctx context.Context, user *admin.User) (v2
 	return v2.UserTrait_Status_STATUS_ENABLED, ""
 }
 
-func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	l := ctxzap.Extract(ctx)
 	bag := &pagination.Bag{}
-	err := bag.Unmarshal(pt.Token)
+	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if bag.Current() == nil {
@@ -82,7 +82,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 
 	users, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("google-workspace: can't get users: %w", err)
+		return nil, nil, fmt.Errorf("google-workspace: can't get users: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
@@ -94,25 +94,25 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pt *pagin
 
 		userResource, err := o.userResource(ctx, user)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		rv = append(rv, userResource)
 	}
 
 	nextPage, err := bag.NextToken(users.NextPageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	return rv, nextPage, nil, nil
+	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func (o *userResourceType) Entitlements(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *userResourceType) Entitlements(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
-func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 func userBuilder(userService *admin.Service, customerId string, domain string, userProvisioningService *admin.Service) *userResourceType {
@@ -275,21 +275,21 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	profile := userProfile(ctx, user)
 	additionalLogins := mapset.NewSet[string]()
 	employeeIDs := mapset.NewSet[string]()
-	traitOpts := []sdkResource.UserTraitOption{
-		sdkResource.WithEmail(user.PrimaryEmail, true),
-		sdkResource.WithDetailedStatus(o.userStatus(ctx, user)),
+	traitOpts := []rs.UserTraitOption{
+		rs.WithEmail(user.PrimaryEmail, true),
+		rs.WithDetailedStatus(o.userStatus(ctx, user)),
 	}
 
 	if user.ThumbnailPhotoUrl != "" {
-		traitOpts = append(traitOpts, sdkResource.WithUserIcon(&v2.AssetRef{
+		traitOpts = append(traitOpts, rs.WithUserIcon(&v2.AssetRef{
 			Id: user.ThumbnailPhotoUrl,
 		}))
 	}
 	if user.Archived || user.Suspended {
-		traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DISABLED))
+		traitOpts = append(traitOpts, rs.WithStatus(v2.UserTrait_Status_STATUS_DISABLED))
 	}
 	if user.IsEnrolledIn2Sv {
-		traitOpts = append(traitOpts, sdkResource.WithMFAStatus(
+		traitOpts = append(traitOpts, rs.WithMFAStatus(
 			&v2.UserTrait_MFAStatus{MfaEnabled: true},
 		))
 	}
@@ -344,36 +344,36 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		}
 	}
 	if user.DeletionTime != "" {
-		traitOpts = append(traitOpts, sdkResource.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
+		traitOpts = append(traitOpts, rs.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
 	}
 	if user.CreationTime != "" {
 		if t, err := time.Parse(time.RFC3339, user.CreationTime); err == nil {
-			traitOpts = append(traitOpts, sdkResource.WithCreatedAt(t))
+			traitOpts = append(traitOpts, rs.WithCreatedAt(t))
 		}
 	}
 	if user.LastLoginTime != "" {
 		if t, err := time.Parse(time.RFC3339, user.LastLoginTime); err == nil {
-			traitOpts = append(traitOpts, sdkResource.WithLastLogin(t))
+			traitOpts = append(traitOpts, rs.WithLastLogin(t))
 		}
 	}
 
 	if employeeIDs.Cardinality() > 0 {
 		traitOpts = append(traitOpts,
-			sdkResource.WithEmployeeID(employeeIDs.ToSlice()...),
+			rs.WithEmployeeID(employeeIDs.ToSlice()...),
 		)
 	}
 
 	traitOpts = append(traitOpts,
-		sdkResource.WithUserProfile(profile),
-		sdkResource.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
+		rs.WithUserProfile(profile),
+		rs.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 	)
 
-	userResource, err := sdkResource.NewUserResource(
+	userResource, err := rs.NewUserResource(
 		user.Name.FullName,
 		resourceTypeUser,
 		user.Id,
 		traitOpts,
-		sdkResource.WithAnnotation(
+		rs.WithAnnotation(
 			&v2.V1Identifier{
 				Id: user.Id,
 			},
