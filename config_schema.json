@@ -89,7 +89,7 @@
     {
       "name": "credentials-json-file-path",
       "displayName": "Credentials JSON file",
-      "description": "JSON credentials file or file path for the Google Workspace account. Mutually exclusive with credentials JSON",
+      "description": "JSON credentials file for the Google Workspace account.",
       "isSecret": true,
       "stringField": {
         "type": "STRING_FIELD_TYPE_FILE_UPLOAD",
@@ -100,7 +100,7 @@
     }
   ],
   "displayName": "Google Workspace",
-  "helpUrl": "/docs/baton/google-workspace",
+  "helpUrl": "/docs/baton/google-workspace-v2",
   "iconUrl": "/static/app-icons/google-workspace.svg",
   "isDirectory": true
 }
