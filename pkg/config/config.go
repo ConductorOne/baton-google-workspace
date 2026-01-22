@@ -35,7 +35,7 @@ var (
 		"credentials-json-file-path",
 		[]string{".json"},
 		field.WithDisplayName("Credentials JSON file"),
-		field.WithDescription("JSON credentials file or file path for the Google Workspace account. Mutually exclusive with credentials JSON"),
+		field.WithDescription("JSON credentials file for the Google Workspace account."),
 		field.WithIsSecret(true),
 	)
 
