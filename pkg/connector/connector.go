@@ -309,6 +309,76 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
 	}
+	updateHomeAddressActionSchema = &v2.BatonActionSchema{
+		Name:        "update_home_address",
+		DisplayName: "Update Home Address",
+		Description: "Update the home address for an account in Google Workspace.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User Resource ID",
+				Description: "ID of the user resource to update.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "street_address",
+				DisplayName: "Street Address",
+				Description: "Street address (optional).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "city",
+				DisplayName: "City",
+				Description: "City or locality (optional).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "state",
+				DisplayName: "State/Region",
+				Description: "State or region (optional).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "postal_code",
+				DisplayName: "Postal Code",
+				Description: "Postal or ZIP code (optional).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "country",
+				DisplayName: "Country",
+				Description: "Country (optional).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the home address was updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_address",
+				DisplayName: "Previous Address",
+				Description: "Account's previous home address (formatted).",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_address",
+				DisplayName: "New Address",
+				Description: "Account's updated home address (formatted).",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
 )
 
 type Config struct {
@@ -734,6 +804,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		return err
 	}
 	if err := registry.Register(ctx, moveAccountToOrgUnitActionSchema, c.moveAccountToOrgUnit); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, updateHomeAddressActionSchema, c.updateHomeAddress); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}

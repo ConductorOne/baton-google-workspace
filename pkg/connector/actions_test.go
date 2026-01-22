@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,7 @@ type testUser struct {
 	Suspended    bool
 	PrimaryEmail string
 	OrgUnitPath  string
+	Addresses    []*directoryAdmin.UserAddress
 }
 
 type transferRecord struct {
@@ -58,12 +60,22 @@ func newTestServer(state *testServerState) *httptest.Server {
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
 				OrgUnitPath:  u.OrgUnitPath,
+				Addresses:    u.Addresses,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
 			state.putCount++
+			// Read body as bytes to unmarshal twice
+			bodyBytes, _ := io.ReadAll(r.Body)
+
+			// Unmarshal to map to check which fields are present
+			var rawMap map[string]interface{}
+			_ = json.Unmarshal(bodyBytes, &rawMap)
+
+			// Unmarshal to User struct
 			var body directoryAdmin.User
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.Unmarshal(bodyBytes, &body)
+
 			u := state.users[userKey]
 			if u == nil {
 				u = &testUser{}
@@ -78,10 +90,46 @@ func newTestServer(state *testServerState) *httptest.Server {
 			}
 			// Suspended is bool; accept as-is
 			u.Suspended = body.Suspended
+			// Addresses: Check if present in request and properly unmarshal
+			if _, hasAddresses := rawMap["addresses"]; hasAddresses {
+				if addrsRaw, ok := rawMap["addresses"].([]interface{}); ok {
+					// Convert to proper type
+					var addrs []*directoryAdmin.UserAddress
+					for _, addrRaw := range addrsRaw {
+						if addrMap, ok := addrRaw.(map[string]interface{}); ok {
+							addr := &directoryAdmin.UserAddress{}
+							if v, ok := addrMap["type"].(string); ok {
+								addr.Type = v
+							}
+							if v, ok := addrMap["streetAddress"].(string); ok {
+								addr.StreetAddress = v
+							}
+							if v, ok := addrMap["locality"].(string); ok {
+								addr.Locality = v
+							}
+							if v, ok := addrMap["region"].(string); ok {
+								addr.Region = v
+							}
+							if v, ok := addrMap["postalCode"].(string); ok {
+								addr.PostalCode = v
+							}
+							if v, ok := addrMap["country"].(string); ok {
+								addr.Country = v
+							}
+							if v, ok := addrMap["primary"].(bool); ok {
+								addr.Primary = v
+							}
+							addrs = append(addrs, addr)
+						}
+					}
+					u.Addresses = addrs
+				}
+			}
 			resp := &directoryAdmin.User{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
 				OrgUnitPath:  u.OrgUnitPath,
+				Addresses:    u.Addresses,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		default:
@@ -589,4 +637,275 @@ func TestMoveAccountToOrgUnit_UserNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for user not found")
 	}
+}
+
+func TestUpdateHomeAddress_Success(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice": {
+				PrimaryEmail: "alice@example.com",
+				Addresses: []*directoryAdmin.UserAddress{
+					{
+						Type:          "work",
+						StreetAddress: "123 Work St",
+						Locality:      "Oldtown",
+						Region:        "CA",
+						PostalCode:    "94000",
+						Country:       "USA",
+					},
+				},
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":        {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"street_address": {Kind: &structpb.Value_StringValue{StringValue: "456 Home Ave"}},
+		"city":           {Kind: &structpb.Value_StringValue{StringValue: "Springfield"}},
+		"state":          {Kind: &structpb.Value_StringValue{StringValue: "IL"}},
+		"postal_code":    {Kind: &structpb.Value_StringValue{StringValue: "62701"}},
+		"country":        {Kind: &structpb.Value_StringValue{StringValue: "USA"}},
+	}}
+
+	state.mtx.Lock()
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.updateHomeAddress(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	prevAddr := resp.Fields["previous_address"].GetStringValue()
+	if prevAddr != "" {
+		t.Fatalf("expected previous_address to be empty, got: %v", prevAddr)
+	}
+
+	newAddr := resp.Fields["new_address"].GetStringValue()
+	if newAddr != "456 Home Ave, Springfield, IL, 62701, USA" {
+		t.Fatalf("expected new_address to be '456 Home Ave, Springfield, IL, 62701, USA', got: %v", newAddr)
+	}
+
+	state.mtx.Lock()
+	if state.putCount != initialPutCount+1 {
+		t.Fatalf("expected one PUT call")
+	}
+
+	alice := state.users["alice"]
+	addrs := alice.Addresses
+
+	// Should have work + home addresses
+	if len(addrs) != 2 {
+		t.Fatalf("expected 2 addresses, got: %d", len(addrs))
+	}
+
+	// Find home address
+	var homeAddr *directoryAdmin.UserAddress
+	for _, addr := range addrs {
+		if addr.Type == "home" {
+			homeAddr = addr
+			break
+		}
+	}
+	if homeAddr == nil {
+		t.Fatalf("expected to find home address")
+	}
+	if homeAddr.StreetAddress != "456 Home Ave" {
+		t.Fatalf("expected street_address to be '456 Home Ave', got: %v", homeAddr.StreetAddress)
+	}
+	if homeAddr.Locality != "Springfield" {
+		t.Fatalf("expected city to be 'Springfield', got: %v", homeAddr.Locality)
+	}
+	if homeAddr.Region != "IL" {
+		t.Fatalf("expected state to be 'IL', got: %v", homeAddr.Region)
+	}
+	if homeAddr.PostalCode != "62701" {
+		t.Fatalf("expected postal_code to be '62701', got: %v", homeAddr.PostalCode)
+	}
+	if homeAddr.Country != "USA" {
+		t.Fatalf("expected country to be 'USA', got: %v", homeAddr.Country)
+	}
+	state.mtx.Unlock()
+}
+
+func TestUpdateHomeAddress_Idempotent(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice": {
+				PrimaryEmail: "alice@example.com",
+				Addresses: []*directoryAdmin.UserAddress{
+					{
+						Type:          "home",
+						StreetAddress: "456 Home Ave",
+						Locality:      "Springfield",
+						Region:        "IL",
+						PostalCode:    "62701",
+						Country:       "USA",
+						Primary:       true,
+					},
+				},
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":        {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"street_address": {Kind: &structpb.Value_StringValue{StringValue: "456 Home Ave"}},
+		"city":           {Kind: &structpb.Value_StringValue{StringValue: "Springfield"}},
+		"state":          {Kind: &structpb.Value_StringValue{StringValue: "IL"}},
+		"postal_code":    {Kind: &structpb.Value_StringValue{StringValue: "62701"}},
+		"country":        {Kind: &structpb.Value_StringValue{StringValue: "USA"}},
+	}}
+
+	state.mtx.Lock()
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.updateHomeAddress(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	prevAddr := resp.Fields["previous_address"].GetStringValue()
+	newAddr := resp.Fields["new_address"].GetStringValue()
+	if prevAddr != newAddr {
+		t.Fatalf("expected previous_address and new_address to match, got prev=%v new=%v", prevAddr, newAddr)
+	}
+
+	state.mtx.Lock()
+	if state.putCount != initialPutCount {
+		t.Fatalf("expected no PUT call for idempotent operation, got %d puts", state.putCount-initialPutCount)
+	}
+	state.mtx.Unlock()
+}
+
+func TestUpdateHomeAddress_ValidationErrors(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice": {PrimaryEmail: "alice@example.com"},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Missing user_id
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"street_address": {Kind: &structpb.Value_StringValue{StringValue: "123 Main St"}},
+	}}
+	_, _, err := c.updateHomeAddress(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_id")
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+
+	// Empty user_id after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":        {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+		"street_address": {Kind: &structpb.Value_StringValue{StringValue: "123 Main St"}},
+	}}
+	_, _, err = c.updateHomeAddress(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty user_id")
+	}
+	if !strings.Contains(err.Error(), "user_id must be non-empty") {
+		t.Fatalf("expected error message to contain 'user_id must be non-empty', got: %v", err)
+	}
+}
+
+func TestUpdateHomeAddress_UserNotFound(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":        {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		"street_address": {Kind: &structpb.Value_StringValue{StringValue: "123 Main St"}},
+	}}
+	_, _, err := c.updateHomeAddress(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for user not found")
+	}
+}
+
+func TestUpdateHomeAddress_PartialAddress(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice": {PrimaryEmail: "alice@example.com"},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Only city and country
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"city":    {Kind: &structpb.Value_StringValue{StringValue: "Springfield"}},
+		"country": {Kind: &structpb.Value_StringValue{StringValue: "USA"}},
+	}}
+
+	resp, _, err := c.updateHomeAddress(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	newAddr := resp.Fields["new_address"].GetStringValue()
+	if newAddr != "Springfield, USA" {
+		t.Fatalf("expected new_address to be 'Springfield, USA', got: %v", newAddr)
+	}
+
+	state.mtx.Lock()
+	alice := state.users["alice"]
+	addrs := alice.Addresses
+	if len(addrs) != 1 {
+		t.Fatalf("expected 1 address, got: %d", len(addrs))
+	}
+	homeAddr := addrs[0]
+	if homeAddr.StreetAddress != "" {
+		t.Fatalf("expected street_address to be empty, got: %v", homeAddr.StreetAddress)
+	}
+	if homeAddr.Locality != "Springfield" {
+		t.Fatalf("expected city to be 'Springfield', got: %v", homeAddr.Locality)
+	}
+	if homeAddr.Country != "USA" {
+		t.Fatalf("expected country to be 'USA', got: %v", homeAddr.Country)
+	}
+	state.mtx.Unlock()
 }

@@ -464,3 +464,205 @@ func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *struct
 	}}
 	return &response, nil, nil
 }
+
+// updateHomeAddress updates an account's home address (idempotent).
+func (c *GoogleWorkspace) updateHomeAddress(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract user_id parameter
+	userIdField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_id")
+	}
+
+	userId := strings.TrimSpace(userIdField.StringValue)
+	if userId == "" {
+		return nil, nil, fmt.Errorf("user_id must be non-empty")
+	}
+
+	// Extract optional address fields
+	streetAddress := getStringField(args, "street_address")
+	city := getStringField(args, "city")
+	state := getStringField(args, "state")
+	postalCode := getStringField(args, "postal_code")
+	country := getStringField(args, "country")
+
+	// Get Directory service with write scope
+	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Fetch current user state
+	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Find existing home address
+	var previousHomeAddress *directoryAdmin.UserAddress
+	var homeAddressIndex = -1
+	currentAddresses := convertAddresses(u.Addresses)
+	for i, addr := range currentAddresses {
+		if addr.Type == "Home" {
+			previousHomeAddress = addr
+			homeAddressIndex = i
+			break
+		}
+	}
+
+	// Create new home address
+	newHomeAddress := &directoryAdmin.UserAddress{
+		Type:          "home",
+		StreetAddress: streetAddress,
+		Locality:      city,
+		Region:        state,
+		PostalCode:    postalCode,
+		Country:       country,
+		Primary:       true,
+	}
+
+	// Check if address already matches (idempotency)
+	if addressesEqual(previousHomeAddress, newHomeAddress) {
+		previousFormatted := formatAddress(previousHomeAddress)
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success":          {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"previous_address": {Kind: &structpb.Value_StringValue{StringValue: previousFormatted}},
+			"new_address":      {Kind: &structpb.Value_StringValue{StringValue: previousFormatted}},
+		}}
+		return &response, nil, nil
+	}
+
+	// Build updated addresses array
+	var updatedAddresses []*directoryAdmin.UserAddress
+	if len(currentAddresses) > 0 {
+		updatedAddresses = make([]*directoryAdmin.UserAddress, len(currentAddresses))
+		copy(updatedAddresses, currentAddresses)
+	}
+
+	if homeAddressIndex >= 0 {
+		// Update existing home address
+		updatedAddresses[homeAddressIndex] = newHomeAddress
+	} else {
+		// Add new home address
+		updatedAddresses = append(updatedAddresses, newHomeAddress)
+	}
+
+	// Update user's addresses
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			Addresses:       updatedAddresses,
+			ForceSendFields: []string{"Addresses"},
+		},
+	).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	previousFormatted := formatAddress(previousHomeAddress)
+	newFormatted := formatAddress(newHomeAddress)
+
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":          {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"previous_address": {Kind: &structpb.Value_StringValue{StringValue: previousFormatted}},
+		"new_address":      {Kind: &structpb.Value_StringValue{StringValue: newFormatted}},
+	}}
+	return &response, nil, nil
+}
+
+// getStringField extracts a string field from structpb args, returning empty string if not present.
+func getStringField(args *structpb.Struct, fieldName string) string {
+	if field, ok := args.Fields[fieldName]; ok {
+		if strVal, ok := field.GetKind().(*structpb.Value_StringValue); ok {
+			return strings.TrimSpace(strVal.StringValue)
+		}
+	}
+	return ""
+}
+
+// convertAddresses converts the addresses interface{} field to []*UserAddress.
+// The Google SDK's User.Addresses field is interface{}, which can be unmarshaled
+// as either []*UserAddress or []interface{} depending on the source.
+func convertAddresses(addresses interface{}) []*directoryAdmin.UserAddress {
+	if addresses == nil {
+		return nil
+	}
+
+	// Try direct type assertion first
+	if addrs, ok := addresses.([]*directoryAdmin.UserAddress); ok {
+		return addrs
+	}
+
+	// Handle []interface{} case (from JSON unmarshaling)
+	if addrsRaw, ok := addresses.([]interface{}); ok {
+		var result []*directoryAdmin.UserAddress
+		for _, addrRaw := range addrsRaw {
+			if addrMap, ok := addrRaw.(map[string]interface{}); ok {
+				addr := &directoryAdmin.UserAddress{}
+				if v, ok := addrMap["type"].(string); ok {
+					addr.Type = v
+				}
+				if v, ok := addrMap["streetAddress"].(string); ok {
+					addr.StreetAddress = v
+				}
+				if v, ok := addrMap["locality"].(string); ok {
+					addr.Locality = v
+				}
+				if v, ok := addrMap["region"].(string); ok {
+					addr.Region = v
+				}
+				if v, ok := addrMap["postalCode"].(string); ok {
+					addr.PostalCode = v
+				}
+				if v, ok := addrMap["country"].(string); ok {
+					addr.Country = v
+				}
+				if v, ok := addrMap["primary"].(bool); ok {
+					addr.Primary = v
+				}
+				result = append(result, addr)
+			}
+		}
+		return result
+	}
+
+	return nil
+}
+
+// addressesEqual compares two addresses for equality.
+func addressesEqual(a, b *directoryAdmin.UserAddress) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.StreetAddress == b.StreetAddress &&
+		a.Locality == b.Locality &&
+		a.Region == b.Region &&
+		a.PostalCode == b.PostalCode &&
+		a.Country == b.Country
+}
+
+// formatAddress formats an address into a human-readable string.
+func formatAddress(addr *directoryAdmin.UserAddress) string {
+	if addr == nil {
+		return ""
+	}
+	var parts []string
+	if addr.StreetAddress != "" {
+		parts = append(parts, addr.StreetAddress)
+	}
+	if addr.Locality != "" {
+		parts = append(parts, addr.Locality)
+	}
+	if addr.Region != "" {
+		parts = append(parts, addr.Region)
+	}
+	if addr.PostalCode != "" {
+		parts = append(parts, addr.PostalCode)
+	}
+	if addr.Country != "" {
+		parts = append(parts, addr.Country)
+	}
+	return strings.Join(parts, ", ")
+}
