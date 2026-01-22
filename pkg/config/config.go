@@ -35,15 +35,15 @@ var (
 		"credentials-json-file-path",
 		[]string{".json"},
 		field.WithDisplayName("Credentials JSON file"),
-		field.WithDescription("JSON credentials file or file path for the Google Workspace account. Mutually exclusive with credentials JSON"),
+		field.WithDescription("JSON credentials file for the Google Workspace account."),
 		field.WithIsSecret(true),
 	)
 
 	// CredentialsJSONField defines the JSON credentials as a string.
 	CredentialsJSONField = field.StringField(
 		"credentials-json",
-		field.WithDisplayName("Credentials JSON"),
-		field.WithDescription("JSON credentials for the Google Workspace account. Mutually exclusive with file path"),
+		field.WithDisplayName("Credentials JSON string"),
+		field.WithDescription("JSON credentials passed as a string for the Google Workspace account. Mutually exclusive with file path"),
 		field.WithExportTarget(field.ExportTargetCLIOnly),
 		field.WithIsSecret(true),
 	)
@@ -71,7 +71,7 @@ var (
 		field.WithConstraints(fieldRelationships...),
 		field.WithConnectorDisplayName("Google Workspace"),
 		field.WithIconUrl("/static/app-icons/google-workspace.svg"),
-		field.WithHelpUrl("/docs/baton/google-workspace"),
+		field.WithHelpUrl("/docs/baton/google-workspace-v2"),
 		field.WithIsDirectory(true),
 	)
 )
