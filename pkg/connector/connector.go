@@ -342,20 +342,32 @@ var (
 				Field:       &config.Field_BoolField{},
 				IsRequired:  false,
 			},
-			{
-				Name:        "who_can_post_message",
-				DisplayName: "Who Can Post Messages",
-				Description: "Control who can post messages. Values: ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  false,
+		{
+			Name:        "who_can_post_message",
+			DisplayName: "Who Can Post Messages",
+			Description: "Control who can post messages.",
+			Field: &config.Field_StringField{
+				StringField: &config.StringField{
+					Rules: &config.StringRules{
+						In: []string{"ANYONE_CAN_POST", "ALL_MEMBERS_CAN_POST", "ALL_MANAGERS_CAN_POST", "ALL_OWNERS_CAN_POST"},
+					},
+				},
 			},
-			{
-				Name:        "message_moderation_level",
-				DisplayName: "Message Moderation Level",
-				Description: "Control moderation. Values: MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  false,
+			IsRequired: false,
+		},
+		{
+			Name:        "message_moderation_level",
+			DisplayName: "Message Moderation Level",
+			Description: "Control moderation.",
+			Field: &config.Field_StringField{
+				StringField: &config.StringField{
+					Rules: &config.StringRules{
+						In: []string{"MODERATE_NONE", "MODERATE_NON_MEMBERS", "MODERATE_ALL_MESSAGES"},
+					},
+				},
 			},
+			IsRequired: false,
+		},
 		},
 		ReturnTypes: []*config.Field{
 			{
@@ -434,13 +446,19 @@ var (
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
-			{
-				Name:        "role",
-				DisplayName: "Member Role",
-				Description: "Role for the user in the group. Values: MEMBER (default), MANAGER, OWNER.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  false,
+		{
+			Name:        "role",
+			DisplayName: "Member Role",
+			Description: "Role for the user in the group.",
+			Field: &config.Field_StringField{
+				StringField: &config.StringField{
+					Rules: &config.StringRules{
+						In: []string{"MEMBER", "MANAGER", "OWNER"},
+					},
+				},
 			},
+			IsRequired: false,
+		},
 		},
 		ReturnTypes: []*config.Field{
 			{
