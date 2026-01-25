@@ -30,6 +30,7 @@ type testGroup struct {
 	AllowExternalMembers   string // "true" or "false"
 	WhoCanPostMessage      string
 	MessageModerationLevel string
+	Members                map[string]string // email -> role
 }
 
 type transferRecord struct {
@@ -127,12 +128,114 @@ func newTestServer(state *testServerState) *httptest.Server {
 	})
 
 	mux.HandleFunc("/admin/directory/v1/groups/", func(w http.ResponseWriter, r *http.Request) {
-		// path suffix is groupKey (email or ID)
-		groupKey := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/groups/")
+		// Handle both group operations and member operations
+		// Group GET: /admin/directory/v1/groups/{groupKey}
+		// Member GET: /admin/directory/v1/groups/{groupKey}/members/{userEmail}
+		// Member POST: /admin/directory/v1/groups/{groupKey}/members
+		// Member PATCH: /admin/directory/v1/groups/{groupKey}/members/{userEmail}
+		path := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/groups/")
+		parts := strings.Split(path, "/")
+		
 		state.mtx.Lock()
 		defer state.mtx.Unlock()
-		switch r.Method {
-		case http.MethodGet:
+
+		// Check if this is a member operation
+		if len(parts) >= 2 && parts[1] == "members" {
+			groupKey := parts[0]
+
+			// Look up group by email or ID
+			var g *testGroup
+			for email, group := range state.groups {
+				if email == groupKey || group.Id == groupKey {
+					g = group
+					break
+				}
+			}
+
+			if g == nil {
+				http.Error(w, "group not found", http.StatusNotFound)
+				return
+			}
+
+			// Initialize Members map if needed
+			if g.Members == nil {
+				g.Members = make(map[string]string)
+			}
+
+			if len(parts) == 2 {
+				// /admin/directory/v1/groups/{groupKey}/members - POST to add member
+				if r.Method == http.MethodPost {
+					state.postCount++
+					var body directoryAdmin.Member
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					
+					memberEmail := strings.ToLower(body.Email)
+					role := body.Role
+					if role == "" {
+						role = "MEMBER"
+					}
+					g.Members[memberEmail] = role
+
+					resp := &directoryAdmin.Member{
+						Email: body.Email,
+						Role:  role,
+						Id:    "member_" + strings.ReplaceAll(memberEmail, "@", "_at_"),
+					}
+					_ = json.NewEncoder(w).Encode(resp)
+					return
+				}
+			} else if len(parts) == 3 {
+				// /admin/directory/v1/groups/{groupKey}/members/{userEmail}
+				userEmail := strings.ToLower(parts[2])
+
+				switch r.Method {
+				case http.MethodGet:
+					// Check if member exists
+					role, exists := g.Members[userEmail]
+					if !exists {
+						http.Error(w, "member not found", http.StatusNotFound)
+						return
+					}
+
+					resp := &directoryAdmin.Member{
+						Email: userEmail,
+						Role:  role,
+						Id:    "member_" + strings.ReplaceAll(userEmail, "@", "_at_"),
+					}
+					_ = json.NewEncoder(w).Encode(resp)
+					return
+
+				case http.MethodPatch:
+					// Update member role
+					state.putCount++
+					var body directoryAdmin.Member
+					_ = json.NewDecoder(r.Body).Decode(&body)
+
+					if _, exists := g.Members[userEmail]; !exists {
+						http.Error(w, "member not found", http.StatusNotFound)
+						return
+					}
+
+					g.Members[userEmail] = body.Role
+
+					resp := &directoryAdmin.Member{
+						Email: userEmail,
+						Role:  body.Role,
+						Id:    "member_" + strings.ReplaceAll(userEmail, "@", "_at_"),
+					}
+					_ = json.NewEncoder(w).Encode(resp)
+					return
+				}
+			}
+
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		// Handle group GET operation (not a member operation)
+		groupKey := parts[0]
+		
+		if r.Method == http.MethodGet {
 			// Look up by email first
 			g := state.groups[groupKey]
 			if g == nil {
@@ -155,7 +258,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 				Description: g.Description,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-		default:
+		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
@@ -321,6 +424,7 @@ func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *data
 		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = dir
 		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = dir
 		c.serviceCache[directoryAdmin.AdminDirectoryGroupReadonlyScope] = dir
+		c.serviceCache[directoryAdmin.AdminDirectoryGroupMemberScope] = dir
 	}
 	if dt != nil {
 		c.serviceCache[datatransferAdmin.AdminDatatransferScope] = dt
@@ -765,59 +869,6 @@ func TestCreateGroup_SuccessWithoutDescription(t *testing.T) {
 	state.mtx.Unlock()
 }
 
-// Test 5: Success With Group Settings
-func TestCreateGroup_WithSettings(t *testing.T) {
-	state := &testServerState{
-		users:  map[string]*testUser{},
-		groups: map[string]*testGroup{},
-	}
-	server := newTestServer(state)
-	defer server.Close()
-
-	dir := newTestDirectoryService(t, server.URL, server.Client())
-	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
-	c := newTestConnector()
-	primeServiceCache(c, dir, nil, gs)
-
-	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"group_email":              {Kind: &structpb.Value_StringValue{StringValue: "settings@example.com"}},
-		"group_name":               {Kind: &structpb.Value_StringValue{StringValue: "Settings Test Group"}},
-		"allow_external_members":   {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-		"who_can_post_message":     {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
-		"message_moderation_level": {Kind: &structpb.Value_StringValue{StringValue: "MODERATE_NON_MEMBERS"}},
-	}}
-
-	resp, _, err := c.createGroupActionHandler(context.Background(), args)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	if !resp.Fields["success"].GetBoolValue() {
-		t.Fatalf("expected success to be true")
-	}
-
-	if !resp.Fields["settings_applied"].GetBoolValue() {
-		t.Fatalf("expected settings_applied to be true")
-	}
-
-	// Verify group was created with settings
-	state.mtx.Lock()
-	group := state.groups["settings@example.com"]
-	if group == nil {
-		t.Fatalf("expected group to be created")
-	}
-	if group.AllowExternalMembers != "true" {
-		t.Fatalf("expected AllowExternalMembers to be 'true', got: %v", group.AllowExternalMembers)
-	}
-	if group.WhoCanPostMessage != "ANYONE_CAN_POST" {
-		t.Fatalf("expected WhoCanPostMessage to be 'ANYONE_CAN_POST', got: %v", group.WhoCanPostMessage)
-	}
-	if group.MessageModerationLevel != "MODERATE_NON_MEMBERS" {
-		t.Fatalf("expected MessageModerationLevel to be 'MODERATE_NON_MEMBERS', got: %v", group.MessageModerationLevel)
-	}
-	state.mtx.Unlock()
-}
-
 // ========== modify_group_settings Action Tests ==========
 
 // Test 1: Success Case - Modify group settings with all parameters
@@ -1149,6 +1200,382 @@ func TestModifyGroupSettings_PartialUpdate(t *testing.T) {
 	}
 	if group.MessageModerationLevel != "MODERATE_NONE" {
 		t.Fatalf("expected MessageModerationLevel to remain 'MODERATE_NONE', got: %v", group.MessageModerationLevel)
+	}
+	state.mtx.Unlock()
+}
+
+// ========== add_user_to_group Action Tests ==========
+
+// Test 1: Success Case - Add new user to group successfully
+func TestAddUserToGroup_Success(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"team@example.com": {
+				Id:      "group_team_at_example.com",
+				Email:   "team@example.com",
+				Name:    "Team Group",
+				Members: make(map[string]string),
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "alice@example.com"}},
+		"role":       {Kind: &structpb.Value_StringValue{StringValue: "MEMBER"}},
+	}}
+
+	state.mtx.Lock()
+	initialPostCount := state.postCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.addUserToGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify response values
+	if resp.Fields["group_email"].GetStringValue() != "team@example.com" {
+		t.Fatalf("expected group_email to be 'team@example.com'")
+	}
+	if resp.Fields["user_email"].GetStringValue() != "alice@example.com" {
+		t.Fatalf("expected user_email to be 'alice@example.com'")
+	}
+	if resp.Fields["role"].GetStringValue() != "MEMBER" {
+		t.Fatalf("expected role to be 'MEMBER'")
+	}
+	if resp.Fields["already_member"].GetBoolValue() {
+		t.Fatalf("expected already_member to be false")
+	}
+
+	// Verify API was called once
+	state.mtx.Lock()
+	if state.postCount != initialPostCount+1 {
+		t.Fatalf("expected one POST call")
+	}
+
+	// Verify member was added
+	group := state.groups["team@example.com"]
+	if role, exists := group.Members["alice@example.com"]; !exists {
+		t.Fatalf("expected user to be added to group")
+	} else if role != "MEMBER" {
+		t.Fatalf("expected role to be 'MEMBER', got: %v", role)
+	}
+	state.mtx.Unlock()
+}
+
+// Test 2: Idempotent Case - User already in group with same role (no API call)
+func TestAddUserToGroup_Idempotent(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"team@example.com": {
+				Id:    "group_team_at_example.com",
+				Email: "team@example.com",
+				Name:  "Team Group",
+				Members: map[string]string{
+					"bob@example.com": "MEMBER",
+				},
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "bob@example.com"}},
+		"role":       {Kind: &structpb.Value_StringValue{StringValue: "MEMBER"}},
+	}}
+
+	state.mtx.Lock()
+	initialPostCount := state.postCount
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.addUserToGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify already_member is true
+	if !resp.Fields["already_member"].GetBoolValue() {
+		t.Fatalf("expected already_member to be true")
+	}
+
+	// Verify no API call was made (CRITICAL CHECK)
+	state.mtx.Lock()
+	if state.postCount != initialPostCount {
+		t.Fatalf("expected no POST call for idempotent operation")
+	}
+	if state.putCount != initialPutCount {
+		t.Fatalf("expected no PUT call for idempotent operation")
+	}
+	state.mtx.Unlock()
+}
+
+// Test 3: Update Role - User already in group but different role (update it)
+func TestAddUserToGroup_UpdateRole(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"team@example.com": {
+				Id:    "group_team_at_example.com",
+				Email: "team@example.com",
+				Name:  "Team Group",
+				Members: map[string]string{
+					"charlie@example.com": "MEMBER",
+				},
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "charlie@example.com"}},
+		"role":       {Kind: &structpb.Value_StringValue{StringValue: "MANAGER"}},
+	}}
+
+	state.mtx.Lock()
+	initialPostCount := state.postCount
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.addUserToGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify already_member is true
+	if !resp.Fields["already_member"].GetBoolValue() {
+		t.Fatalf("expected already_member to be true")
+	}
+
+	// Verify role was updated
+	if resp.Fields["role"].GetStringValue() != "MANAGER" {
+		t.Fatalf("expected role to be 'MANAGER'")
+	}
+
+	// Verify PUT was called but not POST
+	state.mtx.Lock()
+	if state.postCount != initialPostCount {
+		t.Fatalf("expected no POST call when updating role")
+	}
+	if state.putCount != initialPutCount+1 {
+		t.Fatalf("expected one PUT call to update role")
+	}
+
+	// Verify role was updated in state
+	group := state.groups["team@example.com"]
+	if role, exists := group.Members["charlie@example.com"]; !exists {
+		t.Fatalf("expected user to still be in group")
+	} else if role != "MANAGER" {
+		t.Fatalf("expected role to be updated to 'MANAGER', got: %v", role)
+	}
+	state.mtx.Unlock()
+}
+
+// Test 4: Validation Errors
+func TestAddUserToGroup_ValidationErrors(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"team@example.com": {
+				Id:      "group_team_at_example.com",
+				Email:   "team@example.com",
+				Name:    "Team Group",
+				Members: make(map[string]string),
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	// Missing group_key
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+	}}
+	_, _, err := c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing group_key")
+	}
+	if !strings.Contains(err.Error(), "missing group_key") {
+		t.Fatalf("expected error message to contain 'missing group_key', got: %v", err)
+	}
+
+	// Missing user_email
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key": {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+	}}
+	_, _, err = c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_email")
+	}
+	if !strings.Contains(err.Error(), "missing user_email") {
+		t.Fatalf("expected error message to contain 'missing user_email', got: %v", err)
+	}
+
+	// Empty group_key after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+	}}
+	_, _, err = c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty group_key")
+	}
+	if !strings.Contains(err.Error(), "group_key must be non-empty") {
+		t.Fatalf("expected error message to contain 'group_key must be non-empty', got: %v", err)
+	}
+
+	// Empty user_email after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+	}}
+	_, _, err = c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty user_email")
+	}
+	if !strings.Contains(err.Error(), "user_email must be non-empty") {
+		t.Fatalf("expected error message to contain 'user_email must be non-empty', got: %v", err)
+	}
+
+	// Invalid email format
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "invalid-email"}},
+	}}
+	_, _, err = c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid email format")
+	}
+	if !strings.Contains(err.Error(), "invalid email address") {
+		t.Fatalf("expected error message to contain 'invalid email address', got: %v", err)
+	}
+
+	// Invalid role
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+		"role":       {Kind: &structpb.Value_StringValue{StringValue: "INVALID_ROLE"}},
+	}}
+	_, _, err = c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid role")
+	}
+	if !strings.Contains(err.Error(), "invalid role") {
+		t.Fatalf("expected error message to contain 'invalid role', got: %v", err)
+	}
+}
+
+// Test 5: Group Not Found
+func TestAddUserToGroup_GroupNotFound(t *testing.T) {
+	state := &testServerState{
+		users:  map[string]*testUser{},
+		groups: map[string]*testGroup{},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "nonexistent@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+	}}
+
+	_, _, err := c.addUserToGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for group not found")
+	}
+	if !strings.Contains(err.Error(), "group not found") {
+		t.Fatalf("expected error message to contain 'group not found', got: %v", err)
+	}
+}
+
+// Test 6: Default Role - Role defaults to MEMBER when not provided
+func TestAddUserToGroup_DefaultRole(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"team@example.com": {
+				Id:      "group_team_at_example.com",
+				Email:   "team@example.com",
+				Name:    "Team Group",
+				Members: make(map[string]string),
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	// Don't provide role parameter
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":  {Kind: &structpb.Value_StringValue{StringValue: "team@example.com"}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "david@example.com"}},
+	}}
+
+	resp, _, err := c.addUserToGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify role defaults to MEMBER
+	if resp.Fields["role"].GetStringValue() != "MEMBER" {
+		t.Fatalf("expected role to default to 'MEMBER', got: %v", resp.Fields["role"].GetStringValue())
+	}
+
+	// Verify member was added with MEMBER role
+	state.mtx.Lock()
+	group := state.groups["team@example.com"]
+	if role, exists := group.Members["david@example.com"]; !exists {
+		t.Fatalf("expected user to be added to group")
+	} else if role != "MEMBER" {
+		t.Fatalf("expected default role to be 'MEMBER', got: %v", role)
 	}
 	state.mtx.Unlock()
 }

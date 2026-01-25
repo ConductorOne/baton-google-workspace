@@ -271,7 +271,7 @@ var (
 	createGroupActionSchema = &v2.BatonActionSchema{
 		Name:        "create_group",
 		DisplayName: "Create Group",
-		Description: "Create a new Google Group with optional settings.",
+		Description: "Create a new Google Group. Use modify_group_settings action to configure group settings.",
 		Arguments: []*config.Field{
 			{
 				Name:        "group_email",
@@ -291,27 +291,6 @@ var (
 				Name:        "description",
 				DisplayName: "Description",
 				Description: "Optional description of the group.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  false,
-			},
-			{
-				Name:        "allow_external_members",
-				DisplayName: "Allow External Members",
-				Description: "If true, allows external members to join the group. Defaults to false.",
-				Field:       &config.Field_BoolField{},
-				IsRequired:  false,
-			},
-			{
-				Name:        "who_can_post_message",
-				DisplayName: "Who Can Post Messages",
-				Description: "Control who can post messages. Values: ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  false,
-			},
-			{
-				Name:        "message_moderation_level",
-				DisplayName: "Message Moderation Level",
-				Description: "Control moderation. Values: MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  false,
 			},
@@ -340,12 +319,6 @@ var (
 				DisplayName: "Group Name",
 				Description: "Name of the created group.",
 				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "settings_applied",
-				DisplayName: "Settings Applied",
-				Description: "Whether group settings were applied.",
-				Field:       &config.Field_BoolField{},
 			},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
@@ -441,6 +414,67 @@ var (
 			},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
+	addUserToGroupActionSchema = &v2.BatonActionSchema{
+		Name:        "add_user_to_group",
+		DisplayName: "Add User to Group",
+		Description: "Add a user to a Google Group with a specified role.",
+		Arguments: []*config.Field{
+			{
+				Name:        "group_key",
+				DisplayName: "Group Key",
+				Description: "Email address or unique ID of the group.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "user_email",
+				DisplayName: "User Email",
+				Description: "Email address of the user to add to the group.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "role",
+				DisplayName: "Member Role",
+				Description: "Role for the user in the group. Values: MEMBER (default), MANAGER, OWNER.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user was added to the group successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "group_email",
+				DisplayName: "Group Email",
+				Description: "Email address of the group.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "user_email",
+				DisplayName: "User Email",
+				Description: "Email address of the user.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "role",
+				DisplayName: "Role",
+				Description: "Role assigned to the user.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "already_member",
+				DisplayName: "Already Member",
+				Description: "Whether the user was already a member of the group.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
 	}
 )
 
@@ -877,6 +911,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		return err
 	}
 	if err := registry.Register(ctx, modifyGroupSettingsActionSchema, c.modifyGroupSettingsActionHandler); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, addUserToGroupActionSchema, c.addUserToGroupActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}

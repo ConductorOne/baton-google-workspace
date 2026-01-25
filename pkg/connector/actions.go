@@ -440,35 +440,8 @@ func (c *GoogleWorkspace) createGroupActionHandler(ctx context.Context, args *st
 		return nil, nil, fmt.Errorf("invalid email address '%s': %w", groupEmail, err)
 	}
 
-	// Extract optional parameters
+	// Extract optional description
 	description := getStringField(args, "description")
-	allowExternalMembers, hasAllowExternal := getBoolField(args, "allow_external_members")
-	whoCanPostMessage := getStringField(args, "who_can_post_message")
-	messageModerationLevel := getStringField(args, "message_moderation_level")
-
-	// Validate settings values if provided
-	if whoCanPostMessage != "" {
-		validWhoCanPost := map[string]bool{
-			"ANYONE_CAN_POST":        true,
-			"ALL_MEMBERS_CAN_POST":   true,
-			"ALL_MANAGERS_CAN_POST":  true,
-			"ALL_OWNERS_CAN_POST":    true,
-		}
-		if !validWhoCanPost[whoCanPostMessage] {
-			return nil, nil, fmt.Errorf("invalid who_can_post_message value '%s': must be one of ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST", whoCanPostMessage)
-		}
-	}
-
-	if messageModerationLevel != "" {
-		validModeration := map[string]bool{
-			"MODERATE_NONE":         true,
-			"MODERATE_NON_MEMBERS":  true,
-			"MODERATE_ALL_MESSAGES": true,
-		}
-		if !validModeration[messageModerationLevel] {
-			return nil, nil, fmt.Errorf("invalid message_moderation_level value '%s': must be one of MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES", messageModerationLevel)
-		}
-	}
 
 	// Get Directory service
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
@@ -479,21 +452,12 @@ func (c *GoogleWorkspace) createGroupActionHandler(ctx context.Context, args *st
 	// Check if group already exists (idempotency)
 	existingGroup, err := groupService.Groups.Get(groupEmail).Context(ctx).Do()
 	if err == nil {
-		// Group exists - apply settings if provided
-		settingsApplied := false
-		if hasAllowExternal || whoCanPostMessage != "" || messageModerationLevel != "" {
-			settingsApplied, err = c.applyGroupSettings(ctx, existingGroup.Email, allowExternalMembers, whoCanPostMessage, messageModerationLevel, hasAllowExternal)
-			if err != nil {
-				return nil, nil, fmt.Errorf("group exists but failed to apply settings: %w", err)
-			}
-		}
-
+		// Group exists - return existing group details
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
-			"success":          {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-			"group_id":         {Kind: &structpb.Value_StringValue{StringValue: existingGroup.Id}},
-			"group_email":      {Kind: &structpb.Value_StringValue{StringValue: existingGroup.Email}},
-			"group_name":       {Kind: &structpb.Value_StringValue{StringValue: existingGroup.Name}},
-			"settings_applied": {Kind: &structpb.Value_BoolValue{BoolValue: settingsApplied}},
+			"success":     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"group_id":    {Kind: &structpb.Value_StringValue{StringValue: existingGroup.Id}},
+			"group_email": {Kind: &structpb.Value_StringValue{StringValue: existingGroup.Email}},
+			"group_name":  {Kind: &structpb.Value_StringValue{StringValue: existingGroup.Name}},
 		}}
 		return &response, nil, nil
 	}
@@ -520,24 +484,11 @@ func (c *GoogleWorkspace) createGroupActionHandler(ctx context.Context, args *st
 		return nil, nil, err
 	}
 
-	// Apply settings if provided
-	settingsApplied := false
-	if hasAllowExternal || whoCanPostMessage != "" || messageModerationLevel != "" {
-		settingsApplied, err = c.applyGroupSettings(ctx, createdGroup.Email, allowExternalMembers, whoCanPostMessage, messageModerationLevel, hasAllowExternal)
-		if err != nil {
-			if existingGroup != nil {
-				return nil, nil, fmt.Errorf("group created successfully but failed to apply settings: %w", err)
-			}
-			return nil, nil, fmt.Errorf("failed to apply group settings: %w", err)
-		}
-	}
-
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		"success":          {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-		"group_id":         {Kind: &structpb.Value_StringValue{StringValue: createdGroup.Id}},
-		"group_email":      {Kind: &structpb.Value_StringValue{StringValue: createdGroup.Email}},
-		"group_name":       {Kind: &structpb.Value_StringValue{StringValue: createdGroup.Name}},
-		"settings_applied": {Kind: &structpb.Value_BoolValue{BoolValue: settingsApplied}},
+		"success":     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"group_id":    {Kind: &structpb.Value_StringValue{StringValue: createdGroup.Id}},
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: createdGroup.Email}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: createdGroup.Name}},
 	}}
 	return &response, nil, nil
 }
@@ -783,5 +734,144 @@ func (c *GoogleWorkspace) modifyGroupSettingsActionHandler(ctx context.Context, 
 		response.Fields["new_message_moderation_level"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
 	}
 
+	return &response, nil, nil
+}
+
+// addUserToGroupActionHandler adds a user to a Google Group with a specified role (idempotent: checks if already a member).
+func (c *GoogleWorkspace) addUserToGroupActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract and validate group_key parameter
+	groupKeyField, ok := args.Fields["group_key"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing group_key")
+	}
+
+	groupKey := strings.TrimSpace(groupKeyField.StringValue)
+	if groupKey == "" {
+		return nil, nil, fmt.Errorf("group_key must be non-empty")
+	}
+
+	// Extract and validate user_email parameter
+	userEmailField, ok := args.Fields["user_email"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_email")
+	}
+
+	userEmail := strings.TrimSpace(userEmailField.StringValue)
+	if userEmail == "" {
+		return nil, nil, fmt.Errorf("user_email must be non-empty")
+	}
+
+	// Validate email format
+	if _, err := mail.ParseAddress(userEmail); err != nil {
+		return nil, nil, fmt.Errorf("invalid email address '%s': %w", userEmail, err)
+	}
+
+	// Extract optional role parameter (default to MEMBER)
+	role := strings.ToUpper(strings.TrimSpace(getStringField(args, "role")))
+	if role == "" {
+		role = "MEMBER"
+	}
+
+	// Validate role
+	validRoles := map[string]bool{
+		"MEMBER":  true,
+		"MANAGER": true,
+		"OWNER":   true,
+	}
+	if !validRoles[role] {
+		return nil, nil, fmt.Errorf("invalid role '%s': must be one of MEMBER, MANAGER, OWNER", role)
+	}
+
+	// Get Directory service for group member operations
+	memberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Get Directory service to verify group exists
+	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Verify group exists and get its email
+	group, err := groupService.Groups.Get(groupKey).Context(ctx).Do()
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil, fmt.Errorf("group not found: %s", groupKey)
+			}
+		}
+		return nil, nil, err
+	}
+
+	// Check if user is already a member (idempotency check)
+	existingMember, err := memberService.Members.Get(group.Email, userEmail).Context(ctx).Do()
+	if err == nil {
+		// User is already a member
+		alreadyMember := true
+		currentRole := strings.ToUpper(existingMember.Role)
+
+		// Check if role needs to be updated
+		if currentRole != role {
+			// Update the role
+			memberUpdate := &directoryAdmin.Member{
+				Role: role,
+			}
+			_, err = memberService.Members.Patch(group.Email, userEmail, memberUpdate).Context(ctx).Do()
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to update member role: %w", err)
+			}
+
+			response := structpb.Struct{Fields: map[string]*structpb.Value{
+				"success":        {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+				"group_email":    {Kind: &structpb.Value_StringValue{StringValue: group.Email}},
+				"user_email":     {Kind: &structpb.Value_StringValue{StringValue: userEmail}},
+				"role":           {Kind: &structpb.Value_StringValue{StringValue: role}},
+				"already_member": {Kind: &structpb.Value_BoolValue{BoolValue: alreadyMember}},
+			}}
+			return &response, nil, nil
+		}
+
+		// Already a member with the correct role (idempotent - no API call)
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success":        {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"group_email":    {Kind: &structpb.Value_StringValue{StringValue: group.Email}},
+			"user_email":     {Kind: &structpb.Value_StringValue{StringValue: userEmail}},
+			"role":           {Kind: &structpb.Value_StringValue{StringValue: role}},
+			"already_member": {Kind: &structpb.Value_BoolValue{BoolValue: alreadyMember}},
+		}}
+		return &response, nil, nil
+	}
+
+	// Check if error is something other than "not found"
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) {
+		if gerr.Code != http.StatusNotFound {
+			return nil, nil, err
+		}
+	} else {
+		return nil, nil, err
+	}
+
+	// User is not a member - add them
+	newMember := &directoryAdmin.Member{
+		Email: userEmail,
+		Role:  role,
+	}
+
+	_, err = memberService.Members.Insert(group.Email, newMember).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to add user to group: %w", err)
+	}
+
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":        {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"group_email":    {Kind: &structpb.Value_StringValue{StringValue: group.Email}},
+		"user_email":     {Kind: &structpb.Value_StringValue{StringValue: userEmail}},
+		"role":           {Kind: &structpb.Value_StringValue{StringValue: role}},
+		"already_member": {Kind: &structpb.Value_BoolValue{BoolValue: false}},
+	}}
 	return &response, nil, nil
 }
