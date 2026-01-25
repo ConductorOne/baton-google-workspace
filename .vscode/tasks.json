@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run Baton Action (Local)",
+      "label": "Run Baton Action",
       "type": "shell",
       "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --invoke-action='${input:actionName}' --invoke-action-args='${input:actionArgs}'",
       "problemMatcher": [],
@@ -14,19 +14,7 @@
       }
     },
     {
-      "label": "Run Baton Action (Service Mode)",
-      "type": "shell",
-      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --client-id 'upbeat-timetable-41376@condunderone.conductor.one/ccc' --client-secret 'secret-token:conductorone.com:v1:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlZDcDVhS21Gb1BQMF9pcDR2QUQwSmlNSFFYNERlM2szbXFPRXRKN3VQcEkiLCJkIjoiTEhSQTUtR1U1NGNYbWdlRXp2enJ3VU5aSEJJZm90LVg1VGhlOEZmamVDNCJ9' --invoke-action='${input:actionName}' --invoke-action-args='${input:actionArgs}'",
-      "problemMatcher": [],
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Create Group (Local)",
+      "label": "Create Group",
       "type": "shell",
       "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --invoke-action=create_group --invoke-action-args='${input:createGroupArgs}'",
       "problemMatcher": [],
@@ -36,9 +24,9 @@
       }
     },
     {
-      "label": "Create Group (Service Mode)",
+      "label": "Add User to Group",
       "type": "shell",
-      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --client-id 'upbeat-timetable-41376@condunderone.conductor.one/ccc' --client-secret 'secret-token:conductorone.com:v1:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlZDcDVhS21Gb1BQMF9pcDR2QUQwSmlNSFFYNERlM2szbXFPRXRKN3VQcEkiLCJkIjoiTEhSQTUtR1U1NGNYbWdlRXp2enJ3VU5aSEJJZm90LVg1VGhlOEZmamVDNCJ9' --invoke-action=create_group --invoke-action-args='${input:createGroupArgs}'",
+      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --invoke-action=add_user_to_group --invoke-action-args='${input:addUserToGroupArgs}'",
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",
@@ -46,7 +34,7 @@
       }
     },
     {
-      "label": "Modify Group Settings (Local)",
+      "label": "Modify Group Settings",
       "type": "shell",
       "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --invoke-action=modify_group_settings --invoke-action-args='${input:modifyGroupSettingsArgs}'",
       "problemMatcher": [],
@@ -56,13 +44,16 @@
       }
     },
     {
-      "label": "Modify Group Settings (Service Mode)",
+      "label": "Start Connector (Service Mode)",
       "type": "shell",
-      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --client-id 'upbeat-timetable-41376@condunderone.conductor.one/ccc' --client-secret 'secret-token:conductorone.com:v1:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlZDcDVhS21Gb1BQMF9pcDR2QUQwSmlNSFFYNERlM2szbXFPRXRKN3VQcEkiLCJkIjoiTEhSQTUtR1U1NGNYbWdlRXp2enJ3VU5aSEJJZm90LVg1VGhlOEZmamVDNCJ9' --invoke-action=modify_group_settings --invoke-action-args='${input:modifyGroupSettingsArgs}'",
+      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --client-id 'upbeat-timetable-41376@condunderone.conductor.one/ccc' --client-secret 'secret-token:conductorone.com:v1:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlZDcDVhS21Gb1BQMF9pcDR2QUQwSmlNSFFYNERlM2szbXFPRXRKN3VQcEkiLCJkIjoiTEhSQTUtR1U1NGNYbWdlRXp2enJ3VU5aSEJJZm90LVg1VGhlOEZmamVDNCJ9'",
       "problemMatcher": [],
+      "isBackground": true,
       "presentation": {
+        "echo": true,
         "reveal": "always",
-        "panel": "shared"
+        "focus": false,
+        "panel": "dedicated"
       }
     },
     {
@@ -81,7 +72,7 @@
     {
       "id": "actionName",
       "type": "promptString",
-      "description": "Action name (e.g., create_group, modify_group_settings)",
+      "description": "Action name (e.g., create_group, add_user_to_group)",
       "default": "create_group"
     },
     {
@@ -95,6 +86,12 @@
       "type": "promptString",
       "description": "Group creation args",
       "default": "{\"group_email\":\"test@condunder.one\",\"group_name\":\"Test Group\",\"description\":\"Test group\"}"
+    },
+    {
+      "id": "addUserToGroupArgs",
+      "type": "promptString",
+      "description": "Add user to group args",
+      "default": "{\"group_key\":\"test@condunder.one\",\"user_email\":\"user@condunder.one\",\"role\":\"MEMBER\"}"
     },
     {
       "id": "modifyGroupSettingsArgs",
