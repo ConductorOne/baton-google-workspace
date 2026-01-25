@@ -95,7 +95,7 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 
 	c := newTestConnector()
 	// prime directory read-only scopes for admin_event_feed
-	primeServiceCache(c, dir, nil)
+	primeServiceCache(c, dir, nil, nil)
 	c.reportService = rep
 
 	feed := newAdminEventFeed(c)

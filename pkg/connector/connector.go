@@ -21,6 +21,7 @@ import (
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -267,6 +268,180 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
+	createGroupActionSchema = &v2.BatonActionSchema{
+		Name:        "create_group",
+		DisplayName: "Create Group",
+		Description: "Create a new Google Group with optional settings.",
+		Arguments: []*config.Field{
+			{
+				Name:        "group_email",
+				DisplayName: "Group Email",
+				Description: "Email address for the new group.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "group_name",
+				DisplayName: "Group Name",
+				Description: "Name of the new group.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "description",
+				DisplayName: "Description",
+				Description: "Optional description of the group.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "allow_external_members",
+				DisplayName: "Allow External Members",
+				Description: "If true, allows external members to join the group. Defaults to false.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "who_can_post_message",
+				DisplayName: "Who Can Post Messages",
+				Description: "Control who can post messages. Values: ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "message_moderation_level",
+				DisplayName: "Message Moderation Level",
+				Description: "Control moderation. Values: MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the group was created successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "group_id",
+				DisplayName: "Group ID",
+				Description: "Unique ID of the created group.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "group_email",
+				DisplayName: "Group Email",
+				Description: "Email address of the created group.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "group_name",
+				DisplayName: "Group Name",
+				Description: "Name of the created group.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "settings_applied",
+				DisplayName: "Settings Applied",
+				Description: "Whether group settings were applied.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
+	}
+	modifyGroupSettingsActionSchema = &v2.BatonActionSchema{
+		Name:        "modify_group_settings",
+		DisplayName: "Modify Group Settings",
+		Description: "Update settings for an existing Google Group.",
+		Arguments: []*config.Field{
+			{
+				Name:        "group_key",
+				DisplayName: "Group Key",
+				Description: "Email address or unique ID of the group to modify.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "allow_external_members",
+				DisplayName: "Allow External Members",
+				Description: "If true, allows external members to join the group. Defaults to false.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "who_can_post_message",
+				DisplayName: "Who Can Post Messages",
+				Description: "Control who can post messages. Values: ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "message_moderation_level",
+				DisplayName: "Message Moderation Level",
+				Description: "Control moderation. Values: MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the settings were updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "group_email",
+				DisplayName: "Group Email",
+				Description: "Email address of the group.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "settings_updated",
+				DisplayName: "Settings Updated",
+				Description: "Whether any settings were changed.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_allow_external_members",
+				DisplayName: "Previous Allow External Members",
+				Description: "Previous value of allow_external_members setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_allow_external_members",
+				DisplayName: "New Allow External Members",
+				Description: "New value of allow_external_members setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "previous_who_can_post_message",
+				DisplayName: "Previous Who Can Post Messages",
+				Description: "Previous value of who_can_post_message setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_who_can_post_message",
+				DisplayName: "New Who Can Post Messages",
+				Description: "New value of who_can_post_message setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "previous_message_moderation_level",
+				DisplayName: "Previous Message Moderation Level",
+				Description: "Previous value of message_moderation_level setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_message_moderation_level",
+				DisplayName: "New Message Moderation Level",
+				Description: "New value of message_moderation_level setting.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
 )
 
 type Config struct {
@@ -352,6 +527,12 @@ func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string)
 
 func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope string) (*datatransferAdmin.Service, error) {
 	return getService(ctx, c, scope, datatransferAdmin.NewService)
+}
+
+func (c *GoogleWorkspace) getGroupsSettingsService(ctx context.Context) (*groupssettings.Service, error) {
+	// Groups Settings API uses a specific scope
+	const groupsSettingsScope = "https://www.googleapis.com/auth/apps.groups.settings"
+	return getService(ctx, c, groupsSettingsScope, groupssettings.NewService)
 }
 
 func New(ctx context.Context, config Config) (*GoogleWorkspace, error) {
@@ -688,6 +869,14 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		return err
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, createGroupActionSchema, c.createGroupActionHandler); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, modifyGroupSettingsActionSchema, c.modifyGroupSettingsActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}

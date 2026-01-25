@@ -12,6 +12,7 @@ import (
 
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -19,6 +20,16 @@ import (
 type testUser struct {
 	Suspended    bool
 	PrimaryEmail string
+}
+
+type testGroup struct {
+	Id                     string
+	Email                  string
+	Name                   string
+	Description            string
+	AllowExternalMembers   string // "true" or "false"
+	WhoCanPostMessage      string
+	MessageModerationLevel string
 }
 
 type transferRecord struct {
@@ -31,11 +42,13 @@ type transferRecord struct {
 }
 
 type testServerState struct {
-	mtx       sync.Mutex
-	users     map[string]*testUser
-	transfers []*transferRecord
-	putCount  int
-	postCount int
+	mtx         sync.Mutex
+	users       map[string]*testUser
+	groups      map[string]*testGroup
+	transfers   []*transferRecord
+	putCount    int
+	postCount   int
+	insertCount int
 }
 
 func newTestServer(state *testServerState) *httptest.Server {
@@ -78,6 +91,132 @@ func newTestServer(state *testServerState) *httptest.Server {
 				PrimaryEmail: u.PrimaryEmail,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/admin/directory/v1/groups", func(w http.ResponseWriter, r *http.Request) {
+		state.mtx.Lock()
+		defer state.mtx.Unlock()
+		switch r.Method {
+		case http.MethodPost:
+			state.postCount++
+			state.insertCount++
+			var body directoryAdmin.Group
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			// Generate a unique ID for the group
+			groupId := "group_" + strings.ReplaceAll(body.Email, "@", "_at_")
+			g := &testGroup{
+				Id:          groupId,
+				Email:       body.Email,
+				Name:        body.Name,
+				Description: body.Description,
+			}
+			state.groups[body.Email] = g
+			resp := &directoryAdmin.Group{
+				Id:          g.Id,
+				Email:       g.Email,
+				Name:        g.Name,
+				Description: g.Description,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/admin/directory/v1/groups/", func(w http.ResponseWriter, r *http.Request) {
+		// path suffix is groupKey (email or ID)
+		groupKey := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/groups/")
+		state.mtx.Lock()
+		defer state.mtx.Unlock()
+		switch r.Method {
+		case http.MethodGet:
+			// Look up by email first
+			g := state.groups[groupKey]
+			if g == nil {
+				// Try looking up by ID
+				for _, group := range state.groups {
+					if group.Id == groupKey {
+						g = group
+						break
+					}
+				}
+			}
+			if g == nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			resp := &directoryAdmin.Group{
+				Id:          g.Id,
+				Email:       g.Email,
+				Name:        g.Name,
+				Description: g.Description,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Groups Settings API handlers
+	mux.HandleFunc("/groups/v1/groups/", func(w http.ResponseWriter, r *http.Request) {
+		// path suffix is groupKey (email)
+		groupKey := strings.TrimPrefix(r.URL.Path, "/groups/v1/groups/")
+		state.mtx.Lock()
+		defer state.mtx.Unlock()
+
+		g := state.groups[groupKey]
+		if g == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			// Return current settings
+			// Initialize with defaults if not set
+			if g.AllowExternalMembers == "" {
+				g.AllowExternalMembers = "false"
+			}
+			if g.WhoCanPostMessage == "" {
+				g.WhoCanPostMessage = "ALL_MEMBERS_CAN_POST"
+			}
+			if g.MessageModerationLevel == "" {
+				g.MessageModerationLevel = "MODERATE_NONE"
+			}
+
+			resp := map[string]interface{}{
+				"allowExternalMembers":   g.AllowExternalMembers,
+				"whoCanPostMessage":      g.WhoCanPostMessage,
+				"messageModerationLevel": g.MessageModerationLevel,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case http.MethodPatch, http.MethodPut:
+			state.putCount++
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			// Update settings if provided
+			if allowExt, ok := body["allowExternalMembers"].(string); ok {
+				g.AllowExternalMembers = allowExt
+			}
+			if whoCanPost, ok := body["whoCanPostMessage"].(string); ok {
+				g.WhoCanPostMessage = whoCanPost
+			}
+			if modLevel, ok := body["messageModerationLevel"].(string); ok {
+				g.MessageModerationLevel = modLevel
+			}
+
+			resp := map[string]interface{}{
+				"allowExternalMembers":   g.AllowExternalMembers,
+				"whoCanPostMessage":      g.WhoCanPostMessage,
+				"messageModerationLevel": g.MessageModerationLevel,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -161,7 +300,18 @@ func newTestDataTransferService(t *testing.T, baseURL string, hc *http.Client) *
 	return srv
 }
 
-func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *datatransferAdmin.Service) {
+func newTestGroupsSettingsService(t *testing.T, baseURL string, hc *http.Client) *groupssettings.Service {
+	t.Helper()
+	// The groupssettings API base path is /groups/v1/groups/
+	// We need to append this to our test server URL
+	srv, err := groupssettings.NewService(context.Background(), option.WithEndpoint(baseURL+"/groups/v1/groups/"), option.WithHTTPClient(hc))
+	if err != nil {
+		t.Fatalf("newTestGroupsSettingsService: %v", err)
+	}
+	return srv
+}
+
+func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *datatransferAdmin.Service, gs *groupssettings.Service) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	if c.serviceCache == nil {
@@ -170,9 +320,13 @@ func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *data
 	if dir != nil {
 		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = dir
 		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = dir
+		c.serviceCache[directoryAdmin.AdminDirectoryGroupReadonlyScope] = dir
 	}
 	if dt != nil {
 		c.serviceCache[datatransferAdmin.AdminDatatransferScope] = dt
+	}
+	if gs != nil {
+		c.serviceCache["https://www.googleapis.com/auth/apps.groups.settings"] = gs
 	}
 }
 
@@ -189,7 +343,7 @@ func TestDisableEnableUser_IdempotentAndPayload(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	c := newTestConnector()
-	primeServiceCache(c, dir, nil)
+	primeServiceCache(c, dir, nil, nil)
 
 	// disable user
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
@@ -229,7 +383,7 @@ func TestChangePrimaryEmail(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	c := newTestConnector()
-	primeServiceCache(c, dir, nil)
+	primeServiceCache(c, dir, nil, nil)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
 		"resource_id":       {Kind: &structpb.Value_StringValue{StringValue: "bob"}},
@@ -254,7 +408,7 @@ func TestChangePrimaryEmail_InvalidEmail(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	c := newTestConnector()
-	primeServiceCache(c, dir, nil)
+	primeServiceCache(c, dir, nil, nil)
 
 	// Test with invalid email format
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
@@ -303,7 +457,7 @@ func TestTransferDrive_IdempotentAndPrivacyLevels(t *testing.T) {
 
 	dt := newTestDataTransferService(t, server.URL, server.Client())
 	c := newTestConnector()
-	primeServiceCache(c, nil, dt)
+	primeServiceCache(c, nil, dt, nil)
 
 	// First call: no existing, expect POST
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
@@ -345,7 +499,7 @@ func TestTransferCalendar_ReleaseResources(t *testing.T) {
 
 	dt := newTestDataTransferService(t, server.URL, server.Client())
 	c := newTestConnector()
-	primeServiceCache(c, nil, dt)
+	primeServiceCache(c, nil, dt, nil)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
 		"resource_id":        {Kind: &structpb.Value_StringValue{StringValue: "src"}},
@@ -358,4 +512,643 @@ func TestTransferCalendar_ReleaseResources(t *testing.T) {
 	if state.postCount != 1 {
 		t.Fatalf("expected 1 POST, got %d", state.postCount)
 	}
+}
+
+// ========== create_group Action Tests ==========
+
+// Test 1: Success Case - Create group with valid inputs
+func TestCreateGroup_Success(t *testing.T) {
+	state := &testServerState{
+		users:  map[string]*testUser{},
+		groups: map[string]*testGroup{},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "newgroup@example.com"}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: "New Test Group"}},
+		"description": {Kind: &structpb.Value_StringValue{StringValue: "A test group for unit tests"}},
+	}}
+
+	state.mtx.Lock()
+	initialInsertCount := state.insertCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.createGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify response values
+	groupId := resp.Fields["group_id"].GetStringValue()
+	if groupId == "" {
+		t.Fatalf("expected group_id to be non-empty")
+	}
+
+	groupEmail := resp.Fields["group_email"].GetStringValue()
+	if groupEmail != "newgroup@example.com" {
+		t.Fatalf("expected group_email to be 'newgroup@example.com', got: %v", groupEmail)
+	}
+
+	groupName := resp.Fields["group_name"].GetStringValue()
+	if groupName != "New Test Group" {
+		t.Fatalf("expected group_name to be 'New Test Group', got: %v", groupName)
+	}
+
+	// Verify API was called once
+	state.mtx.Lock()
+	if state.insertCount != initialInsertCount+1 {
+		t.Fatalf("expected one insert call")
+	}
+
+	// Verify group was created in state
+	group := state.groups["newgroup@example.com"]
+	if group == nil {
+		t.Fatalf("expected group to be created")
+	}
+	if group.Email != "newgroup@example.com" {
+		t.Fatalf("expected group email to be 'newgroup@example.com', got: %v", group.Email)
+	}
+	if group.Name != "New Test Group" {
+		t.Fatalf("expected group name to be 'New Test Group', got: %v", group.Name)
+	}
+	if group.Description != "A test group for unit tests" {
+		t.Fatalf("expected group description to be 'A test group for unit tests', got: %v", group.Description)
+	}
+	state.mtx.Unlock()
+}
+
+// Test 2: Idempotent Case - No API call when group already exists
+func TestCreateGroup_Idempotent(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"existing@example.com": {
+				Id:          "group_existing_at_example.com",
+				Email:       "existing@example.com",
+				Name:        "Existing Group",
+				Description: "Already exists",
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "existing@example.com"}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: "Different Name"}},
+	}}
+
+	state.mtx.Lock()
+	initialInsertCount := state.insertCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.createGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify returns existing group details
+	groupId := resp.Fields["group_id"].GetStringValue()
+	if groupId != "group_existing_at_example.com" {
+		t.Fatalf("expected existing group_id, got: %v", groupId)
+	}
+
+	groupEmail := resp.Fields["group_email"].GetStringValue()
+	if groupEmail != "existing@example.com" {
+		t.Fatalf("expected existing group_email, got: %v", groupEmail)
+	}
+
+	groupName := resp.Fields["group_name"].GetStringValue()
+	if groupName != "Existing Group" {
+		t.Fatalf("expected existing group_name 'Existing Group', got: %v", groupName)
+	}
+
+	// Verify no API call was made (CRITICAL CHECK)
+	state.mtx.Lock()
+	if state.insertCount != initialInsertCount {
+		t.Fatalf("expected no insert call for idempotent operation")
+	}
+	state.mtx.Unlock()
+}
+
+// Test 3: Validation Errors - Test input validation
+func TestCreateGroup_ValidationErrors(t *testing.T) {
+	state := &testServerState{
+		users:  map[string]*testUser{},
+		groups: map[string]*testGroup{},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	// Missing group_email
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_name": {Kind: &structpb.Value_StringValue{StringValue: "Test Group"}},
+	}}
+	_, _, err := c.createGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing group_email")
+	}
+	if !strings.Contains(err.Error(), "missing group_email") {
+		t.Fatalf("expected error message to contain 'missing group_email', got: %v", err)
+	}
+
+	// Missing group_name
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+	}}
+	_, _, err = c.createGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing group_name")
+	}
+	if !strings.Contains(err.Error(), "missing group_name") {
+		t.Fatalf("expected error message to contain 'missing group_name', got: %v", err)
+	}
+
+	// Empty group_email after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: "Test Group"}},
+	}}
+	_, _, err = c.createGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty group_email")
+	}
+	if !strings.Contains(err.Error(), "group_email must be non-empty") {
+		t.Fatalf("expected error message to contain 'group_email must be non-empty', got: %v", err)
+	}
+
+	// Empty group_name after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+	}}
+	_, _, err = c.createGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty group_name")
+	}
+	if !strings.Contains(err.Error(), "group_name must be non-empty") {
+		t.Fatalf("expected error message to contain 'group_name must be non-empty', got: %v", err)
+	}
+
+	// Invalid email format
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "invalid-email"}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: "Test Group"}},
+	}}
+	_, _, err = c.createGroupActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid email format")
+	}
+	if !strings.Contains(err.Error(), "invalid email address") {
+		t.Fatalf("expected error message to contain 'invalid email address', got: %v", err)
+	}
+}
+
+// Test 4: Success Without Optional Description
+func TestCreateGroup_SuccessWithoutDescription(t *testing.T) {
+	state := &testServerState{
+		users:  map[string]*testUser{},
+		groups: map[string]*testGroup{},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email": {Kind: &structpb.Value_StringValue{StringValue: "nodesc@example.com"}},
+		"group_name":  {Kind: &structpb.Value_StringValue{StringValue: "No Description Group"}},
+	}}
+
+	resp, _, err := c.createGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify group was created without description
+	state.mtx.Lock()
+	group := state.groups["nodesc@example.com"]
+	if group == nil {
+		t.Fatalf("expected group to be created")
+	}
+	if group.Description != "" {
+		t.Fatalf("expected empty description, got: %v", group.Description)
+	}
+	state.mtx.Unlock()
+}
+
+// Test 5: Success With Group Settings
+func TestCreateGroup_WithSettings(t *testing.T) {
+	state := &testServerState{
+		users:  map[string]*testUser{},
+		groups: map[string]*testGroup{},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_email":              {Kind: &structpb.Value_StringValue{StringValue: "settings@example.com"}},
+		"group_name":               {Kind: &structpb.Value_StringValue{StringValue: "Settings Test Group"}},
+		"allow_external_members":   {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"who_can_post_message":     {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
+		"message_moderation_level": {Kind: &structpb.Value_StringValue{StringValue: "MODERATE_NON_MEMBERS"}},
+	}}
+
+	resp, _, err := c.createGroupActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	if !resp.Fields["settings_applied"].GetBoolValue() {
+		t.Fatalf("expected settings_applied to be true")
+	}
+
+	// Verify group was created with settings
+	state.mtx.Lock()
+	group := state.groups["settings@example.com"]
+	if group == nil {
+		t.Fatalf("expected group to be created")
+	}
+	if group.AllowExternalMembers != "true" {
+		t.Fatalf("expected AllowExternalMembers to be 'true', got: %v", group.AllowExternalMembers)
+	}
+	if group.WhoCanPostMessage != "ANYONE_CAN_POST" {
+		t.Fatalf("expected WhoCanPostMessage to be 'ANYONE_CAN_POST', got: %v", group.WhoCanPostMessage)
+	}
+	if group.MessageModerationLevel != "MODERATE_NON_MEMBERS" {
+		t.Fatalf("expected MessageModerationLevel to be 'MODERATE_NON_MEMBERS', got: %v", group.MessageModerationLevel)
+	}
+	state.mtx.Unlock()
+}
+
+// ========== modify_group_settings Action Tests ==========
+
+// Test 1: Success Case - Modify group settings with all parameters
+func TestModifyGroupSettings_Success(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"modify@example.com": {
+				Id:                     "group_modify_at_example.com",
+				Email:                  "modify@example.com",
+				Name:                   "Modify Test Group",
+				AllowExternalMembers:   "false",
+				WhoCanPostMessage:      "ALL_MEMBERS_CAN_POST",
+				MessageModerationLevel: "MODERATE_NONE",
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":                {Kind: &structpb.Value_StringValue{StringValue: "modify@example.com"}},
+		"allow_external_members":   {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"who_can_post_message":     {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
+		"message_moderation_level": {Kind: &structpb.Value_StringValue{StringValue: "MODERATE_NON_MEMBERS"}},
+	}}
+
+	state.mtx.Lock()
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	if !resp.Fields["settings_updated"].GetBoolValue() {
+		t.Fatalf("expected settings_updated to be true")
+	}
+
+	// Verify previous and new values
+	if resp.Fields["previous_allow_external_members"].GetStringValue() != "false" {
+		t.Fatalf("expected previous_allow_external_members to be 'false'")
+	}
+	if resp.Fields["new_allow_external_members"].GetStringValue() != "true" {
+		t.Fatalf("expected new_allow_external_members to be 'true'")
+	}
+
+	if resp.Fields["previous_who_can_post_message"].GetStringValue() != "ALL_MEMBERS_CAN_POST" {
+		t.Fatalf("expected previous_who_can_post_message to be 'ALL_MEMBERS_CAN_POST'")
+	}
+	if resp.Fields["new_who_can_post_message"].GetStringValue() != "ANYONE_CAN_POST" {
+		t.Fatalf("expected new_who_can_post_message to be 'ANYONE_CAN_POST'")
+	}
+
+	// Verify API was called once
+	state.mtx.Lock()
+	if state.putCount != initialPutCount+1 {
+		t.Fatalf("expected one PUT call, got %d", state.putCount-initialPutCount)
+	}
+
+	// Verify state changes
+	group := state.groups["modify@example.com"]
+	if group.AllowExternalMembers != "true" {
+		t.Fatalf("expected AllowExternalMembers to be 'true', got: %v", group.AllowExternalMembers)
+	}
+	if group.WhoCanPostMessage != "ANYONE_CAN_POST" {
+		t.Fatalf("expected WhoCanPostMessage to be 'ANYONE_CAN_POST', got: %v", group.WhoCanPostMessage)
+	}
+	if group.MessageModerationLevel != "MODERATE_NON_MEMBERS" {
+		t.Fatalf("expected MessageModerationLevel to be 'MODERATE_NON_MEMBERS', got: %v", group.MessageModerationLevel)
+	}
+	state.mtx.Unlock()
+}
+
+// Test 2: Idempotent Case - No update when already at target
+func TestModifyGroupSettings_Idempotent(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"idempotent@example.com": {
+				Id:                     "group_idempotent_at_example.com",
+				Email:                  "idempotent@example.com",
+				Name:                   "Idempotent Test Group",
+				AllowExternalMembers:   "true",
+				WhoCanPostMessage:      "ANYONE_CAN_POST",
+				MessageModerationLevel: "MODERATE_NON_MEMBERS",
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":                {Kind: &structpb.Value_StringValue{StringValue: "idempotent@example.com"}},
+		"allow_external_members":   {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"who_can_post_message":     {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
+		"message_moderation_level": {Kind: &structpb.Value_StringValue{StringValue: "MODERATE_NON_MEMBERS"}},
+	}}
+
+	state.mtx.Lock()
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify no settings were updated (idempotent)
+	if resp.Fields["settings_updated"].GetBoolValue() {
+		t.Fatalf("expected settings_updated to be false for idempotent operation")
+	}
+
+	// Verify no API call was made (CRITICAL CHECK)
+	state.mtx.Lock()
+	if state.putCount != initialPutCount {
+		t.Fatalf("expected no PUT call for idempotent operation")
+	}
+	state.mtx.Unlock()
+}
+
+// Test 3: Validation Errors
+func TestModifyGroupSettings_ValidationErrors(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"test@example.com": {
+				Id:    "group_test_at_example.com",
+				Email: "test@example.com",
+				Name:  "Test Group",
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	// Missing group_key
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"who_can_post_message": {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
+	}}
+	_, _, err := c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing group_key")
+	}
+	if !strings.Contains(err.Error(), "missing group_key") {
+		t.Fatalf("expected error message to contain 'missing group_key', got: %v", err)
+	}
+
+	// Empty group_key after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":            {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+		"who_can_post_message": {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
+	}}
+	_, _, err = c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty group_key")
+	}
+	if !strings.Contains(err.Error(), "group_key must be non-empty") {
+		t.Fatalf("expected error message to contain 'group_key must be non-empty', got: %v", err)
+	}
+
+	// No settings parameters provided
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key": {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+	}}
+	_, _, err = c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error when no settings parameters provided")
+	}
+	if !strings.Contains(err.Error(), "at least one settings parameter must be provided") {
+		t.Fatalf("expected error message to contain 'at least one settings parameter must be provided', got: %v", err)
+	}
+
+	// Invalid who_can_post_message
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":            {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+		"who_can_post_message": {Kind: &structpb.Value_StringValue{StringValue: "INVALID_VALUE"}},
+	}}
+	_, _, err = c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid who_can_post_message")
+	}
+	if !strings.Contains(err.Error(), "invalid who_can_post_message value") {
+		t.Fatalf("expected error message to contain 'invalid who_can_post_message value', got: %v", err)
+	}
+
+	// Invalid message_moderation_level
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":                {Kind: &structpb.Value_StringValue{StringValue: "test@example.com"}},
+		"message_moderation_level": {Kind: &structpb.Value_StringValue{StringValue: "INVALID_LEVEL"}},
+	}}
+	_, _, err = c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid message_moderation_level")
+	}
+	if !strings.Contains(err.Error(), "invalid message_moderation_level value") {
+		t.Fatalf("expected error message to contain 'invalid message_moderation_level value', got: %v", err)
+	}
+}
+
+// Test 4: Group Not Found
+func TestModifyGroupSettings_GroupNotFound(t *testing.T) {
+	state := &testServerState{
+		users:  map[string]*testUser{},
+		groups: map[string]*testGroup{},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":            {Kind: &structpb.Value_StringValue{StringValue: "nonexistent@example.com"}},
+		"who_can_post_message": {Kind: &structpb.Value_StringValue{StringValue: "ANYONE_CAN_POST"}},
+	}}
+
+	_, _, err := c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for group not found")
+	}
+	if !strings.Contains(err.Error(), "group not found") {
+		t.Fatalf("expected error message to contain 'group not found', got: %v", err)
+	}
+}
+
+// Test 5: Partial Settings Update - Only one setting provided
+func TestModifyGroupSettings_PartialUpdate(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"partial@example.com": {
+				Id:                     "group_partial_at_example.com",
+				Email:                  "partial@example.com",
+				Name:                   "Partial Update Group",
+				AllowExternalMembers:   "false",
+				WhoCanPostMessage:      "ALL_MEMBERS_CAN_POST",
+				MessageModerationLevel: "MODERATE_NONE",
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	// Only update who_can_post_message
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":            {Kind: &structpb.Value_StringValue{StringValue: "partial@example.com"}},
+		"who_can_post_message": {Kind: &structpb.Value_StringValue{StringValue: "ALL_OWNERS_CAN_POST"}},
+	}}
+
+	state.mtx.Lock()
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	if !resp.Fields["settings_updated"].GetBoolValue() {
+		t.Fatalf("expected settings_updated to be true")
+	}
+
+	// Verify only who_can_post_message was updated
+	if resp.Fields["previous_who_can_post_message"].GetStringValue() != "ALL_MEMBERS_CAN_POST" {
+		t.Fatalf("expected previous_who_can_post_message to be 'ALL_MEMBERS_CAN_POST'")
+	}
+	if resp.Fields["new_who_can_post_message"].GetStringValue() != "ALL_OWNERS_CAN_POST" {
+		t.Fatalf("expected new_who_can_post_message to be 'ALL_OWNERS_CAN_POST'")
+	}
+
+	// Verify other settings fields are not in response
+	if _, ok := resp.Fields["previous_allow_external_members"]; ok {
+		t.Fatalf("expected previous_allow_external_members to not be in response")
+	}
+	if _, ok := resp.Fields["previous_message_moderation_level"]; ok {
+		t.Fatalf("expected previous_message_moderation_level to not be in response")
+	}
+
+	// Verify API was called once
+	state.mtx.Lock()
+	if state.putCount != initialPutCount+1 {
+		t.Fatalf("expected one PUT call")
+	}
+
+	// Verify only who_can_post_message changed
+	group := state.groups["partial@example.com"]
+	if group.WhoCanPostMessage != "ALL_OWNERS_CAN_POST" {
+		t.Fatalf("expected WhoCanPostMessage to be 'ALL_OWNERS_CAN_POST', got: %v", group.WhoCanPostMessage)
+	}
+	// Other settings should remain unchanged
+	if group.AllowExternalMembers != "false" {
+		t.Fatalf("expected AllowExternalMembers to remain 'false', got: %v", group.AllowExternalMembers)
+	}
+	if group.MessageModerationLevel != "MODERATE_NONE" {
+		t.Fatalf("expected MessageModerationLevel to remain 'MODERATE_NONE', got: %v", group.MessageModerationLevel)
+	}
+	state.mtx.Unlock()
 }

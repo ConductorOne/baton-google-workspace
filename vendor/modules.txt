@@ -697,6 +697,7 @@ google.golang.org/api/admin/directory/v1
 google.golang.org/api/admin/reports/v1
 google.golang.org/api/googleapi
 google.golang.org/api/googleapi/transport
+google.golang.org/api/groupssettings/v1
 google.golang.org/api/internal
 google.golang.org/api/internal/cert
 google.golang.org/api/internal/gensupport
