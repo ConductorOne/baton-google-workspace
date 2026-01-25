@@ -387,3 +387,42 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	}
 	return normalized, nil
 }
+
+// revokeUserSessionsHandler revokes all active user sessions across web and device platforms.
+func (c *GoogleWorkspace) revokeUserSessionsHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract and validate user email
+	userEmailField, ok := args.Fields["user_email"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_email")
+	}
+
+	userEmail := strings.TrimSpace(userEmailField.StringValue)
+	if userEmail == "" {
+		return nil, nil, fmt.Errorf("user_email must be non-empty")
+	}
+
+	// Validate email format
+	if _, err := mail.ParseAddress(userEmail); err != nil {
+		return nil, nil, fmt.Errorf("invalid email format: %s", userEmail)
+	}
+
+	// Get directory service with user security scope
+	service, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Revoke all user sessions - this is NOT idempotent by nature
+	// Google doesn't provide a way to check current session state
+	err = service.Users.SignOut(userEmail).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to revoke sessions for user %s: %w", userEmail, err)
+	}
+
+	// Return success response
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":    {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: userEmail}},
+	}}
+	return &response, nil, nil
+}
