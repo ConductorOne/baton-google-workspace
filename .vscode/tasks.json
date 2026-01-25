@@ -46,7 +46,7 @@
     {
       "label": "Start Connector (Service Mode)",
       "type": "shell",
-      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --client-id 'upbeat-timetable-41376@condunderone.conductor.one/ccc' --client-secret 'secret-token:conductorone.com:v1:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlZDcDVhS21Gb1BQMF9pcDR2QUQwSmlNSFFYNERlM2szbXFPRXRKN3VQcEkiLCJkIjoiTEhSQTUtR1U1NGNYbWdlRXp2enJ3VU5aSEJJZm90LVg1VGhlOEZmamVDNCJ9'",
+      "command": "./dist/darwin_arm64/baton-google-workspace --credentials-json-file-path /Users/charleskramer/Dev/creds/condunder-gw-local-creds.json --administrator-email app-owner@condunder.one --customer-id C02n2wmaf --client-id '${input:clientId}' --client-secret '${input:clientSecret}'",
       "problemMatcher": [],
       "isBackground": true,
       "presentation": {
@@ -98,6 +98,18 @@
       "type": "promptString",
       "description": "Group settings args",
       "default": "{\"group_key\":\"test@condunder.one\",\"allow_external_members\":true,\"who_can_post_message\":\"ANYONE_CAN_POST\"}"
+    },
+    {
+      "id": "clientId",
+      "type": "promptString",
+      "description": "ConductorOne Client ID",
+      "default": "upbeat-timetable-41376@condunderone.conductor.one/ccc"
+    },
+    {
+      "id": "clientSecret",
+      "type": "promptString",
+      "description": "ConductorOne Client Secret",
+      "default": "secret-token:conductorone.com:v1:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlZDcDVhS21Gb1BQMF9pcDR2QUQwSmlNSFFYNERlM2szbXFPRXRKN3VQcEkiLCJkIjoiTEhSQTUtR1U1NGNYbWdlRXp2enJ3VU5aSEJJZm90LVg1VGhlOEZmamVDNCJ9"
     }
   ]
 }
