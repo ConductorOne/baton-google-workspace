@@ -494,7 +494,7 @@ func (c *GoogleWorkspace) createGroupActionHandler(ctx context.Context, args *st
 }
 
 // applyGroupSettings applies group settings using the Groups Settings API (idempotent: checks current values before updating).
-func (c *GoogleWorkspace) applyGroupSettings(ctx context.Context, groupEmail string, allowExternalMembers bool, whoCanPostMessage string, messageModerationLevel string, hasAllowExternal bool) (bool, error) {
+func (c *GoogleWorkspace) applyGroupSettings(ctx context.Context, groupEmail string, allowExternalMembers bool, allowWebPosting bool, whoCanPostMessage string, messageModerationLevel string, hasAllowExternal bool, hasAllowWebPosting bool) (bool, error) {
 	// Get Groups Settings service
 	settingsService, err := c.getGroupsSettingsService(ctx)
 	if err != nil {
@@ -522,6 +522,20 @@ func (c *GoogleWorkspace) applyGroupSettings(ctx context.Context, groupEmail str
 				updatedSettings.AllowExternalMembers = "false"
 			}
 			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowExternalMembers")
+		}
+	}
+
+	// Check allow_web_posting
+	if hasAllowWebPosting {
+		currentAllowWebPosting := strings.EqualFold(currentSettings.AllowWebPosting, "true")
+		if currentAllowWebPosting != allowWebPosting {
+			needsUpdate = true
+			if allowWebPosting {
+				updatedSettings.AllowWebPosting = "true"
+			} else {
+				updatedSettings.AllowWebPosting = "false"
+			}
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowWebPosting")
 		}
 	}
 
@@ -555,7 +569,7 @@ func (c *GoogleWorkspace) applyGroupSettings(ctx context.Context, groupEmail str
 
 // applyGroupSettingsWithTracking applies group settings and returns what changed.
 // Returns (settingsUpdated bool, previousSettings map, newSettings map, error).
-func (c *GoogleWorkspace) applyGroupSettingsWithTracking(ctx context.Context, groupEmail string, allowExternalMembers bool, whoCanPostMessage string, messageModerationLevel string, hasAllowExternal bool) (bool, map[string]string, map[string]string, error) {
+func (c *GoogleWorkspace) applyGroupSettingsWithTracking(ctx context.Context, groupEmail string, allowExternalMembers bool, allowWebPosting bool, whoCanPostMessage string, messageModerationLevel string, hasAllowExternal bool, hasAllowWebPosting bool) (bool, map[string]string, map[string]string, error) {
 	previousSettings := make(map[string]string)
 	newSettings := make(map[string]string)
 
@@ -591,6 +605,25 @@ func (c *GoogleWorkspace) applyGroupSettingsWithTracking(ctx context.Context, gr
 			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowExternalMembers")
 		} else {
 			newSettings["allow_external_members"] = currentSettings.AllowExternalMembers
+		}
+	}
+
+	// Check allow_web_posting
+	if hasAllowWebPosting {
+		previousSettings["allow_web_posting"] = currentSettings.AllowWebPosting
+		currentAllowWebPosting := strings.EqualFold(currentSettings.AllowWebPosting, "true")
+		if currentAllowWebPosting != allowWebPosting {
+			needsUpdate = true
+			if allowWebPosting {
+				updatedSettings.AllowWebPosting = "true"
+				newSettings["allow_web_posting"] = "true"
+			} else {
+				updatedSettings.AllowWebPosting = "false"
+				newSettings["allow_web_posting"] = "false"
+			}
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowWebPosting")
+		} else {
+			newSettings["allow_web_posting"] = currentSettings.AllowWebPosting
 		}
 	}
 
@@ -649,21 +682,22 @@ func (c *GoogleWorkspace) modifyGroupSettingsActionHandler(ctx context.Context, 
 
 	// Extract optional settings parameters
 	allowExternalMembers, hasAllowExternal := getBoolField(args, "allow_external_members")
+	allowWebPosting, hasAllowWebPosting := getBoolField(args, "allow_web_posting")
 	whoCanPostMessage := getStringField(args, "who_can_post_message")
 	messageModerationLevel := getStringField(args, "message_moderation_level")
 
 	// Check if at least one setting parameter is provided
-	if !hasAllowExternal && whoCanPostMessage == "" && messageModerationLevel == "" {
+	if !hasAllowExternal && !hasAllowWebPosting && whoCanPostMessage == "" && messageModerationLevel == "" {
 		return nil, nil, fmt.Errorf("at least one settings parameter must be provided")
 	}
 
 	// Validate settings values if provided
 	if whoCanPostMessage != "" {
 		validWhoCanPost := map[string]bool{
-			"ANYONE_CAN_POST":        true,
-			"ALL_MEMBERS_CAN_POST":   true,
-			"ALL_MANAGERS_CAN_POST":  true,
-			"ALL_OWNERS_CAN_POST":    true,
+			"ANYONE_CAN_POST":       true,
+			"ALL_MEMBERS_CAN_POST":  true,
+			"ALL_MANAGERS_CAN_POST": true,
+			"ALL_OWNERS_CAN_POST":   true,
 		}
 		if !validWhoCanPost[whoCanPostMessage] {
 			return nil, nil, fmt.Errorf("invalid who_can_post_message value '%s': must be one of ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST", whoCanPostMessage)
@@ -700,7 +734,7 @@ func (c *GoogleWorkspace) modifyGroupSettingsActionHandler(ctx context.Context, 
 	}
 
 	// Apply settings with tracking
-	settingsUpdated, previousSettings, newSettings, err := c.applyGroupSettingsWithTracking(ctx, group.Email, allowExternalMembers, whoCanPostMessage, messageModerationLevel, hasAllowExternal)
+	settingsUpdated, previousSettings, newSettings, err := c.applyGroupSettingsWithTracking(ctx, group.Email, allowExternalMembers, allowWebPosting, whoCanPostMessage, messageModerationLevel, hasAllowExternal, hasAllowWebPosting)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to update group settings: %w", err)
 	}
@@ -718,6 +752,13 @@ func (c *GoogleWorkspace) modifyGroupSettingsActionHandler(ctx context.Context, 
 	}
 	if newVal, ok := newSettings["allow_external_members"]; ok {
 		response.Fields["new_allow_external_members"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	}
+
+	if prevVal, ok := previousSettings["allow_web_posting"]; ok {
+		response.Fields["previous_allow_web_posting"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
+	}
+	if newVal, ok := newSettings["allow_web_posting"]; ok {
+		response.Fields["new_allow_web_posting"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
 	}
 
 	if prevVal, ok := previousSettings["who_can_post_message"]; ok {

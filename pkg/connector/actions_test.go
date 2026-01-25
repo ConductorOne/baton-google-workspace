@@ -28,6 +28,7 @@ type testGroup struct {
 	Name                   string
 	Description            string
 	AllowExternalMembers   string // "true" or "false"
+	AllowWebPosting        string // "true" or "false"
 	WhoCanPostMessage      string
 	MessageModerationLevel string
 	Members                map[string]string // email -> role
@@ -135,7 +136,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 		// Member PATCH: /admin/directory/v1/groups/{groupKey}/members/{userEmail}
 		path := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/groups/")
 		parts := strings.Split(path, "/")
-		
+
 		state.mtx.Lock()
 		defer state.mtx.Unlock()
 
@@ -168,7 +169,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 					state.postCount++
 					var body directoryAdmin.Member
 					_ = json.NewDecoder(r.Body).Decode(&body)
-					
+
 					memberEmail := strings.ToLower(body.Email)
 					role := body.Role
 					if role == "" {
@@ -234,7 +235,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 
 		// Handle group GET operation (not a member operation)
 		groupKey := parts[0]
-		
+
 		if r.Method == http.MethodGet {
 			// Look up by email first
 			g := state.groups[groupKey]
@@ -283,6 +284,9 @@ func newTestServer(state *testServerState) *httptest.Server {
 			if g.AllowExternalMembers == "" {
 				g.AllowExternalMembers = "false"
 			}
+			if g.AllowWebPosting == "" {
+				g.AllowWebPosting = "false"
+			}
 			if g.WhoCanPostMessage == "" {
 				g.WhoCanPostMessage = "ALL_MEMBERS_CAN_POST"
 			}
@@ -292,6 +296,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 
 			resp := map[string]interface{}{
 				"allowExternalMembers":   g.AllowExternalMembers,
+				"allowWebPosting":        g.AllowWebPosting,
 				"whoCanPostMessage":      g.WhoCanPostMessage,
 				"messageModerationLevel": g.MessageModerationLevel,
 			}
@@ -306,6 +311,9 @@ func newTestServer(state *testServerState) *httptest.Server {
 			if allowExt, ok := body["allowExternalMembers"].(string); ok {
 				g.AllowExternalMembers = allowExt
 			}
+			if allowWeb, ok := body["allowWebPosting"].(string); ok {
+				g.AllowWebPosting = allowWeb
+			}
 			if whoCanPost, ok := body["whoCanPostMessage"].(string); ok {
 				g.WhoCanPostMessage = whoCanPost
 			}
@@ -315,6 +323,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 
 			resp := map[string]interface{}{
 				"allowExternalMembers":   g.AllowExternalMembers,
+				"allowWebPosting":        g.AllowWebPosting,
 				"whoCanPostMessage":      g.WhoCanPostMessage,
 				"messageModerationLevel": g.MessageModerationLevel,
 			}
@@ -1200,6 +1209,93 @@ func TestModifyGroupSettings_PartialUpdate(t *testing.T) {
 	}
 	if group.MessageModerationLevel != "MODERATE_NONE" {
 		t.Fatalf("expected MessageModerationLevel to remain 'MODERATE_NONE', got: %v", group.MessageModerationLevel)
+	}
+	state.mtx.Unlock()
+}
+
+// Test 6: Allow Web Posting - Enable external email posting
+func TestModifyGroupSettings_AllowWebPosting(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{},
+		groups: map[string]*testGroup{
+			"webpost@example.com": {
+				Id:                     "group_webpost_at_example.com",
+				Email:                  "webpost@example.com",
+				Name:                   "Web Posting Test Group",
+				AllowExternalMembers:   "false",
+				AllowWebPosting:        "false",
+				WhoCanPostMessage:      "ALL_MEMBERS_CAN_POST",
+				MessageModerationLevel: "MODERATE_NONE",
+			},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	gs := newTestGroupsSettingsService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil, gs)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"group_key":         {Kind: &structpb.Value_StringValue{StringValue: "webpost@example.com"}},
+		"allow_web_posting": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+	}}
+
+	state.mtx.Lock()
+	initialPutCount := state.putCount
+	state.mtx.Unlock()
+
+	resp, _, err := c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	if !resp.Fields["settings_updated"].GetBoolValue() {
+		t.Fatalf("expected settings_updated to be true")
+	}
+
+	// Verify previous and new values
+	if resp.Fields["previous_allow_web_posting"].GetStringValue() != "false" {
+		t.Fatalf("expected previous_allow_web_posting to be 'false'")
+	}
+	if resp.Fields["new_allow_web_posting"].GetStringValue() != "true" {
+		t.Fatalf("expected new_allow_web_posting to be 'true'")
+	}
+
+	state.mtx.Lock()
+	if state.putCount != initialPutCount+1 {
+		t.Fatalf("expected exactly one PUT/PATCH call")
+	}
+
+	// Verify setting was actually updated
+	group := state.groups["webpost@example.com"]
+	if group.AllowWebPosting != "true" {
+		t.Fatalf("expected AllowWebPosting to be 'true', got: %v", group.AllowWebPosting)
+	}
+	state.mtx.Unlock()
+
+	// Test idempotency - run again with same value
+	resp, _, err = c.modifyGroupSettingsActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error on second call, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true on second call")
+	}
+
+	if resp.Fields["settings_updated"].GetBoolValue() {
+		t.Fatalf("expected settings_updated to be false on second call (idempotent)")
+	}
+
+	state.mtx.Lock()
+	if state.putCount != initialPutCount+1 {
+		t.Fatalf("expected no additional PUT/PATCH call on idempotent call")
 	}
 	state.mtx.Unlock()
 }
