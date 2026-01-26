@@ -387,3 +387,108 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	}
 	return normalized, nil
 }
+
+// Helper to get optional string field from args.
+func getStringField(args *structpb.Struct, fieldName string) string {
+	if field, ok := args.Fields[fieldName]; ok {
+		if strVal, ok := field.GetKind().(*structpb.Value_StringValue); ok {
+			return strings.TrimSpace(strVal.StringValue)
+		}
+	}
+	return ""
+}
+
+// Helper to get optional boolean field from args.
+func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
+	if field, ok := args.Fields[fieldName]; ok {
+		if boolVal, ok := field.GetKind().(*structpb.Value_BoolValue); ok {
+			return boolVal.BoolValue, true
+		}
+	}
+	return false, false
+}
+
+// removeEmailAliases removes one or all email aliases from a user account.
+func (c *GoogleWorkspace) removeEmailAliases(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	userEmailField, ok := args.Fields["user_email"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_email")
+	}
+
+	userEmail := strings.TrimSpace(userEmailField.StringValue)
+	if userEmail == "" {
+		return nil, nil, fmt.Errorf("user_email must be non-empty")
+	}
+
+	// Validate email format
+	if _, err := mail.ParseAddress(userEmail); err != nil {
+		return nil, nil, fmt.Errorf("invalid user_email format: %s", userEmail)
+	}
+
+	// Check if we should remove all aliases or just one
+	removeAll, _ := getBoolField(args, "remove_all_aliases")
+	aliasEmail := getStringField(args, "alias_email")
+
+	// Validate: either specify an alias to remove OR remove_all_aliases=true
+	if !removeAll && aliasEmail == "" {
+		return nil, nil, fmt.Errorf("must specify either alias_email or set remove_all_aliases to true")
+	}
+
+	// If specific alias provided, validate format
+	if aliasEmail != "" {
+		if _, err := mail.ParseAddress(aliasEmail); err != nil {
+			return nil, nil, fmt.Errorf("invalid alias_email format: %s", aliasEmail)
+		}
+	}
+
+	// Get directory service with alias permissions
+	aliasService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserAliasScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	aliasesRemoved := []string{}
+	
+	if removeAll {
+		// Fetch all aliases for the user
+		aliases, err := aliasService.Users.Aliases.List(userEmail).Context(ctx).Do()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to list aliases for user %s: %w", userEmail, err)
+		}
+
+		// Remove each alias
+		if aliases != nil && aliases.Aliases != nil && len(aliases.Aliases) > 0 {
+			for _, aliasObj := range aliases.Aliases {
+				// Cast to Alias type
+				if alias, ok := aliasObj.(map[string]interface{}); ok {
+					if aliasStr, ok := alias["alias"].(string); ok {
+						err := aliasService.Users.Aliases.Delete(userEmail, aliasStr).Context(ctx).Do()
+						if err != nil {
+							// Log but continue removing other aliases
+							continue
+						}
+						aliasesRemoved = append(aliasesRemoved, aliasStr)
+					}
+				}
+			}
+		}
+	} else {
+		// Remove specific alias
+		err := aliasService.Users.Aliases.Delete(userEmail, aliasEmail).Context(ctx).Do()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to remove alias %s from user %s: %w", aliasEmail, userEmail, err)
+		}
+		aliasesRemoved = append(aliasesRemoved, aliasEmail)
+	}
+
+	// Return success response
+	aliasesRemovedStr := strings.Join(aliasesRemoved, ", ")
+	countStr := fmt.Sprintf("%d", len(aliasesRemoved))
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":               {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"user_email":            {Kind: &structpb.Value_StringValue{StringValue: userEmail}},
+		"aliases_removed":       {Kind: &structpb.Value_StringValue{StringValue: aliasesRemovedStr}},
+		"aliases_removed_count": {Kind: &structpb.Value_StringValue{StringValue: countStr}},
+	}}
+	return &response, nil, nil
+}

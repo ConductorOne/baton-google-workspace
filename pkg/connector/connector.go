@@ -269,6 +269,61 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
+	removeEmailAliasesActionSchema = &v2.BatonActionSchema{
+		Name:        "remove_email_aliases",
+		DisplayName: "Remove Email Alias(es)",
+		Description: "Remove one or all email aliases from a user account.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_email",
+				DisplayName: "User Email",
+				Description: "Primary email address of the user.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "alias_email",
+				DisplayName: "Alias Email",
+				Description: "Specific alias email to remove. Leave empty if remove_all_aliases is true.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "remove_all_aliases",
+				DisplayName: "Remove All Aliases",
+				Description: "If true, removes all aliases for the user. If false, removes only the specified alias_email.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the alias(es) were removed successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "user_email",
+				DisplayName: "User Email",
+				Description: "Primary email address of the user.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "aliases_removed",
+				DisplayName: "Aliases Removed",
+				Description: "List of aliases that were removed.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "aliases_removed_count",
+				DisplayName: "Aliases Removed Count",
+				Description: "Number of aliases removed.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
 )
 
 type Config struct {
@@ -683,6 +738,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 		return err
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
+	}
+	if err := registry.Register(ctx, removeEmailAliasesActionSchema, c.removeEmailAliases); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return err
 	}
