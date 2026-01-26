@@ -560,6 +560,10 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning")
 	}
+	groupCreateService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
+	if err != nil {
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning")
+	}
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
@@ -574,6 +578,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 				c.domain,
 				groupMemberService,
 				groupProvisioningService,
+				groupCreateService,
 			))
 		}
 	}

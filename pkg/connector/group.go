@@ -31,6 +31,7 @@ type groupResourceType struct {
 	domain                         string
 	groupMemberService             *admin.Service
 	groupMemberProvisioningService *admin.Service
+	groupProvisioningService       *admin.Service
 }
 
 func (o *groupResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -86,16 +87,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 			l.Error("group had no id", zap.String("name", g.Name))
 			continue
 		}
-		traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, g))}
-		resourceOpts := []rs.ResourceOption{
-			rs.WithAnnotation(&v2.V1Identifier{
-				Id: g.Id,
-			}),
-			rs.WithAnnotation(&v2.RawId{
-				Id: g.Id,
-			}),
-		}
-		groupResource, err := rs.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
+		groupResource, err := groupToResource(ctx, g)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create group resource in List: %w", err)
 		}
@@ -178,6 +170,7 @@ func groupBuilder(
 	domain string,
 	groupMemberService *admin.Service,
 	groupMemberProvisioningService *admin.Service,
+	groupProvisioningService *admin.Service,
 ) *groupResourceType {
 	return &groupResourceType{
 		resourceType:                   resourceTypeGroup,
@@ -186,6 +179,7 @@ func groupBuilder(
 		domain:                         domain,
 		groupMemberService:             groupMemberService,
 		groupMemberProvisioningService: groupMemberProvisioningService,
+		groupProvisioningService:       groupProvisioningService,
 	}
 }
 
@@ -195,6 +189,23 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 	profile["group_name"] = group.Name
 	profile["group_email"] = group.Email
 	return profile
+}
+
+// groupToResource converts an admin.Group to a v2.Resource.
+func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, error) {
+	if group.Id == "" {
+		return nil, fmt.Errorf("google-workspace: group has no id")
+	}
+	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, group))}
+	resourceOpts := []rs.ResourceOption{
+		rs.WithAnnotation(&v2.V1Identifier{
+			Id: group.Id,
+		}),
+		rs.WithAnnotation(&v2.RawId{
+			Id: group.Id,
+		}),
+	}
+	return rs.NewGroupResource(group.Name, resourceTypeGroup, group.Id, traitOpts, resourceOpts...)
 }
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
@@ -254,7 +265,6 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 }
 
 func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
 	r := o.groupService.Groups.Get(resourceId.Resource)
 
 	g, err := r.Context(ctx).Do()
