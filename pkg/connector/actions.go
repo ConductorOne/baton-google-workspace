@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -21,17 +23,17 @@ const (
 func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	guidField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing resource ID")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource ID")
 	}
 
 	isSuspendedField, ok := args.Fields["is_suspended"].GetKind().(*structpb.Value_BoolValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing is_suspended")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing is_suspended")
 	}
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get directory service for updateUserStatus: %w", err)
 	}
 
 	isSuspended := isSuspendedField.BoolValue
@@ -44,7 +46,7 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 		ForceSendFields: []string{"Suspended"},
 	}).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user status: %s", userId))
 	}
 
 	response := structpb.Struct{
@@ -62,12 +64,12 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing user ID")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get directory service for disableUser: %w", err)
 	}
 
 	userId := guidField.StringValue
@@ -75,7 +77,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	// fetch current to ensure idempotency
 	u, err := userService.Users.Get(userId).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user %s for disableUser", userId))
 	}
 	if u.Suspended { // already suspended
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -92,7 +94,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		},
 	).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to suspend user in disableUser: %s", userId))
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -105,12 +107,12 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing user ID")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get directory service for enableUser: %w", err)
 	}
 
 	userId := guidField.StringValue
@@ -118,7 +120,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	// fetch current to ensure idempotency
 	u, err := userService.Users.Get(userId).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user %s for enableUser", userId))
 	}
 	if !u.Suspended { // already active
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -135,7 +137,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		},
 	).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to unsuspend user: %s", userId))
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -148,11 +150,11 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	guidField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing resource ID")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource ID")
 	}
 	newEmailField, ok := args.Fields["new_primary_email"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing new_primary_email")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing new_primary_email")
 	}
 
 	userId := guidField.StringValue
@@ -160,18 +162,18 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 
 	// Validate that newPrimary is a valid email address
 	if _, err := mail.ParseAddress(newPrimary); err != nil {
-		return nil, nil, fmt.Errorf("invalid email address '%s': %w", newPrimary, err)
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid email address: %s", newPrimary), err)
 	}
 
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get directory service for changeUserPrimaryEmail: %w", err)
 	}
 
 	// fetch current for return payload
 	u, err := userService.Users.Get(userId).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user %s for changeUserPrimaryEmail", userId))
 	}
 	prev := u.PrimaryEmail
 	if emailsEqual(prev, newPrimary) { // Already primary email
@@ -191,7 +193,7 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		},
 	).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user primary email: %s", userId))
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -206,28 +208,28 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	sourceField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing resource_id")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource_id")
 	}
 	targetField, ok := args.Fields["target_resource_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing target_resource_id")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing target_resource_id")
 	}
 
 	// Validate non-empty and different user keys
 	src := strings.TrimSpace(sourceField.StringValue)
 	dst := strings.TrimSpace(targetField.StringValue)
 	if src == "" || dst == "" {
-		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be non-empty")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be non-empty")
 	}
 	if strings.EqualFold(src, dst) {
-		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be different")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be different")
 	}
 
 	// Build Drive params from privacy_levels
 	params := []*datatransferAdmin.ApplicationTransferParam{}
 	levels, err := parseDrivePrivacyLevels(args)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to parse privacy levels", err)
 	}
 	params = append(params, &datatransferAdmin.ApplicationTransferParam{Key: "PRIVACY_LEVEL", Value: levels})
 
@@ -238,26 +240,26 @@ func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *stru
 func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	sourceField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing resource_id")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource_id")
 	}
 	targetField, ok := args.Fields["target_resource_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		return nil, nil, fmt.Errorf("missing target_resource_id")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing target_resource_id")
 	}
 
 	// Validate non-empty and different user keys
 	src := strings.TrimSpace(sourceField.StringValue)
 	dst := strings.TrimSpace(targetField.StringValue)
 	if src == "" || dst == "" {
-		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be non-empty")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be non-empty")
 	}
 	if strings.EqualFold(src, dst) {
-		return nil, nil, fmt.Errorf("resource_id and target_resource_id must be different")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be different")
 	}
 
 	params := []*datatransferAdmin.ApplicationTransferParam{}
 	if p, err := buildReleaseResourcesParam(args); err != nil {
-		return nil, nil, err
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to build release resources param", err)
 	} else if p != nil {
 		params = append(params, p)
 	}
@@ -269,7 +271,7 @@ func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *struct
 func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, oldOwnerUserId, newOwnerUserId string, params []*datatransferAdmin.ApplicationTransferParam) (*structpb.Struct, annotations.Annotations, error) {
 	dtService, err := c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to get data transfer service: %w", err)
 	}
 
 	pageToken := ""
@@ -282,7 +284,7 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 		}
 		transfers, err := listCall.Context(ctx).Do()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list data transfers")
 		}
 		if transfers != nil {
 			for _, t := range transfers.DataTransfers {
@@ -320,7 +322,7 @@ func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, o
 
 	created, err := dtService.Transfers.Insert(transfer).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to create data transfer")
 	}
 
 	resp := &structpb.Struct{Fields: map[string]*structpb.Value{
@@ -340,7 +342,7 @@ func buildReleaseResourcesParam(args *structpb.Struct) (*datatransferAdmin.Appli
 	}
 	b, ok := v.GetKind().(*structpb.Value_BoolValue)
 	if !ok {
-		return nil, fmt.Errorf("release_resources must be a boolean")
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "release_resources must be a boolean")
 	}
 	if !b.BoolValue {
 		return nil, nil
@@ -361,21 +363,21 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	}
 	ss, ok := v.GetKind().(*structpb.Value_ListValue)
 	if !ok {
-		return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are private, shared")
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must be a list of strings: allowed values are private, shared")
 	}
 	normalized := make([]string, 0, len(ss.ListValue.Values))
 	seen := map[string]bool{}
 	for _, lv := range ss.ListValue.Values {
 		sv, ok := lv.GetKind().(*structpb.Value_StringValue)
 		if !ok {
-			return nil, fmt.Errorf("privacy_levels must be a list of strings: allowed values are private, shared")
+			return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must be a list of strings: allowed values are private, shared")
 		}
 		s := strings.TrimSpace(strings.ToLower(sv.StringValue))
 		if s == "" {
 			continue
 		}
 		if !allowed[s] {
-			return nil, fmt.Errorf("invalid privacy_levels value '%s': allowed values are private, shared", sv.StringValue)
+			return nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid privacy_levels value '%s': allowed values are private, shared", sv.StringValue))
 		}
 		if !seen[s] {
 			normalized = append(normalized, s)
@@ -383,7 +385,7 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 		}
 	}
 	if len(normalized) == 0 {
-		return nil, fmt.Errorf("privacy_levels list must include at least one value: private or shared")
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels list must include at least one value: private or shared")
 	}
 	return normalized, nil
 }

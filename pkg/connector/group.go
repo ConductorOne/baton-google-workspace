@@ -41,7 +41,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal pagination token in group List: %w", err)
 	}
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -67,7 +67,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 
 	groups, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: cannot get groups: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list groups")
 	}
 
 	serverResponse := groups.ServerResponse
@@ -83,7 +83,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 	rv := make([]*v2.Resource, 0, len(groups.Groups))
 	for _, g := range groups.Groups {
 		if g.Id == "" {
-			l.Error("google-workspace: group had no id", zap.String("name", g.Name))
+			l.Error("group had no id", zap.String("name", g.Name))
 			continue
 		}
 		traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, g))}
@@ -97,13 +97,13 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 		}
 		groupResource, err := rs.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to create group resource in List: %w", err)
 		}
 		rv = append(rv, groupResource)
 	}
 	nextPage, err := bag.NextToken(groups.NextPageToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to generate next page token in group List: %w", err)
 	}
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
@@ -124,7 +124,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal pagination token in group Grants: %w", err)
 	}
 
 	if bag.Current() == nil {
@@ -148,8 +148,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 				return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
 			}
 		}
-
-		return nil, nil, fmt.Errorf("google-workspace: can't get members: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list group members")
 	}
 
 	var rv []*v2.Grant
@@ -159,7 +158,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 		}
 		gmID, err := rs.NewResourceID(resourceTypeUser, member.Id)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to create user resource ID in group Grants: %w", err)
 		}
 		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, sdkGrant.WithAnnotation(v1Identifier))
 		rv = append(rv, grant)
@@ -167,7 +166,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 
 	nextPage, err := bag.NextToken(members.NextPageToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to generate next page token in group Grants: %w", err)
 	}
 
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
@@ -200,27 +199,24 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
 	if o.groupMemberProvisioningService == nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope)
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope))
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
-		return nil, nil, errors.New("google-workspace-v2: user principal is required")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "user principal is required")
 	}
 
 	r := o.groupMemberProvisioningService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
 	assignment, err := r.Context(ctx).Do()
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusConflict {
-				assignment, err = o.groupService.Members.Get(entitlement.Resource.Id.Resource, principal.GetId().GetResource()).Context(ctx).Do()
-				if err != nil {
-					return nil, nil, err
-				}
-			} else {
-				return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
+		if errors.As(err, &gerr) && gerr.Code == http.StatusConflict {
+			// Member already exists, fetch it to return as grant (idempotency)
+			assignment, err = o.groupMemberProvisioningService.Members.Get(entitlement.Resource.Id.Resource, principal.GetId().GetResource()).Context(ctx).Do()
+			if err != nil {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to get existing group member")
 			}
 		} else {
-			return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert group member: %w", err)
+			return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to add group member")
 		}
 	}
 
@@ -231,10 +227,10 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 
 func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
 	if o.groupMemberProvisioningService == nil {
-		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope)
+		return nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope))
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
-		return nil, errors.New("google-workspace-v2: user principal is required")
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "user principal is required")
 	}
 	l := ctxzap.Extract(ctx)
 
@@ -251,7 +247,7 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("google-workspace-v2: failed to remove group member: %w", err)
+		return nil, wrapGoogleApiErrorWithContext(err, "failed to delete group member")
 	}
 
 	return nil, nil
@@ -263,14 +259,14 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 
 	g, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve group: %s, %w", resourceId.Resource, err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to retrieve group: %s", resourceId.Resource))
 	}
 
 	// TODO: If o.domainId is set, check if the group is still in the domain.
 	//       There is not a straight forward way to do this when getting a single group.
 
 	if g.Id == "" {
-		l.Error("google-workspace: group had no id", zap.String("name", g.Name))
+		l.Error("group had no id", zap.String("name", g.Name))
 		return nil, nil, nil
 	}
 	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, g))}
@@ -284,7 +280,7 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 	}
 	groupResource, err := rs.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to create group resource in Get: %w", err)
 	}
 
 	return groupResource, nil, nil

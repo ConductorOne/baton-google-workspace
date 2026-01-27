@@ -25,6 +25,7 @@ import (
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
 
 	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
 )
@@ -296,12 +297,12 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	l := ctxzap.Extract(ctx)
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, l))
 	if err != nil {
-		return nil, err
+		return nil, uhttp.WrapErrors(codes.Internal, "failed to create HTTP client", err)
 	}
 
 	config, err := google.JWTConfigFromJSON(credentials, scopes...)
 	if err != nil {
-		return nil, err
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to parse JWT config from credentials", err)
 	}
 	config.Subject = email
 
@@ -327,7 +328,7 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	}
 	srv, err := newService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
-		return nil, err
+		return nil, uhttp.WrapErrors(codes.Internal, "failed to create service", err)
 	}
 	return srv, nil
 }
@@ -338,7 +339,7 @@ func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.S
 	}
 	srv, err := newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create report service: %w", err)
 	}
 	c.reportService = srv
 	return srv, nil
@@ -475,7 +476,7 @@ func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations
 	}
 	resp, err := service.Domains.List(c.customerID).Context(ctx).Do()
 	if err != nil {
-		return nil, err
+		return nil, wrapGoogleApiErrorWithContext(err, "failed to list domains")
 	}
 	domains := make([]string, 0, len(resp.Domains))
 	for _, d := range resp.Domains {
@@ -488,7 +489,7 @@ func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("google-workspace: domain '%s' is not a valid domain for customer '%s'", c.domain, c.customerID)
+		return nil, fmt.Errorf("domain '%s' is not a valid domain for customer '%s'", c.domain, c.customerID)
 	}
 
 	return nil, nil
@@ -587,7 +588,7 @@ func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) 
 		if service, ok := service.(*T); ok {
 			return service, nil
 		}
-		return nil, fmt.Errorf("google-workspace: cache entry for scope %s exists, but is not of type %s", scope, reflect.TypeOf(service))
+		return nil, fmt.Errorf("cache entry for scope %s exists, but is not of type %s", scope, reflect.TypeOf(service))
 	}
 	return nil, nil
 }
@@ -600,7 +601,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 
 	service, err := getFromCache[T](ctx, c, scope)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get service from cache: %w", err)
 	}
 	if service != nil {
 		return service, nil
@@ -610,7 +611,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 	if upgraded {
 		service, err := getFromCache[T](ctx, c, upgradedScope)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get upgraded service from cache: %w", err)
 		}
 		if service != nil {
 			return service, nil
@@ -664,27 +665,27 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 
 	if err := registry.Register(ctx, updateUserStatusActionSchema, c.updateUserStatus); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return err
+		return fmt.Errorf("failed to register update_user_status action: %w", err)
 	}
 	if err := registry.Register(ctx, transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return err
+		return fmt.Errorf("failed to register transfer_user_drive_files action: %w", err)
 	}
 	if err := registry.Register(ctx, changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return err
+		return fmt.Errorf("failed to register change_user_primary_email action: %w", err)
 	}
 	if err := registry.Register(ctx, disableUserActionSchema, c.disableUserActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return err
+		return fmt.Errorf("failed to register disable_user action: %w", err)
 	}
 	if err := registry.Register(ctx, enableUserActionSchema, c.enableUserActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return err
+		return fmt.Errorf("failed to register enable_user action: %w", err)
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		l.Error("failed to register action", zap.Error(err))
-		return err
+		return fmt.Errorf("failed to register transfer_user_calendar action: %w", err)
 	}
 
 	return nil

@@ -41,7 +41,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal pagination token in role List: %w", err)
 	}
 	if bag.Current() == nil {
 		bag.Push(pagination.PageState{
@@ -56,14 +56,14 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	roles, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: can't get roles: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list roles")
 	}
 
 	rv := make([]*v2.Resource, 0, len(roles.Items))
 	for _, r := range roles.Items {
 		tempRoleId := strconv.FormatInt(r.RoleId, 10)
 		if tempRoleId == "" {
-			l.Error("google-workspace: role had no id", zap.String("name", r.RoleName))
+			l.Error("role had no id", zap.String("name", r.RoleName))
 			continue
 		}
 		annos := &v2.V1Identifier{
@@ -72,13 +72,13 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 		traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(ctx, r))}
 		roleResource, err := rs.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to create role resource in List: %w", err)
 		}
 		rv = append(rv, roleResource)
 	}
 	nextPage, err := bag.NextToken(roles.NextPageToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to generate next page token in role List: %w", err)
 	}
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
@@ -99,7 +99,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal pagination token in role Grants: %w", err)
 	}
 
 	if bag.Current() == nil {
@@ -118,12 +118,12 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
-			// Return no grants if the role no longer exists. This might happen if the role is deleted during a sync.
 			if gerr.Code == http.StatusNotFound {
-				return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no role found with id %s", resource.Id.Resource))
+				// Role not found, return empty list
+				return nil, nil, nil
 			}
 		}
-		return nil, nil, fmt.Errorf("google-workspace: can't get role assignment: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list role assignments")
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
@@ -133,7 +133,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 		}
 		uID, err := rs.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to create user resource ID in role Grants: %w", err)
 		}
 		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, sdkGrant.WithAnnotation(v1Identifier))
 		grant.Id = tempRoleAssignmentId
@@ -142,7 +142,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 
 	nextPage, err := bag.NextToken(roleAssignments.NextPageToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to generate next page token in role Grants: %w", err)
 	}
 
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
@@ -166,15 +166,15 @@ func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
 
 func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
 	if o.roleProvisioningService == nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope)
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope))
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
-		return nil, nil, errors.New("google-workspace-v2: user principal is required")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "user principal is required")
 	}
 
 	tempRoleId, err := strconv.ParseInt(entitlement.Resource.Id.Resource, 10, 64)
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace-v2: failed to convert roleId to string: %w", err)
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to convert roleId to integer", err)
 	}
 	r := o.roleProvisioningService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{
 		AssignedTo: principal.GetId().GetResource(),
@@ -191,7 +191,7 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 				return nil, nil, nil
 			}
 		}
-		return nil, nil, fmt.Errorf("google-workspace-v2: failed to insert role member: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to assign role")
 	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
@@ -201,10 +201,10 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 
 func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
 	if o.roleProvisioningService == nil {
-		return nil, fmt.Errorf("google-workspace-v2: unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope)
+		return nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope))
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
-		return nil, errors.New("google-workspace-v2: user principal is required")
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "user principal is required")
 	}
 	l := ctxzap.Extract(ctx)
 
@@ -221,7 +221,7 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("google-workspace-v2: failed to remove role member: %w", err)
+		return nil, wrapGoogleApiErrorWithContext(err, "failed to delete role assignment")
 	}
 
 	return nil, nil
@@ -233,12 +233,12 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	role, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve role: %s, %w", resourceId.Resource, err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to retrieve role: %s", resourceId.Resource))
 	}
 
 	tempRoleId := strconv.FormatInt(role.RoleId, 10)
 	if tempRoleId == "" {
-		l.Error("google-workspace: role had no id", zap.String("name", role.RoleName))
+		l.Error("role had no id", zap.String("name", role.RoleName))
 		return nil, nil, nil
 	}
 	annos := &v2.V1Identifier{
@@ -247,7 +247,7 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 	traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(ctx, role))}
 	roleResource, err := rs.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to create role resource in Get: %w", err)
 	}
 	return roleResource, nil, nil
 }

@@ -56,7 +56,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal pagination token in user List: %w", err)
 	}
 
 	if bag.Current() == nil {
@@ -82,26 +82,26 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	users, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: can't get users: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list users")
 	}
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
 	for _, user := range users.Users {
 		if user.Id == "" {
-			l.Error("google-workspace: user had no id", zap.String("email", user.PrimaryEmail))
+			l.Error("user had no id", zap.String("email", user.PrimaryEmail))
 			continue
 		}
 
 		userResource, err := o.userResource(ctx, user)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to build user resource in List: %w", err)
 		}
 		rv = append(rv, userResource)
 	}
 
 	nextPage, err := bag.NextToken(users.NextPageToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to generate next page token in user List: %w", err)
 	}
 
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
@@ -231,13 +231,13 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	user, err := r.Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve user: %s, %w", resourceId.Resource, err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to retrieve user: %s", resourceId.Resource))
 	}
 
 	if o.domain != "" {
 		orgs, err := extractFromInterface[*admin.UserOrganization](user.Organizations)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to extract user organizations: %w", err)
 		}
 
 		found := false
@@ -248,24 +248,24 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 			}
 		}
 		if !found {
-			l.Info("google-workspace: user not in domain", zap.String("email", user.PrimaryEmail), zap.String("domain", o.domain))
+			l.Info("user not in domain", zap.String("email", user.PrimaryEmail), zap.String("domain", o.domain))
 			return nil, nil, nil
 		}
 	} else if o.customerId != "" {
 		if user.CustomerId != o.customerId {
-			l.Info("google-workspace: user not in customer account", zap.String("email", user.PrimaryEmail), zap.String("customer_id", user.CustomerId))
+			l.Info("user not in customer account", zap.String("email", user.PrimaryEmail), zap.String("customer_id", user.CustomerId))
 			return nil, nil, nil
 		}
 	}
 
 	if user.Id == "" {
-		l.Error("google-workspace: user had no id", zap.String("email", user.PrimaryEmail))
+		l.Error("user had no id", zap.String("email", user.PrimaryEmail))
 		return nil, nil, nil
 	}
 
 	userResource, err := o.userResource(ctx, user)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to build user resource in Get: %w", err)
 	}
 
 	return userResource, nil, nil
@@ -304,7 +304,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	if user.PosixAccounts != nil {
 		posixAccounts, err := extractFromInterface[*admin.UserPosixAccount](user.PosixAccounts)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to extract posix accounts: %w", err)
 		}
 		for _, posixAccount := range posixAccounts {
 			if posixAccount.Username != "" {
@@ -316,7 +316,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	if user.ExternalIds != nil {
 		externalIDs, err := extractFromInterface[*admin.UserExternalId](user.ExternalIds)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to extract external IDs: %w", err)
 		}
 		/*
 			Acceptable values: account, custom, customer, login_id, network, organization.
@@ -403,17 +403,17 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	pMap := accountInfo.Profile.AsMap()
 	email, ok := pMap["email"].(string)
 	if !ok || email == "" {
-		return nil, nil, nil, fmt.Errorf("google-workspace: email not found in profile")
+		return nil, nil, nil, fmt.Errorf("email not found in profile")
 	}
 
 	givenName, ok := pMap["given_name"].(string)
 	if !ok || givenName == "" {
-		return nil, nil, nil, fmt.Errorf("google-workspace: given_name not found in profile")
+		return nil, nil, nil, fmt.Errorf("given_name not found in profile")
 	}
 
 	familyName, ok := pMap["family_name"].(string)
 	if !ok || familyName == "" {
-		return nil, nil, nil, fmt.Errorf("google-workspace: family_name not found in profile")
+		return nil, nil, nil, fmt.Errorf("family_name not found in profile")
 	}
 
 	changePasswordAtNextLogin, ok := pMap["changePasswordAtNextLogin"].(bool)
@@ -431,11 +431,11 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	}
 
 	if credentialOptions == nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: credentialOptions cannot be nil")
+		return nil, nil, nil, fmt.Errorf("credentialOptions cannot be nil")
 	}
 
 	if o.userProvisioningService == nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+		return nil, nil, nil, fmt.Errorf("user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
 	var password string
@@ -464,12 +464,12 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 
 	user, err = o.userProvisioningService.Users.Insert(user).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: failed to create account: %w", err)
+		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to create account")
 	}
 
 	userResource, err := o.userResource(ctx, user)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create user resource: %w", err)
 	}
 
 	return &v2.CreateAccountResponse_SuccessResult{
@@ -480,12 +480,12 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
 	if o.userProvisioningService == nil {
-		return nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+		return nil, fmt.Errorf("user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
 	err := o.userProvisioningService.Users.Delete(resourceId.Resource).Context(ctx).Do()
 	if err != nil {
-		return nil, err
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to delete user: %s", resourceId.Resource))
 	}
 
 	return nil, nil
