@@ -268,7 +268,13 @@ func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *struct
 }
 
 // dataTransferInsert encapsulates idempotency and insert logic for Data Transfer API.
-func (c *GoogleWorkspace) dataTransferInsert(ctx context.Context, appID int64, oldOwnerUserId, newOwnerUserId string, params []*datatransferAdmin.ApplicationTransferParam) (*structpb.Struct, annotations.Annotations, error) {
+func (c *GoogleWorkspace) dataTransferInsert(
+	ctx context.Context,
+	appID int64,
+	oldOwnerUserId,
+	newOwnerUserId string,
+	params []*datatransferAdmin.ApplicationTransferParam,
+) (*structpb.Struct, annotations.Annotations, error) {
 	dtService, err := c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get data transfer service: %w", err)
