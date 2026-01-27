@@ -77,4 +77,4 @@ jobs:
           connector: ./baton-google-workspace
           account-email: "${{ vars.PRIMARY_EMAIL }}"
           account-profile: '{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
-          sleep: 35
+          sleep: 40
