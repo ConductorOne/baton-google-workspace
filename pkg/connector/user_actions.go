@@ -106,7 +106,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	// Get current user to check current org unit
 	currentUser, err := o.userProvisioningService.Users.Get(userId).Context(ctx).Do()
 	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to retrieve user: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to retrieve user: %s", userId))
 	}
 
 	// Check if already in the target org unit
@@ -136,16 +136,16 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 		if errors.As(err, &gerr) {
 			// Check if it's a 400 Bad Request error (INVALID_OU_ID)
 			if gerr.Code == http.StatusBadRequest {
-				return nil, nil, fmt.Errorf(
+				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
 					"google-workspace: failed to change user org unit (400 Bad Request). "+
 						"Invalid org_unit_path '%s'. "+
 						"Note: Org unit paths should NOT include the domain name. "+
 						"They start from '/' and list only the OU hierarchy (e.g., '/test_unit_02/child-test-ou-01' not '/batonc1/test_unit_02/child-test-ou-01'). "+
-						"Please verify the path exists and try again: %w",
-					orgUnitPath, err)
+						"Please verify the path exists and try again",
+					orgUnitPath))
 			}
 		}
-		return nil, nil, fmt.Errorf("google-workspace: failed to change user org unit: %w", err)
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to change user org unit: %s", userId))
 	}
 
 	l.Debug("google-workspace: user action handler: changed org unit",
