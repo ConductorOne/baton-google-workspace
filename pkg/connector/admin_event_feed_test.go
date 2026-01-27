@@ -73,8 +73,20 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 			{
 				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 123},
 				Events: []*reportsAdmin.ActivityEvents{
-					{Type: "GROUP_SETTINGS", Name: "CHANGE_GROUP_NAME", Parameters: []*reportsAdmin.ActivityEventsParameters{{Name: "GROUP_EMAIL", Value: "group@example.com"}}},
-					{Type: "GROUP_SETTINGS", Name: "ADD_GROUP_MEMBER", Parameters: []*reportsAdmin.ActivityEventsParameters{{Name: "GROUP_EMAIL", Value: "group@example.com"}, {Name: "USER_EMAIL", Value: "user@example.com"}}},
+					{
+						Type: "GROUP_SETTINGS",
+						Name: "CHANGE_GROUP_NAME",
+						Parameters: []*reportsAdmin.ActivityEventsParameters{
+							{Name: "GROUP_EMAIL", Value: "group@example.com"},
+						},
+					},
+					{
+						Type: "GROUP_SETTINGS", Name: "ADD_GROUP_MEMBER",
+						Parameters: []*reportsAdmin.ActivityEventsParameters{
+							{Name: "GROUP_EMAIL", Value: "group@example.com"},
+							{Name: "USER_EMAIL", Value: "user@example.com"},
+						},
+					},
 				},
 			},
 			{
