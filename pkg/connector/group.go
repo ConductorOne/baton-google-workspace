@@ -193,7 +193,9 @@ func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{
 
 // groupToResource converts an admin.Group to a v2.Resource.
 func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, error) {
+	l := ctxzap.Extract(ctx)
 	if group.Id == "" {
+		l.Error("google-workspace: group has no id", zap.String("name", group.Name))
 		return nil, fmt.Errorf("google-workspace: group has no id")
 	}
 	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, group))}
@@ -275,23 +277,40 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 	// TODO: If o.domainId is set, check if the group is still in the domain.
 	//       There is not a straight forward way to do this when getting a single group.
 
-	if g.Id == "" {
-		l.Error("group had no id", zap.String("name", g.Name))
-		return nil, nil, nil
-	}
-	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, g))}
-	resourceOpts := []rs.ResourceOption{
-		rs.WithAnnotation(&v2.V1Identifier{
-			Id: g.Id,
-		}),
-		rs.WithAnnotation(&v2.RawId{
-			Id: g.Id,
-		}),
-	}
-	groupResource, err := rs.NewGroupResource(g.Name, resourceTypeGroup, g.Id, traitOpts, resourceOpts...)
+	groupResource, err := groupToResource(ctx, g)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create group resource in Get: %w", err)
 	}
 
 	return groupResource, nil, nil
+}
+
+func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (annotations.Annotations, error) {
+	if o.groupProvisioningService == nil {
+		return nil, fmt.Errorf("google-workspace: group provisioning service not available - requires %s scope", admin.AdminDirectoryGroupScope)
+	}
+	if resourceId.ResourceType != resourceTypeGroup.Id {
+		return nil, fmt.Errorf("google-workspace: resource type is not group")
+	}
+
+	err := o.groupProvisioningService.Groups.Delete(resourceId.Resource).Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// Group already deleted, return success
+				return nil, nil
+			}
+			if gerr.Code == http.StatusForbidden {
+				return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+					"google-workspace: failed to delete group (403 Forbidden). "+
+						"This may be due to: 1) missing OAuth scope %s, "+
+						"2) insufficient admin permissions",
+					admin.AdminDirectoryGroupScope))
+			}
+		}
+		return nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to delete group")
+	}
+
+	return nil, nil
 }

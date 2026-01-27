@@ -69,6 +69,8 @@ jobs:
         env:
           TARGET_ORG_UNIT: ${{ vars.TARGET_ORG_UNIT }}
         run: ./scripts/test-org-unit-change.sh
+      - name: Test create group action
+        run: ./scripts/test-create-group.sh
       - name: Test account provisioning
         uses: ConductorOne/github-workflows/actions/account-provisioning@v3
         with:
