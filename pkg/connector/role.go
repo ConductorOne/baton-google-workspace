@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -88,7 +89,7 @@ func (o *roleResourceType) Entitlements(ctx context.Context, resource *v2.Resour
 	annos.Update(&v2.V1Identifier{
 		Id: V1MembershipEntitlementID(resource.Id.Resource),
 	})
-	member := sdkEntitlement.NewAssignmentEntitlement(resource, roleMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
+	member := sdkEntitlement.NewAssignmentEntitlement(resource, roleMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser, resourceTypeGroup))
 	member.Description = fmt.Sprintf("Has the %s role in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Role Member", resource.DisplayName)
@@ -128,14 +129,31 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
 		tempRoleAssignmentId := strconv.FormatInt(roleAssignment.RoleAssignmentId, 10)
+		opts := []sdkGrant.GrantOption{}
 		v1Identifier := &v2.V1Identifier{
 			Id: tempRoleAssignmentId,
 		}
-		uID, err := rs.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create user resource ID in role Grants: %w", err)
+		opts = append(opts, sdkGrant.WithAnnotation(v1Identifier))
+
+		var rmID *v2.ResourceId
+		if strings.EqualFold(roleAssignment.AssigneeType, "group") {
+			opts = append(opts, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+				EntitlementIds: []string{
+					fmt.Sprintf("group:%s:member", roleAssignment.AssignedTo),
+				},
+			}))
+			rmID, err = rs.NewResourceID(resourceTypeGroup, roleAssignment.AssignedTo)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create group resource ID in role Grants: %w", err)
+			}
+		} else {
+			rmID, err = rs.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create user resource ID in role Grants: %w", err)
+			}
 		}
-		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, sdkGrant.WithAnnotation(v1Identifier))
+
+		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, rmID, opts...)
 		grant.Id = tempRoleAssignmentId
 		rv = append(rv, grant)
 	}
