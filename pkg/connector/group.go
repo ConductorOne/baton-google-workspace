@@ -145,8 +145,17 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 
 	var rv []*v2.Grant
 	for _, member := range members.Members {
+		opts := []sdkGrant.GrantOption{}
 		v1Identifier := &v2.V1Identifier{
 			Id: V1GrantID(V1MembershipEntitlementID(resource.Id.Resource), member.Id),
+		}
+		opts = append(opts, sdkGrant.WithAnnotation(v1Identifier))
+		if member.Type == "GROUP" {
+			opts = append(opts, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+				EntitlementIds: []string{
+					fmt.Sprintf("group:%s:member", member.Id),
+				},
+			}))
 		}
 		gmID, err := rs.NewResourceID(resourceTypeUser, member.Id)
 		if err != nil {
