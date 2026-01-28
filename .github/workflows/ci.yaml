@@ -65,10 +65,14 @@ jobs:
           ./baton-google-workspace --file /tmp/sync-test.c1z
       - name: Install baton CLI
         uses: ConductorOne/github-workflows/actions/get-baton@v2
+      - name: Test change user org unit action
+        env:
+          TARGET_ORG_UNIT: ${{ vars.TARGET_ORG_UNIT }}
+        run: ./scripts/test-org-unit-change.sh
       - name: Test account provisioning
         uses: ConductorOne/github-workflows/actions/account-provisioning@v3
         with:
           connector: ./baton-google-workspace
           account-email: "${{ vars.PRIMARY_EMAIL }}"
           account-profile: '{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
-          sleep: 30
+          sleep: 35
