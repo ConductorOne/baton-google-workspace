@@ -128,14 +128,23 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
 		tempRoleAssignmentId := strconv.FormatInt(roleAssignment.RoleAssignmentId, 10)
+		opts := []sdkGrant.GrantOption{}
 		v1Identifier := &v2.V1Identifier{
 			Id: tempRoleAssignmentId,
+		}
+		opts = append(opts, sdkGrant.WithAnnotation(v1Identifier))
+		if roleAssignment.AssigneeType == "group" {
+			opts = append(opts, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+				EntitlementIds: []string{
+					fmt.Sprintf("group:%s:member", roleAssignment.AssignedTo),
+				},
+			}))
 		}
 		uID, err := rs.NewResourceID(resourceTypeUser, roleAssignment.AssignedTo)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create user resource ID in role Grants: %w", err)
 		}
-		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, sdkGrant.WithAnnotation(v1Identifier))
+		grant := sdkGrant.NewGrant(resource, roleMemberEntitlement, uID, opts...)
 		grant.Id = tempRoleAssignmentId
 		rv = append(rv, grant)
 	}
