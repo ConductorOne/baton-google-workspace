@@ -7,6 +7,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"golang.org/x/oauth2"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -55,4 +56,24 @@ func V1MembershipEntitlementID(resourceID string) string {
 func emailsEqual(email1 string, email2 string) bool {
 	// Trim whitespace and use EqualFold for efficient case-insensitive comparison
 	return strings.EqualFold(strings.TrimSpace(email1), strings.TrimSpace(email2))
+}
+
+// Helper to get optional string field from args.
+func getStringField(args *structpb.Struct, fieldName string) string {
+	if field, ok := args.Fields[fieldName]; ok {
+		if strVal, ok := field.GetKind().(*structpb.Value_StringValue); ok {
+			return strings.TrimSpace(strVal.StringValue)
+		}
+	}
+	return ""
+}
+
+// Helper to get optional boolean field from args.
+func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
+	if field, ok := args.Fields[fieldName]; ok {
+		if boolVal, ok := field.GetKind().(*structpb.Value_BoolValue); ok {
+			return boolVal.BoolValue, true
+		}
+	}
+	return false, false
 }

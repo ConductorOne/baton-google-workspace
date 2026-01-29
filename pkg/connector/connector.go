@@ -24,6 +24,7 @@ import (
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 
@@ -349,6 +350,11 @@ func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string)
 	return getService(ctx, c, scope, directoryAdmin.NewService)
 }
 
+func (c *GoogleWorkspace) getGroupsSettingsService(ctx context.Context) (*groupssettings.Service, error) {
+	const groupsSettingsScope = "https://www.googleapis.com/auth/apps.groups.settings"
+	return getService(ctx, c, groupsSettingsScope, groupssettings.NewService)
+}
+
 func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope string) (*datatransferAdmin.Service, error) {
 	return getService(ctx, c, scope, datatransferAdmin.NewService)
 }
@@ -568,6 +574,10 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning")
 	}
+	groupSettingsService, err := c.getGroupsSettingsService(ctx)
+	if err != nil {
+		logServiceInitError(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings")
+	}
 	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
@@ -583,6 +593,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 				groupMemberService,
 				groupProvisioningService,
 				groupCreateService,
+				groupSettingsService,
 			))
 		}
 	}
