@@ -92,13 +92,21 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 		pt.PageSize = token.Size
 	}
 
+	if defaultStart == nil {
+		// There's lag on these events, so we're going to start roughly when google says events should come in
+		// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
+		defaultStart = timestamppb.New(time.Now().Add(-2 * time.Hour))
+	}
+
 	if pt.StartAt == "" {
-		if defaultStart == nil {
-			// There's lag on these events, so we're going to start roughly when google says events should come in
-			// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
-			defaultStart = timestamppb.New(time.Now().Add(-2 * time.Hour))
-		}
 		pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
+	} else {
+		cursorStart, err := time.Parse(time.RFC3339, pt.StartAt)
+		if err == nil && defaultStart.AsTime().After(cursorStart) {
+			pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
+			pt.NextPageToken = ""
+			pt.LatestEventSeen = ""
+		}
 	}
 
 	if pt.LatestEventSeen == "" {
