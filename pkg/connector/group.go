@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -105,7 +106,7 @@ func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resou
 	annos.Update(&v2.V1Identifier{
 		Id: V1MembershipEntitlementID(resource.Id.Resource),
 	})
-	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
+	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser, resourceTypeGroup))
 	member.Description = fmt.Sprintf("Is member of the %s group in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Group Member", resource.DisplayName)
@@ -145,14 +146,31 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 
 	var rv []*v2.Grant
 	for _, member := range members.Members {
+		opts := []sdkGrant.GrantOption{}
 		v1Identifier := &v2.V1Identifier{
 			Id: V1GrantID(V1MembershipEntitlementID(resource.Id.Resource), member.Id),
 		}
-		gmID, err := rs.NewResourceID(resourceTypeUser, member.Id)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create user resource ID in group Grants: %w", err)
+		opts = append(opts, sdkGrant.WithAnnotation(v1Identifier))
+
+		var gmID *v2.ResourceId
+		if strings.EqualFold(member.Type, "group") {
+			gmID, err = rs.NewResourceID(resourceTypeGroup, member.Id)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create group resource ID in group Grants: %w", err)
+			}
+			opts = append(opts, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+				EntitlementIds: []string{
+					fmt.Sprintf("group:%s:member", member.Id),
+				},
+			}))
+		} else {
+			gmID, err = rs.NewResourceID(resourceTypeUser, member.Id)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create user resource ID in group Grants: %w", err)
+			}
 		}
-		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, sdkGrant.WithAnnotation(v1Identifier))
+
+		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, opts...)
 		rv = append(rv, grant)
 	}
 
