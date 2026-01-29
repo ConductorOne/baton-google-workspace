@@ -23,6 +23,7 @@ type userResourceType struct {
 	resourceType            *v2.ResourceType
 	userService             *admin.Service
 	userProvisioningService *admin.Service
+	userSecurityService     *admin.Service
 	customerId              string
 	domain                  string
 }
@@ -115,11 +116,12 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ rs.SyncOp
 	return nil, nil, nil
 }
 
-func userBuilder(userService *admin.Service, customerId string, domain string, userProvisioningService *admin.Service) *userResourceType {
+func userBuilder(userService *admin.Service, customerId string, domain string, userProvisioningService *admin.Service, userSecurityService *admin.Service) *userResourceType {
 	return &userResourceType{
 		resourceType:            resourceTypeUser,
 		userService:             userService,
 		userProvisioningService: userProvisioningService,
+		userSecurityService:     userSecurityService,
 		customerId:              customerId,
 		domain:                  domain,
 	}
