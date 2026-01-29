@@ -19,6 +19,7 @@ import (
 type testUser struct {
 	Suspended    bool
 	PrimaryEmail string
+	SignedOut    bool // Track if user has been signed out
 }
 
 type transferRecord struct {
@@ -31,19 +32,44 @@ type transferRecord struct {
 }
 
 type testServerState struct {
-	mtx       sync.Mutex
-	users     map[string]*testUser
-	transfers []*transferRecord
-	putCount  int
-	postCount int
+	mtx          sync.Mutex
+	users        map[string]*testUser
+	transfers    []*transferRecord
+	putCount     int
+	postCount    int
+	signOutCount int // Track sign out API calls
 }
 
 func newTestServer(state *testServerState) *httptest.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
-		// path suffix is userKey
-		userKey := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/users/")
+		// path suffix is userKey, may have /signOut suffix
+		path := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/users/")
+		
+		// Check for signOut endpoint
+		if strings.HasSuffix(path, "/signOut") {
+			userKey := strings.TrimSuffix(path, "/signOut")
+			state.mtx.Lock()
+			defer state.mtx.Unlock()
+			
+			if r.Method == http.MethodPost {
+				state.signOutCount++
+				u := state.users[userKey]
+				if u == nil {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				u.SignedOut = true
+				w.WriteHeader(http.StatusNoContent) // SignOut returns 204 No Content
+				return
+			}
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		
+		// Regular user operations
+		userKey := path
 		state.mtx.Lock()
 		defer state.mtx.Unlock()
 		switch r.Method {
@@ -170,6 +196,7 @@ func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *data
 	if dir != nil {
 		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = dir
 		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = dir
+		c.serviceCache[directoryAdmin.AdminDirectoryUserSecurityScope] = dir
 	}
 	if dt != nil {
 		c.serviceCache[datatransferAdmin.AdminDatatransferScope] = dt
@@ -358,4 +385,155 @@ func TestTransferCalendar_ReleaseResources(t *testing.T) {
 	if state.postCount != 1 {
 		t.Fatalf("expected 1 POST, got %d", state.postCount)
 	}
+}
+
+func TestRevokeUserSessions_Success(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice@example.com": {PrimaryEmail: "alice@example.com", SignedOut: false},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "alice@example.com"}},
+	}}
+
+	resp, _, err := c.revokeUserSessionsHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !resp.Fields["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	userEmail := resp.Fields["user_email"].GetStringValue()
+	if userEmail != "alice@example.com" {
+		t.Fatalf("expected user_email to be 'alice@example.com', got: %v", userEmail)
+	}
+
+	// Verify API was called
+	state.mtx.Lock()
+	if state.signOutCount != 1 {
+		t.Fatalf("expected one signOut call, got: %d", state.signOutCount)
+	}
+	if !state.users["alice@example.com"].SignedOut {
+		t.Fatalf("expected user to be signed out")
+	}
+	state.mtx.Unlock()
+}
+
+func TestRevokeUserSessions_ValidationErrors(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice@example.com": {PrimaryEmail: "alice@example.com"},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	// Missing user_email
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{}}
+	_, _, err := c.revokeUserSessionsHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_email")
+	}
+	if !strings.Contains(err.Error(), "missing user_email") {
+		t.Fatalf("expected error message to contain 'missing user_email', got: %v", err)
+	}
+
+	// Empty user_email after trimming
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "   "}},
+	}}
+	_, _, err = c.revokeUserSessionsHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for empty user_email")
+	}
+	if !strings.Contains(err.Error(), "user_email must be non-empty") {
+		t.Fatalf("expected error message to contain 'user_email must be non-empty', got: %v", err)
+	}
+
+	// Invalid email format
+	args = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "invalid-email"}},
+	}}
+	_, _, err = c.revokeUserSessionsHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid email format")
+	}
+	if !strings.Contains(err.Error(), "invalid email format") {
+		t.Fatalf("expected error message to contain 'invalid email format', got: %v", err)
+	}
+}
+
+func TestRevokeUserSessions_UserNotFound(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "nonexistent@example.com"}},
+	}}
+
+	_, _, err := c.revokeUserSessionsHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for user not found")
+	}
+}
+
+func TestRevokeUserSessions_NotIdempotent(t *testing.T) {
+	// Note: Revoking sessions is NOT idempotent - calling it multiple times
+	// will make multiple API calls. This is expected behavior.
+	state := &testServerState{
+		users: map[string]*testUser{
+			"alice@example.com": {PrimaryEmail: "alice@example.com"},
+		},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_email": {Kind: &structpb.Value_StringValue{StringValue: "alice@example.com"}},
+	}}
+
+	// First call
+	_, _, err := c.revokeUserSessionsHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+
+	state.mtx.Lock()
+	firstCallCount := state.signOutCount
+	state.mtx.Unlock()
+
+	// Second call - should make another API call (not idempotent)
+	_, _, err = c.revokeUserSessionsHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("second revoke: %v", err)
+	}
+
+	state.mtx.Lock()
+	if state.signOutCount != firstCallCount+1 {
+		t.Fatalf("expected another revoke call (not idempotent), got %d total calls", state.signOutCount)
+	}
+	state.mtx.Unlock()
 }
