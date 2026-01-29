@@ -108,6 +108,39 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
 	}
+
+	offboardingProfileUpdateActionSchema = &v2.BatonActionSchema{
+		Name:        "offboarding_profile_update",
+		DisplayName: "Offboarding Profile Update",
+		Description: "Performs offboarding profile updates for a user: removes from Global Address List (GAL), " +
+			"clears recovery details (email and phone), deletes account addresses and phone numbers, " +
+			"and optionally archives the account.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User ID",
+				Description: "The resource ID of the user to perform offboarding profile updates on.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "archive_account",
+				DisplayName: "Archive Account",
+				Description: "Whether to archive the user account. Archiving requires an archived user license. Defaults to false.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the offboarding profile updates were successfully applied.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
 )
 
 // ResourceActions implements the ResourceActionProvider interface for user resource actions.
@@ -119,6 +152,9 @@ func (o *userResourceType) ResourceActions(ctx context.Context, registry actions
 		return err
 	}
 	if err := o.registerDeleteAllOAuthTokensAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerOffboardingProfileUpdateAction(ctx, registry); err != nil {
 		return err
 	}
 	return nil
@@ -245,6 +281,10 @@ func (o *userResourceType) registerDeleteAllOAuthTokensAction(ctx context.Contex
 	return registry.Register(ctx, deleteAllOAuthTokensActionSchema, o.deleteAllOAuthTokensActionHandler)
 }
 
+func (o *userResourceType) registerOffboardingProfileUpdateAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, offboardingProfileUpdateActionSchema, o.offboardingProfileUpdateActionHandler)
+}
+
 func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	if o.userSecurityService == nil {
@@ -366,4 +406,81 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", float64(tokensDeleted))
 
 	return actions.NewReturnValues(true, tokensDeletedRv), nil, nil
+}
+
+func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.userProvisioningService == nil {
+		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	}
+
+	// Extract user_id argument
+	userId, err := extractUserId(args, l, "offboarding_profile_update")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Extract archive_account argument (defaults to false if not provided)
+	archiveAccount := false
+	if archiveAccountValue, ok := args.Fields["archive_account"]; ok && archiveAccountValue != nil {
+		if archiveAccountField, ok := archiveAccountValue.GetKind().(*structpb.Value_BoolValue); ok {
+			archiveAccount = archiveAccountField.BoolValue
+		}
+	}
+
+	// Build the update request
+	updateUser := &admin.User{
+		IncludeInGlobalAddressList: false,
+		RecoveryEmail:              "",
+		RecoveryPhone:              "",
+		ForceSendFields:            []string{"IncludeInGlobalAddressList", "RecoveryEmail", "RecoveryPhone"},
+		NullFields:                 []string{"Addresses", "Phones", "Emails"},
+	}
+
+	// Only archive if explicitly requested
+	if archiveAccount {
+		updateUser.Archived = true
+		updateUser.ForceSendFields = append(updateUser.ForceSendFields, "Archived")
+	}
+
+	// Update the user with all offboarding profile changes in a single call:
+	// 1. Remove from GAL (Global Address List)
+	// 2. Clear recovery email and phone
+	// 3. Delete addresses, phone numbers, and additional email addresses (using NullFields)
+	//    Note: The primary email cannot be removed and will remain
+	// 4. Optionally archive the account
+	_, err = o.userProvisioningService.Users.Update(userId, updateUser).Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusForbidden {
+				return nil, nil, wrapGoogleApiErrorWithContext(err,
+					fmt.Sprintf("google-workspace: failed to update offboarding profile (403 Forbidden). "+
+						"This may be due to: 1) missing OAuth scope %s, "+
+						"2) insufficient admin permissions", admin.AdminDirectoryUserScope))
+			}
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
+			}
+			if gerr.Code == http.StatusPreconditionFailed {
+				return nil, nil, wrapGoogleApiErrorWithContext(err,
+					"google-workspace: failed to archive user account (412 Precondition Failed). "+
+						"Insufficient archived user licenses. "+
+						"Archiving a user requires an archived user license. "+
+						"Please ensure you have available archived user licenses in your Google Workspace subscription.")
+			}
+		}
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to update offboarding profile")
+	}
+
+	actionsList := "removed from GAL, cleared recovery details, deleted addresses/phones/emails"
+	if archiveAccount {
+		actionsList += ", archived"
+	}
+
+	l.Debug("google-workspace: user action handler: updated offboarding profile",
+		zap.String("user_id", userId),
+		zap.String("actions", actionsList))
+
+	return actions.NewReturnValues(true), nil, nil
 }
