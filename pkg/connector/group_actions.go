@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -14,7 +15,13 @@ import (
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
+	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/protobuf/types/known/structpb"
+)
+
+const (
+	groupSettingTrue  = "true"
+	groupSettingFalse = "false"
 )
 
 var (
@@ -63,9 +70,126 @@ var (
 	}
 )
 
+var (
+	modifyGroupSettingsActionSchema = &v2.BatonActionSchema{
+		Name:        "modify_group_settings",
+		DisplayName: "Modify Group Settings",
+		Description: "Update settings for an existing Google Group.",
+		Arguments: []*config.Field{
+			{
+				Name:        "group_key",
+				DisplayName: "Group Key",
+				Description: "Email address or unique ID of the group to modify.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "allow_external_members",
+				DisplayName: "Allow External Members",
+				Description: "If true, allows external members to join the group. Defaults to false.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "allow_web_posting",
+				DisplayName: "Allow Web Posting",
+				Description: "If true, allows posting via email from external (non-member) addresses. Defaults to false.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        "who_can_post_message",
+				DisplayName: "Who Can Post Messages",
+				Description: "Control who can post messages.",
+				Field: &config.Field_StringField{
+					StringField: &config.StringField{
+						Rules: &config.StringRules{
+							In: []string{"ANYONE_CAN_POST", "ALL_MEMBERS_CAN_POST", "ALL_MANAGERS_CAN_POST", "ALL_OWNERS_CAN_POST"},
+						},
+					},
+				},
+				IsRequired: false,
+			},
+			{
+				Name:        "message_moderation_level",
+				DisplayName: "Message Moderation Level",
+				Description: "Control moderation.",
+				Field: &config.Field_StringField{
+					StringField: &config.StringField{
+						Rules: &config.StringRules{
+							In: []string{"MODERATE_NONE", "MODERATE_NON_MEMBERS", "MODERATE_ALL_MESSAGES"},
+						},
+					},
+				},
+				IsRequired: false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the settings were updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "group_email",
+				DisplayName: "Group Email",
+				Description: "Email address of the group.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "settings_updated",
+				DisplayName: "Settings Updated",
+				Description: "Whether any settings were changed.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_allow_external_members",
+				DisplayName: "Previous Allow External Members",
+				Description: "Previous value of allow_external_members setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_allow_external_members",
+				DisplayName: "New Allow External Members",
+				Description: "New value of allow_external_members setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "previous_who_can_post_message",
+				DisplayName: "Previous Who Can Post Messages",
+				Description: "Previous value of who_can_post_message setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_who_can_post_message",
+				DisplayName: "New Who Can Post Messages",
+				Description: "New value of who_can_post_message setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "previous_message_moderation_level",
+				DisplayName: "Previous Message Moderation Level",
+				Description: "Previous value of message_moderation_level setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_message_moderation_level",
+				DisplayName: "New Message Moderation Level",
+				Description: "New value of message_moderation_level setting.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
+)
+
 // ResourceActions implements the ResourceActionProvider interface for group resource actions.
 func (o *groupResourceType) ResourceActions(ctx context.Context, registry actions.ActionRegistry) error {
 	if err := o.registerCreateGroupAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerModifyGroupSettingsAction(ctx, registry); err != nil {
 		return err
 	}
 	return nil
@@ -73,6 +197,10 @@ func (o *groupResourceType) ResourceActions(ctx context.Context, registry action
 
 func (o *groupResourceType) registerCreateGroupAction(ctx context.Context, registry actions.ActionRegistry) error {
 	return registry.Register(ctx, createGroupActionSchema, o.createGroupActionHandler)
+}
+
+func (o *groupResourceType) registerModifyGroupSettingsAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, modifyGroupSettingsActionSchema, o.modifyGroupSettingsActionHandler)
 }
 
 func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
@@ -152,4 +280,221 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
+}
+
+// applyGroupSettingsWithTracking applies group settings and returns what changed.
+// Returns (settingsUpdated bool, previousSettings map, newSettings map, error).
+func (o *groupResourceType) applyGroupSettingsWithTracking(
+	ctx context.Context,
+	groupEmail string,
+	allowExternalMembers bool,
+	allowWebPosting bool,
+	whoCanPostMessage string,
+	messageModerationLevel string,
+	hasAllowExternal bool,
+	hasAllowWebPosting bool,
+) (bool, map[string]string, map[string]string, error) {
+	previousSettings := make(map[string]string)
+	newSettings := make(map[string]string)
+
+	// Fetch current settings for idempotency check
+	currentSettings, err := o.groupsSettingsService.Groups.Get(groupEmail).Context(ctx).Do()
+	if err != nil {
+		return false, nil, nil, err
+	}
+
+	// Check if any updates are needed
+	needsUpdate := false
+	updatedSettings := &groupssettings.Groups{}
+
+	// Check allow_external_members
+	if hasAllowExternal {
+		previousSettings["allow_external_members"] = currentSettings.AllowExternalMembers
+		currentAllowExternal := strings.EqualFold(currentSettings.AllowExternalMembers, groupSettingTrue)
+		if currentAllowExternal != allowExternalMembers {
+			needsUpdate = true
+			if allowExternalMembers {
+				updatedSettings.AllowExternalMembers = groupSettingTrue
+				newSettings["allow_external_members"] = groupSettingTrue
+			} else {
+				updatedSettings.AllowExternalMembers = groupSettingFalse
+				newSettings["allow_external_members"] = groupSettingFalse
+			}
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowExternalMembers")
+		} else {
+			newSettings["allow_external_members"] = currentSettings.AllowExternalMembers
+		}
+	}
+
+	// Check allow_web_posting
+	if hasAllowWebPosting {
+		previousSettings["allow_web_posting"] = currentSettings.AllowWebPosting
+		currentAllowWebPosting := strings.EqualFold(currentSettings.AllowWebPosting, groupSettingTrue)
+		if currentAllowWebPosting != allowWebPosting {
+			needsUpdate = true
+			if allowWebPosting {
+				updatedSettings.AllowWebPosting = groupSettingTrue
+				newSettings["allow_web_posting"] = groupSettingTrue
+			} else {
+				updatedSettings.AllowWebPosting = groupSettingFalse
+				newSettings["allow_web_posting"] = groupSettingFalse
+			}
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowWebPosting")
+		} else {
+			newSettings["allow_web_posting"] = currentSettings.AllowWebPosting
+		}
+	}
+
+	// Check who_can_post_message
+	if whoCanPostMessage != "" {
+		previousSettings["who_can_post_message"] = currentSettings.WhoCanPostMessage
+		if currentSettings.WhoCanPostMessage != whoCanPostMessage {
+			needsUpdate = true
+			updatedSettings.WhoCanPostMessage = whoCanPostMessage
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "WhoCanPostMessage")
+			newSettings["who_can_post_message"] = whoCanPostMessage
+		} else {
+			newSettings["who_can_post_message"] = currentSettings.WhoCanPostMessage
+		}
+	}
+
+	// Check message_moderation_level
+	if messageModerationLevel != "" {
+		previousSettings["message_moderation_level"] = currentSettings.MessageModerationLevel
+		if currentSettings.MessageModerationLevel != messageModerationLevel {
+			needsUpdate = true
+			updatedSettings.MessageModerationLevel = messageModerationLevel
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "MessageModerationLevel")
+			newSettings["message_moderation_level"] = messageModerationLevel
+		} else {
+			newSettings["message_moderation_level"] = currentSettings.MessageModerationLevel
+		}
+	}
+
+	// If no updates needed, return success (idempotent)
+	if !needsUpdate {
+		return false, previousSettings, newSettings, nil
+	}
+
+	// Update settings
+	_, err = o.groupsSettingsService.Groups.Patch(groupEmail, updatedSettings).Context(ctx).Do()
+	if err != nil {
+		return false, previousSettings, newSettings, err
+	}
+
+	return true, previousSettings, newSettings, nil
+}
+
+// modifyGroupSettingsActionHandler updates settings for an existing Google Group (idempotent: checks current settings before updating).
+func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract and validate group_key parameter
+	groupKeyField, ok := args.Fields["group_key"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing group_key")
+	}
+
+	groupKey := strings.TrimSpace(groupKeyField.StringValue)
+	if groupKey == "" {
+		return nil, nil, fmt.Errorf("group_key must be non-empty")
+	}
+
+	// Extract optional settings parameters
+	allowExternalMembers, hasAllowExternal := getBoolField(args, "allow_external_members")
+	allowWebPosting, hasAllowWebPosting := getBoolField(args, "allow_web_posting")
+	whoCanPostMessage := getStringField(args, "who_can_post_message")
+	messageModerationLevel := getStringField(args, "message_moderation_level")
+
+	// Check if at least one setting parameter is provided
+	if !hasAllowExternal && !hasAllowWebPosting && whoCanPostMessage == "" && messageModerationLevel == "" {
+		return nil, nil, fmt.Errorf("at least one settings parameter must be provided")
+	}
+
+	// Validate settings values if provided
+	if whoCanPostMessage != "" {
+		validWhoCanPost := map[string]bool{
+			"ANYONE_CAN_POST":       true,
+			"ALL_MEMBERS_CAN_POST":  true,
+			"ALL_MANAGERS_CAN_POST": true,
+			"ALL_OWNERS_CAN_POST":   true,
+		}
+		if !validWhoCanPost[whoCanPostMessage] {
+			return nil, nil, fmt.Errorf("invalid who_can_post_message value '%s': must be one of ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST", whoCanPostMessage)
+		}
+	}
+
+	if messageModerationLevel != "" {
+		validModeration := map[string]bool{
+			"MODERATE_NONE":         true,
+			"MODERATE_NON_MEMBERS":  true,
+			"MODERATE_ALL_MESSAGES": true,
+		}
+		if !validModeration[messageModerationLevel] {
+			return nil, nil, fmt.Errorf("invalid message_moderation_level value '%s': must be one of MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES", messageModerationLevel)
+		}
+	}
+
+	// Verify group exists and get its email
+	group, err := o.groupService.Groups.Get(groupKey).Context(ctx).Do()
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil, fmt.Errorf("group not found: %s", groupKey)
+			}
+		}
+		return nil, nil, err
+	}
+
+	// Apply settings with tracking
+	settingsUpdated, previousSettings, newSettings, err := o.applyGroupSettingsWithTracking(
+		ctx,
+		group.Email,
+		allowExternalMembers,
+		allowWebPosting,
+		whoCanPostMessage,
+		messageModerationLevel,
+		hasAllowExternal,
+		hasAllowWebPosting,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to update group settings: %w", err)
+	}
+
+	// Build response with previous and new values
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":          {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"group_email":      {Kind: &structpb.Value_StringValue{StringValue: group.Email}},
+		"settings_updated": {Kind: &structpb.Value_BoolValue{BoolValue: settingsUpdated}},
+	}}
+
+	// Add previous and new values for settings that were provided
+	if prevVal, ok := previousSettings["allow_external_members"]; ok {
+		response.Fields["previous_allow_external_members"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
+	}
+	if newVal, ok := newSettings["allow_external_members"]; ok {
+		response.Fields["new_allow_external_members"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	}
+
+	if prevVal, ok := previousSettings["allow_web_posting"]; ok {
+		response.Fields["previous_allow_web_posting"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
+	}
+	if newVal, ok := newSettings["allow_web_posting"]; ok {
+		response.Fields["new_allow_web_posting"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	}
+
+	if prevVal, ok := previousSettings["who_can_post_message"]; ok {
+		response.Fields["previous_who_can_post_message"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
+	}
+	if newVal, ok := newSettings["who_can_post_message"]; ok {
+		response.Fields["new_who_can_post_message"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	}
+
+	if prevVal, ok := previousSettings["message_moderation_level"]; ok {
+		response.Fields["previous_message_moderation_level"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
+	}
+	if newVal, ok := newSettings["message_moderation_level"]; ok {
+		response.Fields["new_message_moderation_level"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	}
+
+	return &response, nil, nil
 }
