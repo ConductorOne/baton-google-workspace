@@ -135,6 +135,7 @@ func userProfile(ctx context.Context, user *admin.User) map[string]interface{} {
 		profile["manager_email"] = extractManagerEmail(user)
 	}
 
+	profile["user_id"] = user.Id
 	profile["org_unit_path"] = user.OrgUnitPath
 
 	primaryOrg := extractPrimaryOrganizations(user)
