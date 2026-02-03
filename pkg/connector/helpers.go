@@ -6,7 +6,9 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -55,4 +57,18 @@ func V1MembershipEntitlementID(resourceID string) string {
 func emailsEqual(email1 string, email2 string) bool {
 	// Trim whitespace and use EqualFold for efficient case-insensitive comparison
 	return strings.EqualFold(strings.TrimSpace(email1), strings.TrimSpace(email2))
+}
+
+// extractUserId extracts and validates the user_id argument from action args.
+func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (string, error) {
+	userIdValue, ok := args.Fields["user_id"]
+	if !ok || userIdValue == nil {
+		l.Debug("google-workspace: user action handler: missing user_id argument", zap.String("action", actionName), zap.Any("args", args))
+		return "", fmt.Errorf("missing user_id argument")
+	}
+	userIdField, ok := userIdValue.GetKind().(*structpb.Value_StringValue)
+	if !ok || userIdField.StringValue == "" {
+		return "", fmt.Errorf("invalid user_id argument")
+	}
+	return userIdField.StringValue, nil
 }

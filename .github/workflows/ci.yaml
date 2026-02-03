@@ -71,6 +71,8 @@ jobs:
         run: ./scripts/test-org-unit-change.sh
       - name: Test create group action
         run: ./scripts/test-create-group.sh
+      - name: Test offboarding profile update action
+        run: ./scripts/test-offboarding-profile-update.sh
       - name: Test account provisioning
         uses: ConductorOne/github-workflows/actions/account-provisioning@v3
         with:
