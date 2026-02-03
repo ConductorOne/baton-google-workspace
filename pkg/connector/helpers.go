@@ -72,3 +72,23 @@ func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (str
 	}
 	return userIdField.StringValue, nil
 }
+
+// Helper to get optional string field from args.
+func getStringField(args *structpb.Struct, fieldName string) string {
+	if field, ok := args.Fields[fieldName]; ok {
+		if strVal, ok := field.GetKind().(*structpb.Value_StringValue); ok {
+			return strings.TrimSpace(strVal.StringValue)
+		}
+	}
+	return ""
+}
+
+// Helper to get optional boolean field from args.
+func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
+	if field, ok := args.Fields[fieldName]; ok {
+		if boolVal, ok := field.GetKind().(*structpb.Value_BoolValue); ok {
+			return boolVal.BoolValue, true
+		}
+	}
+	return false, false
+}
