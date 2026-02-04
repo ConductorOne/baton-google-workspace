@@ -19,11 +19,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-const (
-	groupSettingTrue  = "true"
-	groupSettingFalse = "false"
-)
-
 var (
 	createGroupActionSchema = &v2.BatonActionSchema{
 		Name:        "create_group",
@@ -294,6 +289,9 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 	hasAllowExternal bool,
 	hasAllowWebPosting bool,
 ) (bool, map[string]string, map[string]string, error) {
+	if o.groupsSettingsService == nil {
+		return false, nil, nil, fmt.Errorf("group settings service not available - requires https://www.googleapis.com/auth/apps.groups.settings scope")
+	}
 	previousSettings := make(map[string]string)
 	newSettings := make(map[string]string)
 
@@ -307,67 +305,65 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 	needsUpdate := false
 	updatedSettings := &groupssettings.Groups{}
 
-	// Check allow_external_members
+	// Apply boolean settings
 	if hasAllowExternal {
-		previousSettings["allow_external_members"] = currentSettings.AllowExternalMembers
-		currentAllowExternal := strings.EqualFold(currentSettings.AllowExternalMembers, groupSettingTrue)
-		if currentAllowExternal != allowExternalMembers {
+		result := applyBooleanGroupSetting(
+			currentSettings.AllowExternalMembers,
+			allowExternalMembers,
+			"AllowExternalMembers",
+		)
+		previousSettings["allow_external_members"] = result.PreviousValue
+		newSettings["allow_external_members"] = result.NewValue
+		if result.NeedsUpdate {
 			needsUpdate = true
-			if allowExternalMembers {
-				updatedSettings.AllowExternalMembers = groupSettingTrue
-				newSettings["allow_external_members"] = groupSettingTrue
-			} else {
-				updatedSettings.AllowExternalMembers = groupSettingFalse
-				newSettings["allow_external_members"] = groupSettingFalse
-			}
-			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowExternalMembers")
-		} else {
-			newSettings["allow_external_members"] = currentSettings.AllowExternalMembers
+			updatedSettings.AllowExternalMembers = result.NewValue
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, result.ForceSendField)
 		}
 	}
 
-	// Check allow_web_posting
 	if hasAllowWebPosting {
-		previousSettings["allow_web_posting"] = currentSettings.AllowWebPosting
-		currentAllowWebPosting := strings.EqualFold(currentSettings.AllowWebPosting, groupSettingTrue)
-		if currentAllowWebPosting != allowWebPosting {
+		result := applyBooleanGroupSetting(
+			currentSettings.AllowWebPosting,
+			allowWebPosting,
+			"AllowWebPosting",
+		)
+		previousSettings["allow_web_posting"] = result.PreviousValue
+		newSettings["allow_web_posting"] = result.NewValue
+		if result.NeedsUpdate {
 			needsUpdate = true
-			if allowWebPosting {
-				updatedSettings.AllowWebPosting = groupSettingTrue
-				newSettings["allow_web_posting"] = groupSettingTrue
-			} else {
-				updatedSettings.AllowWebPosting = groupSettingFalse
-				newSettings["allow_web_posting"] = groupSettingFalse
-			}
-			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "AllowWebPosting")
-		} else {
-			newSettings["allow_web_posting"] = currentSettings.AllowWebPosting
+			updatedSettings.AllowWebPosting = result.NewValue
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, result.ForceSendField)
 		}
 	}
 
-	// Check who_can_post_message
+	// Apply string settings
 	if whoCanPostMessage != "" {
-		previousSettings["who_can_post_message"] = currentSettings.WhoCanPostMessage
-		if currentSettings.WhoCanPostMessage != whoCanPostMessage {
+		result := applyStringGroupSetting(
+			currentSettings.WhoCanPostMessage,
+			whoCanPostMessage,
+			"WhoCanPostMessage",
+		)
+		previousSettings["who_can_post_message"] = result.PreviousValue
+		newSettings["who_can_post_message"] = result.NewValue
+		if result.NeedsUpdate {
 			needsUpdate = true
-			updatedSettings.WhoCanPostMessage = whoCanPostMessage
-			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "WhoCanPostMessage")
-			newSettings["who_can_post_message"] = whoCanPostMessage
-		} else {
-			newSettings["who_can_post_message"] = currentSettings.WhoCanPostMessage
+			updatedSettings.WhoCanPostMessage = result.NewValue
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, result.ForceSendField)
 		}
 	}
 
-	// Check message_moderation_level
 	if messageModerationLevel != "" {
-		previousSettings["message_moderation_level"] = currentSettings.MessageModerationLevel
-		if currentSettings.MessageModerationLevel != messageModerationLevel {
+		result := applyStringGroupSetting(
+			currentSettings.MessageModerationLevel,
+			messageModerationLevel,
+			"MessageModerationLevel",
+		)
+		previousSettings["message_moderation_level"] = result.PreviousValue
+		newSettings["message_moderation_level"] = result.NewValue
+		if result.NeedsUpdate {
 			needsUpdate = true
-			updatedSettings.MessageModerationLevel = messageModerationLevel
-			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, "MessageModerationLevel")
-			newSettings["message_moderation_level"] = messageModerationLevel
-		} else {
-			newSettings["message_moderation_level"] = currentSettings.MessageModerationLevel
+			updatedSettings.MessageModerationLevel = result.NewValue
+			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, result.ForceSendField)
 		}
 	}
 
@@ -468,32 +464,20 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 	}}
 
 	// Add previous and new values for settings that were provided
-	if prevVal, ok := previousSettings["allow_external_members"]; ok {
-		response.Fields["previous_allow_external_members"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
-	}
-	if newVal, ok := newSettings["allow_external_members"]; ok {
-		response.Fields["new_allow_external_members"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
-	}
-
-	if prevVal, ok := previousSettings["allow_web_posting"]; ok {
-		response.Fields["previous_allow_web_posting"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
-	}
-	if newVal, ok := newSettings["allow_web_posting"]; ok {
-		response.Fields["new_allow_web_posting"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	settingNames := []string{
+		"allow_external_members",
+		"allow_web_posting",
+		"who_can_post_message",
+		"message_moderation_level",
 	}
 
-	if prevVal, ok := previousSettings["who_can_post_message"]; ok {
-		response.Fields["previous_who_can_post_message"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
-	}
-	if newVal, ok := newSettings["who_can_post_message"]; ok {
-		response.Fields["new_who_can_post_message"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
-	}
-
-	if prevVal, ok := previousSettings["message_moderation_level"]; ok {
-		response.Fields["previous_message_moderation_level"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
-	}
-	if newVal, ok := newSettings["message_moderation_level"]; ok {
-		response.Fields["new_message_moderation_level"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+	for _, settingName := range settingNames {
+		if prevVal, ok := previousSettings[settingName]; ok {
+			response.Fields["previous_"+settingName] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: prevVal}}
+		}
+		if newVal, ok := newSettings[settingName]; ok {
+			response.Fields["new_"+settingName] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
+		}
 	}
 
 	return &response, nil, nil

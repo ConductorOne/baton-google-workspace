@@ -14,7 +14,17 @@ import (
 const (
 	MembershipEntitlementIDTemplate = "membership:%s"
 	GrantIDTemplate                 = "grant:%s:%s"
+	groupSettingTrue                = "true"
+	groupSettingFalse               = "false"
 )
+
+// GroupSettingUpdateResult holds the result of applying a group setting update.
+type GroupSettingUpdateResult struct {
+	NeedsUpdate    bool
+	PreviousValue  string
+	NewValue       string
+	ForceSendField string
+}
 
 func v1AnnotationsForResourceType(resourceTypeID string) annotations.Annotations {
 	annos := annotations.New(
@@ -91,4 +101,47 @@ func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+// applyBooleanGroupSetting applies a boolean group setting and returns the update result.
+func applyBooleanGroupSetting(
+	currentValue string,
+	desiredValue bool,
+	forceSendField string,
+) GroupSettingUpdateResult {
+	result := GroupSettingUpdateResult{
+		PreviousValue:  currentValue,
+		ForceSendField: forceSendField,
+	}
+	currentBool := strings.EqualFold(currentValue, groupSettingTrue)
+	if currentBool != desiredValue {
+		result.NeedsUpdate = true
+		if desiredValue {
+			result.NewValue = groupSettingTrue
+		} else {
+			result.NewValue = groupSettingFalse
+		}
+	} else {
+		result.NewValue = currentValue
+	}
+	return result
+}
+
+// applyStringGroupSetting applies a string group setting and returns the update result.
+func applyStringGroupSetting(
+	currentValue string,
+	desiredValue string,
+	forceSendField string,
+) GroupSettingUpdateResult {
+	result := GroupSettingUpdateResult{
+		PreviousValue:  currentValue,
+		ForceSendField: forceSendField,
+	}
+	if currentValue != desiredValue {
+		result.NeedsUpdate = true
+		result.NewValue = desiredValue
+	} else {
+		result.NewValue = currentValue
+	}
+	return result
 }
