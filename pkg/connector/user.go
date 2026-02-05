@@ -137,6 +137,7 @@ func userProfile(ctx context.Context, user *admin.User) map[string]interface{} {
 
 	profile["user_id"] = user.Id
 	profile["org_unit_path"] = user.OrgUnitPath
+	profile["include_in_global_address_list"] = user.IncludeInGlobalAddressList
 
 	primaryOrg := extractPrimaryOrganizations(user)
 	if primaryOrg != nil {
