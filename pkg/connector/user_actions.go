@@ -405,11 +405,11 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusForbidden {
-				return nil, nil, fmt.Errorf(
+				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
 					"google-workspace: failed to sign out user (403 Forbidden). "+
 						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions: %w",
-					admin.AdminDirectoryUserSecurityScope, err)
+						"2) insufficient admin permissions",
+					admin.AdminDirectoryUserSecurityScope))
 			}
 			if gerr.Code == http.StatusNotFound {
 				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
@@ -442,11 +442,11 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusForbidden {
-				return nil, nil, fmt.Errorf(
+				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
 					"google-workspace: failed to list OAuth tokens (403 Forbidden). "+
 						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions: %w",
-					admin.AdminDirectoryUserSecurityScope, err)
+						"2) insufficient admin permissions",
+					admin.AdminDirectoryUserSecurityScope))
 			}
 			if gerr.Code == http.StatusNotFound {
 				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
