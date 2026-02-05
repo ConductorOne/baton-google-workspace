@@ -547,11 +547,15 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning")
 	}
+	userSecurityService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
+	if err != nil {
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations")
+	}
 	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization")
 	} else {
-		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService))
+		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService, userSecurityService))
 	}
 
 	// Initialize group services for group resource syncer

@@ -49,7 +49,7 @@ echo "Creating test user: $TEST_USER_EMAIL"
 
 # Wait for user creation to propagate
 echo "Waiting for user creation to propagate..."
-sleep 10
+sleep 30
 
 # Sync to get the created user
 echo "Syncing to get created user..."
@@ -82,7 +82,7 @@ echo "Invoking change_user_org_unit action to move user to $TARGET_ORG_UNIT..."
 
 # Wait for changes to propagate
 echo "Waiting for changes to propagate in Google Workspace..."
-sleep 30
+sleep 40
 
 # Sync again to verify the change
 echo "Syncing to verify org unit change..."

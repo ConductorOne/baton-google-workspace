@@ -87,6 +87,92 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
 	}
+
+	signOutUserActionSchema = &v2.BatonActionSchema{
+		Name:        "sign_out_user",
+		DisplayName: "Sign Out User",
+		Description: "Signs a user out of all web and device sessions and resets their sign-in cookies. The user will have to sign in by authenticating again.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User ID",
+				Description: "The resource ID of the user to sign out.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user was signed out successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
+
+	deleteAllOAuthTokensActionSchema = &v2.BatonActionSchema{
+		Name:        "delete_all_oauth_tokens",
+		DisplayName: "Delete All OAuth Tokens",
+		Description: "Deletes all OAuth access tokens issued by a user for third-party applications. This revokes access for all applications the user has authorized.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User ID",
+				Description: "The resource ID of the user whose OAuth tokens should be deleted.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether all OAuth tokens were deleted successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "tokens_deleted",
+				DisplayName: "Tokens Deleted",
+				Description: "The number of OAuth tokens that were deleted.",
+				Field:       &config.Field_IntField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
+
+	deleteAllApplicationPasswordsActionSchema = &v2.BatonActionSchema{
+		Name:        "delete_all_application_passwords",
+		DisplayName: "Delete All Application Passwords",
+		Description: "Deletes all application-specific passwords (ASPs) issued by a user." +
+			" Application-specific passwords are used with applications that do not accept a verification code when logging in." +
+			" This action deletes all ASPs for the user, including those created by the user themselves.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User ID",
+				Description: "The resource ID of the user whose application passwords should be deleted.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether all application passwords were deleted successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "passwords_deleted",
+				DisplayName: "Passwords Deleted",
+				Description: "The number of application passwords that were deleted.",
+				Field:       &config.Field_IntField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
 )
 
 // ResourceActions implements the ResourceActionProvider interface for user resource actions.
@@ -95,6 +181,15 @@ func (o *userResourceType) ResourceActions(ctx context.Context, registry actions
 		return err
 	}
 	if err := o.registerOffboardingProfileUpdateAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerSignOutUserAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerDeleteAllOAuthTokensAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerDeleteAllApplicationPasswordsAction(ctx, registry); err != nil {
 		return err
 	}
 	return nil
@@ -111,16 +206,10 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Extract user_id argument
-	userIdValue, ok := args.Fields["user_id"]
-	if !ok || userIdValue == nil {
-		l.Debug("google-workspace: user action handler: missing user_id argument", zap.Any("args", args))
-		return nil, nil, fmt.Errorf("missing user_id argument")
+	userId, err := extractUserId(args, l, "change_user_org_unit")
+	if err != nil {
+		return nil, nil, err
 	}
-	userIdField, ok := userIdValue.GetKind().(*structpb.Value_StringValue)
-	if !ok || userIdField.StringValue == "" {
-		return nil, nil, fmt.Errorf("invalid user_id argument")
-	}
-	userId := userIdField.StringValue
 
 	// Extract org_unit_path argument
 	orgUnitPathValue, ok := args.Fields["org_unit_path"]
@@ -284,4 +373,219 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 		zap.String("actions", actionsList))
 
 	return actions.NewReturnValues(true), nil, nil
+}
+
+func (o *userResourceType) registerSignOutUserAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, signOutUserActionSchema, o.signOutUserActionHandler)
+}
+
+func (o *userResourceType) registerDeleteAllOAuthTokensAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, deleteAllOAuthTokensActionSchema, o.deleteAllOAuthTokensActionHandler)
+}
+
+func (o *userResourceType) registerDeleteAllApplicationPasswordsAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, deleteAllApplicationPasswordsActionSchema, o.deleteAllApplicationPasswordsActionHandler)
+}
+
+func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.userSecurityService == nil {
+		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
+	}
+
+	// Extract user_id argument
+	userId, err := extractUserId(args, l, "sign_out_user")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Sign out the user
+	err = o.userSecurityService.Users.SignOut(userId).Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusForbidden {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+					"google-workspace: failed to sign out user (403 Forbidden). "+
+						"This may be due to: 1) missing OAuth scope %s, "+
+						"2) insufficient admin permissions",
+					admin.AdminDirectoryUserSecurityScope))
+			}
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
+			}
+		}
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to sign out user")
+	}
+
+	l.Debug("google-workspace: user action handler: signed out user",
+		zap.String("user_id", userId))
+
+	return actions.NewReturnValues(true), nil, nil
+}
+
+func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.userSecurityService == nil {
+		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
+	}
+
+	// Extract user_id argument
+	userId, err := extractUserId(args, l, "delete_all_oauth_tokens")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// List all tokens for the user
+	tokens, err := o.userSecurityService.Tokens.List(userId).Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusForbidden {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+					"google-workspace: failed to list OAuth tokens (403 Forbidden). "+
+						"This may be due to: 1) missing OAuth scope %s, "+
+						"2) insufficient admin permissions",
+					admin.AdminDirectoryUserSecurityScope))
+			}
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
+			}
+		}
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to list OAuth tokens")
+	}
+
+	// If no tokens, return success with 0 deleted
+	if len(tokens.Items) == 0 {
+		tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", 0)
+		return actions.NewReturnValues(true, tokensDeletedRv), nil, nil
+	}
+
+	// Delete each token
+	tokensDeleted := 0
+	var lastErr error
+	for _, token := range tokens.Items {
+		if token.ClientId == "" {
+			l.Warn("google-workspace: skipping token with empty client ID",
+				zap.String("user_id", userId),
+				zap.String("display_text", token.DisplayText))
+			continue
+		}
+
+		err := o.userSecurityService.Tokens.Delete(userId, token.ClientId).Context(ctx).Do()
+		if err != nil {
+			gerr := &googleapi.Error{}
+			if errors.As(err, &gerr) {
+				// If token was already deleted (404), continue
+				if gerr.Code == http.StatusNotFound {
+					l.Debug("google-workspace: token already deleted",
+						zap.String("user_id", userId),
+						zap.String("client_id", token.ClientId))
+					tokensDeleted++
+					continue
+				}
+			}
+			l.Error("google-workspace: failed to delete token",
+				zap.String("user_id", userId),
+				zap.String("client_id", token.ClientId),
+				zap.Error(err))
+			lastErr = err
+			continue
+		}
+		tokensDeleted++
+	}
+
+	// If we failed to delete some tokens, return an error
+	if lastErr != nil {
+		return nil, nil, wrapGoogleApiErrorWithContext(lastErr, fmt.Sprintf("google-workspace: failed to delete some OAuth tokens (deleted %d of %d)",
+			tokensDeleted, len(tokens.Items)))
+	}
+
+	l.Debug("google-workspace: user action handler: deleted all OAuth tokens",
+		zap.String("user_id", userId),
+		zap.Int("tokens_deleted", tokensDeleted))
+
+	tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", float64(tokensDeleted))
+
+	return actions.NewReturnValues(true, tokensDeletedRv), nil, nil
+}
+
+func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.userSecurityService == nil {
+		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
+	}
+
+	// Extract user_id argument
+	userId, err := extractUserId(args, l, "delete_all_application_passwords")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// List all application-specific passwords (ASPs) for the user
+	asps, err := o.userSecurityService.Asps.List(userId).Context(ctx).Do()
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusForbidden {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+					"google-workspace: failed to list application passwords (403 Forbidden). "+
+						"This may be due to: 1) missing OAuth scope %s, "+
+						"2) insufficient admin permissions",
+					admin.AdminDirectoryUserSecurityScope))
+			}
+			if gerr.Code == http.StatusNotFound {
+				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
+			}
+		}
+		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to list application passwords")
+	}
+
+	// If no application passwords, return success with 0 deleted
+	if len(asps.Items) == 0 {
+		passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", 0)
+		return actions.NewReturnValues(true, passwordsDeletedRv), nil, nil
+	}
+
+	// Delete each application password
+	passwordsDeleted := 0
+	var lastErr error
+	for _, asp := range asps.Items {
+		err := o.userSecurityService.Asps.Delete(userId, asp.CodeId).Context(ctx).Do()
+		if err != nil {
+			gerr := &googleapi.Error{}
+			if errors.As(err, &gerr) {
+				// If ASP was already deleted (404), continue
+				if gerr.Code == http.StatusNotFound {
+					l.Debug("google-workspace: application password already deleted",
+						zap.String("user_id", userId),
+						zap.Int64("code_id", asp.CodeId))
+					passwordsDeleted++
+					continue
+				}
+			}
+			l.Error("google-workspace: failed to delete application password",
+				zap.String("user_id", userId),
+				zap.Int64("code_id", asp.CodeId),
+				zap.String("name", asp.Name),
+				zap.Error(err))
+			lastErr = err
+			continue
+		}
+		passwordsDeleted++
+	}
+
+	// If we failed to delete some application passwords, return an error
+	if lastErr != nil {
+		return nil, nil, wrapGoogleApiErrorWithContext(lastErr, fmt.Sprintf("google-workspace: failed to delete some application passwords (deleted %d of %d)",
+			passwordsDeleted, len(asps.Items)))
+	}
+
+	l.Debug("google-workspace: user action handler: deleted all application passwords",
+		zap.String("user_id", userId),
+		zap.Int("passwords_deleted", passwordsDeleted))
+
+	passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", float64(passwordsDeleted))
+
+	return actions.NewReturnValues(true, passwordsDeletedRv), nil, nil
 }
