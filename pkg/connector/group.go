@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
+	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/grpc/codes"
 )
 
@@ -33,6 +34,7 @@ type groupResourceType struct {
 	groupMemberService             *admin.Service
 	groupMemberProvisioningService *admin.Service
 	groupProvisioningService       *admin.Service
+	groupsSettingsService          *groupssettings.Service
 }
 
 func (o *groupResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -189,6 +191,7 @@ func groupBuilder(
 	groupMemberService *admin.Service,
 	groupMemberProvisioningService *admin.Service,
 	groupProvisioningService *admin.Service,
+	groupsSettingsService *groupssettings.Service,
 ) *groupResourceType {
 	return &groupResourceType{
 		resourceType:                   resourceTypeGroup,
@@ -198,6 +201,7 @@ func groupBuilder(
 		groupMemberService:             groupMemberService,
 		groupMemberProvisioningService: groupMemberProvisioningService,
 		groupProvisioningService:       groupProvisioningService,
+		groupsSettingsService:          groupsSettingsService,
 	}
 }
 
