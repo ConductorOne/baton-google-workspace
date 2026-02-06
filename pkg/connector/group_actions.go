@@ -151,6 +151,18 @@ var (
 				Field:       &config.Field_StringField{},
 			},
 			{
+				Name:        "previous_allow_web_posting",
+				DisplayName: "Previous Allow Web Posting",
+				Description: "Previous value of allow_web_posting setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_allow_web_posting",
+				DisplayName: "New Allow Web Posting",
+				Description: "New value of allow_web_posting setting.",
+				Field:       &config.Field_StringField{},
+			},
+			{
 				Name:        "previous_who_can_post_message",
 				DisplayName: "Previous Who Can Post Messages",
 				Description: "Previous value of who_can_post_message setting.",
