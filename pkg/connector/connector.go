@@ -270,6 +270,48 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
+	moveAccountToOrgUnitActionSchema = &v2.BatonActionSchema{
+		Name:        "move_account_to_org_unit",
+		DisplayName: "Move Account to Organizational Unit",
+		Description: "Move an account to a different organizational unit in Google Workspace.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User Resource ID",
+				Description: "ID of the user resource to move.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "org_unit_path",
+				DisplayName: "Organizational Unit Path",
+				Description: "Full path of the organizational unit (e.g., '/Sales' or '/Engineering/Backend'). Use '/' for root.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the account was moved successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "previous_org_unit_path",
+				DisplayName: "Previous Org Unit Path",
+				Description: "Account's previous organizational unit path.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        "new_org_unit_path",
+				DisplayName: "New Org Unit Path",
+				Description: "Account's new organizational unit path.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
 )
 
 type Config struct {
@@ -695,6 +737,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return fmt.Errorf("failed to register transfer_user_calendar action: %w", err)
+	}
+	if err := registry.Register(ctx, moveAccountToOrgUnitActionSchema, c.moveAccountToOrgUnit); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
 	}
 
 	return nil

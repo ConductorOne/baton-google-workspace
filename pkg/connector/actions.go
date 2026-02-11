@@ -395,3 +395,80 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	}
 	return normalized, nil
 }
+
+// moveAccountToOrgUnit transfers an account to a different organizational unit (idempotent).
+func (c *GoogleWorkspace) moveAccountToOrgUnit(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Extract user_id parameter
+	userIdField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing user_id")
+	}
+
+	// Extract org_unit_path parameter
+	orgUnitPathField, ok := args.Fields["org_unit_path"].GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, nil, fmt.Errorf("missing org_unit_path")
+	}
+
+	userId := strings.TrimSpace(userIdField.StringValue)
+	orgUnitPath := strings.TrimSpace(orgUnitPathField.StringValue)
+
+	// Validate non-empty
+	if userId == "" {
+		return nil, nil, fmt.Errorf("user_id must be non-empty")
+	}
+	if orgUnitPath == "" {
+		return nil, nil, fmt.Errorf("org_unit_path must be non-empty")
+	}
+
+	// Ensure org_unit_path starts with "/"
+	if !strings.HasPrefix(orgUnitPath, "/") {
+		return nil, nil, fmt.Errorf("org_unit_path must start with '/' (e.g., '/Sales' or '/Engineering/Backend')")
+	}
+
+	// Get Directory service with write scope
+	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Fetch current user state for idempotency check
+	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	previousOrgUnitPath := u.OrgUnitPath
+	if previousOrgUnitPath == "" {
+		previousOrgUnitPath = "/" // Empty means root
+	}
+
+	// Check if already at target org unit (idempotency)
+	if previousOrgUnitPath == orgUnitPath {
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success":                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			"previous_org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: previousOrgUnitPath}},
+			"new_org_unit_path":      {Kind: &structpb.Value_StringValue{StringValue: orgUnitPath}},
+		}}
+		return &response, nil, nil
+	}
+
+	// Update user's org unit path
+	_, err = userService.Users.Update(
+		userId,
+		&directoryAdmin.User{
+			OrgUnitPath:     orgUnitPath,
+			ForceSendFields: []string{"OrgUnitPath"},
+		},
+	).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	response := structpb.Struct{Fields: map[string]*structpb.Value{
+		"success":                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		"previous_org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: previousOrgUnitPath}},
+		"new_org_unit_path":      {Kind: &structpb.Value_StringValue{StringValue: orgUnitPath}},
+	}}
+	return &response, nil, nil
+}
