@@ -99,7 +99,14 @@ var (
 				Field: &config.Field_StringField{
 					StringField: &config.StringField{
 						Rules: &config.StringRules{
-							In: []string{"ANYONE_CAN_POST", "ALL_MEMBERS_CAN_POST", "ALL_MANAGERS_CAN_POST", "ALL_OWNERS_CAN_POST"},
+							In: []string{
+								"ANYONE_CAN_POST",
+								"ALL_MEMBERS_CAN_POST",
+								"ALL_MANAGERS_CAN_POST",
+								"ALL_OWNERS_CAN_POST",
+								"NONE_CAN_POST",
+								"ALL_IN_DOMAIN_CAN_POST",
+							},
 						},
 					},
 				},
@@ -112,7 +119,12 @@ var (
 				Field: &config.Field_StringField{
 					StringField: &config.StringField{
 						Rules: &config.StringRules{
-							In: []string{"MODERATE_NONE", "MODERATE_NON_MEMBERS", "MODERATE_ALL_MESSAGES"},
+							In: []string{
+								"MODERATE_NONE",
+								"MODERATE_NON_MEMBERS",
+								"MODERATE_ALL_MESSAGES",
+								"MODERATE_NEW_MEMBERS",
+							},
 						},
 					},
 				},
@@ -420,13 +432,15 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 	// Validate settings values if provided
 	if whoCanPostMessage != "" {
 		validWhoCanPost := map[string]bool{
-			"ANYONE_CAN_POST":       true,
-			"ALL_MEMBERS_CAN_POST":  true,
-			"ALL_MANAGERS_CAN_POST": true,
-			"ALL_OWNERS_CAN_POST":   true,
+			"ANYONE_CAN_POST":        true,
+			"ALL_MEMBERS_CAN_POST":   true,
+			"ALL_MANAGERS_CAN_POST":  true,
+			"ALL_OWNERS_CAN_POST":    true,
+			"NONE_CAN_POST":          true,
+			"ALL_IN_DOMAIN_CAN_POST": true,
 		}
 		if !validWhoCanPost[whoCanPostMessage] {
-			return nil, nil, fmt.Errorf("invalid who_can_post_message value '%s': must be one of ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST", whoCanPostMessage)
+			return nil, nil, fmt.Errorf("invalid who_can_post_message value '%s': must be one of ANYONE_CAN_POST, ALL_MEMBERS_CAN_POST, ALL_MANAGERS_CAN_POST, ALL_OWNERS_CAN_POST, NONE_CAN_POST, ALL_IN_DOMAIN_CAN_POST", whoCanPostMessage)
 		}
 	}
 
@@ -435,9 +449,10 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 			"MODERATE_NONE":         true,
 			"MODERATE_NON_MEMBERS":  true,
 			"MODERATE_ALL_MESSAGES": true,
+			"MODERATE_NEW_MEMBERS":  true,
 		}
 		if !validModeration[messageModerationLevel] {
-			return nil, nil, fmt.Errorf("invalid message_moderation_level value '%s': must be one of MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES", messageModerationLevel)
+			return nil, nil, fmt.Errorf("invalid message_moderation_level value '%s': must be one of MODERATE_NONE, MODERATE_NON_MEMBERS, MODERATE_ALL_MESSAGES, MODERATE_NEW_MEMBERS", messageModerationLevel)
 		}
 	}
 
