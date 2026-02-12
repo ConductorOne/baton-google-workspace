@@ -314,7 +314,7 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 	hasAllowWebPosting bool,
 ) (bool, map[string]string, map[string]string, error) {
 	if o.groupsSettingsService == nil {
-		return false, nil, nil, fmt.Errorf("group settings service not available - requires https://www.googleapis.com/auth/apps.groups.settings scope")
+		return false, nil, nil, fmt.Errorf("group settings service not available")
 	}
 	previousSettings := make(map[string]string)
 	newSettings := make(map[string]string)
