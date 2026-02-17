@@ -271,6 +271,35 @@ var (
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 	}
+	revokeUserSessionsActionSchema = &v2.BatonActionSchema{
+		Name:        "revoke_user_sessions",
+		DisplayName: "Revoke User Sessions",
+		Description: "Revoke all active user sessions across web and device platforms.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_email",
+				DisplayName: "User Email",
+				Description: "Email address of the user to sign out.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user was signed out successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "user_email",
+				DisplayName: "User Email",
+				Description: "Email address of the signed out user.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
 )
 
 type Config struct {
@@ -702,6 +731,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 	if err := registry.Register(ctx, enableUserActionSchema, c.enableUserActionHandler); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return fmt.Errorf("failed to register enable_user action: %w", err)
+	}
+	if err := registry.Register(ctx, revokeUserSessionsActionSchema, c.revokeUserSessionsHandler); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return err
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		l.Error("failed to register action", zap.Error(err))
