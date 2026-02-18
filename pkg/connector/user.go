@@ -149,6 +149,7 @@ func userProfile(ctx context.Context, user *admin.User) map[string]interface{} {
 		profile["title"] = primaryOrg.Title
 		profile["location"] = primaryOrg.Location
 		profile["cost_center"] = primaryOrg.CostCenter
+		profile["description"] = primaryOrg.Description
 	}
 
 	return profile
