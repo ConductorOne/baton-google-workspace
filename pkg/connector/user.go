@@ -157,7 +157,7 @@ func userProfile(ctx context.Context, user *admin.User) map[string]interface{} {
 
 func extractManagerEmail(u *admin.User) string {
 	for _, rel := range extractRelations(u) {
-		if rel.Type == "manager" {
+		if rel.Type == relTypeManager {
 			return rel.Value
 		}
 	}

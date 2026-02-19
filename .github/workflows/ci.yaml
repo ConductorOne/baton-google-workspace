@@ -41,6 +41,8 @@ jobs:
         run: ./scripts/test-offboarding-profile-update.sh
       - name: Test modify group settings action
         run: ./scripts/test-modify-group-settings.sh
+      - name: Test update user manager action
+        run: ./scripts/test-update-user-manager.sh
       - name: Test account provisioning
         uses: ConductorOne/github-workflows/actions/account-provisioning@v3
         with:
