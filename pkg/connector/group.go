@@ -229,6 +229,14 @@ func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, err
 			Id: group.Id,
 		}),
 	}
+
+	// Skip grant listing for groups with no direct members to avoid unnecessary API calls
+	// and transient errors (e.g., TLS handshake timeouts) that can fail the entire sync.
+	if group.DirectMembersCount == 0 {
+		l.Debug("skipping grants for empty group", zap.String("group_id", group.Id), zap.String("group_name", group.Name))
+		resourceOpts = append(resourceOpts, rs.WithAnnotation(&v2.SkipGrants{}))
+	}
+
 	return rs.NewGroupResource(group.Name, resourceTypeGroup, group.Id, traitOpts, resourceOpts...)
 }
 
