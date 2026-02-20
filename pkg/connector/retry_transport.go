@@ -1,10 +1,11 @@
 package connector
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"io"
 	"math"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -70,7 +71,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			// Close the previous response body if present.
 			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 
 			// Reset the request body for retry.
@@ -83,7 +84,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			// Exponential backoff with jitter: base * 2^attempt + random jitter.
 			backoff := time.Duration(math.Pow(2, float64(attempt))) * 500 * time.Millisecond
-			jitter := time.Duration(rand.Int64N(int64(backoff / 2)))
+			jitter := time.Duration(cryptoRandInt64(int64(backoff / 2)))
 			sleep := backoff + jitter
 
 			timer := time.NewTimer(sleep)
@@ -156,4 +157,18 @@ func isTransientError(err error) bool {
 	}
 
 	return false
+}
+
+// cryptoRandInt64 returns a cryptographically random int64 in [0, n).
+// Falls back to 0 if crypto/rand fails (which should never happen in practice).
+func cryptoRandInt64(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return 0
+	}
+	v := int64(binary.LittleEndian.Uint64(buf[:]) & 0x7FFFFFFFFFFFFFFF)
+	return v % n
 }

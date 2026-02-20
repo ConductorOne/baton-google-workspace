@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -96,7 +97,7 @@ type mockRoundTripper struct {
 	successful bool
 }
 
-func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (m *mockRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
 	defer func() { m.callCount++ }()
 
 	if m.callCount < len(m.errors) {
@@ -116,12 +117,13 @@ func TestRetryTransport_RetriesOnEOF(t *testing.T) {
 	}
 	transport := newRetryTransport(mock)
 
-	req, err := http.NewRequest("GET", "https://example.com", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
 	require.NoError(t, err)
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.True(t, mock.successful)
 	require.Equal(t, 3, mock.callCount) // 2 failures + 1 success
@@ -133,10 +135,10 @@ func TestRetryTransport_DoesNotRetryNonTransient(t *testing.T) {
 	}
 	transport := newRetryTransport(mock)
 
-	req, err := http.NewRequest("GET", "https://example.com", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
 	require.NoError(t, err)
 
-	resp, err := transport.RoundTrip(req)
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on error
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.False(t, mock.successful)
@@ -149,10 +151,10 @@ func TestRetryTransport_ExhaustsRetries(t *testing.T) {
 	}
 	transport := newRetryTransport(mock)
 
-	req, err := http.NewRequest("GET", "https://example.com", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
 	require.NoError(t, err)
 
-	resp, err := transport.RoundTrip(req)
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is nil on error
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.False(t, mock.successful)
@@ -166,12 +168,13 @@ func TestRetryTransport_RetriesOnConnectionReset(t *testing.T) {
 	}
 	transport := newRetryTransport(mock)
 
-	req, err := http.NewRequest("GET", "https://example.com", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
 	require.NoError(t, err)
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.True(t, mock.successful)
 	require.Equal(t, 2, mock.callCount) // 1 failure + 1 success
@@ -183,12 +186,13 @@ func TestRetryTransport_SuccessOnFirstAttempt(t *testing.T) {
 	}
 	transport := newRetryTransport(mock)
 
-	req, err := http.NewRequest("GET", "https://example.com", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
 	require.NoError(t, err)
 
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.True(t, mock.successful)
 	require.Equal(t, 1, mock.callCount) // Only 1 attempt
