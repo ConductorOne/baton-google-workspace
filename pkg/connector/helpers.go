@@ -16,6 +16,7 @@ const (
 	GrantIDTemplate                 = "grant:%s:%s"
 	groupSettingTrue                = "true"
 	groupSettingFalse               = "false"
+	relTypeManager                  = "manager"
 )
 
 // GroupSettingUpdateResult holds the result of applying a group setting update.

@@ -18,6 +18,7 @@ type testUserWithOrgUnit struct {
 	Id           string
 	PrimaryEmail string
 	OrgUnitPath  string
+	ManagerEmail string
 }
 
 type testServerStateWithOrgUnit struct {
@@ -51,19 +52,40 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					FullName: u.PrimaryEmail, // Use email as fallback for full name
 				},
 			}
+			if u.ManagerEmail != "" {
+				resp.Relations = []directoryAdmin.UserRelation{
+					{Type: relTypeManager, Value: u.ManagerEmail},
+				}
+			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
 			state.putCount++
-			var body directoryAdmin.User
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			// Decode into raw map to handle Relations as interface{}
+			var rawBody map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&rawBody)
 			u := state.users[userKey]
 			if u == nil {
 				http.Error(w, "not found", http.StatusNotFound)
 				return
 			}
 			// Update org unit path if provided
-			if body.OrgUnitPath != "" {
-				u.OrgUnitPath = body.OrgUnitPath
+			if raw, ok := rawBody["orgUnitPath"]; ok {
+				var orgUnitPath string
+				if json.Unmarshal(raw, &orgUnitPath) == nil && orgUnitPath != "" {
+					u.OrgUnitPath = orgUnitPath
+				}
+			}
+			// Update relations if provided
+			if raw, ok := rawBody["relations"]; ok {
+				var relations []directoryAdmin.UserRelation
+				if json.Unmarshal(raw, &relations) == nil {
+					u.ManagerEmail = ""
+					for _, rel := range relations {
+						if rel.Type == relTypeManager {
+							u.ManagerEmail = rel.Value
+						}
+					}
+				}
 			}
 			resp := &directoryAdmin.User{
 				Id:           u.Id,
@@ -72,6 +94,11 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 				Name: &directoryAdmin.UserName{
 					FullName: u.PrimaryEmail, // Use email as fallback for full name
 				},
+			}
+			if u.ManagerEmail != "" {
+				resp.Relations = []directoryAdmin.UserRelation{
+					{Type: relTypeManager, Value: u.ManagerEmail},
+				}
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		default:
@@ -761,5 +788,154 @@ func TestDeleteAllApplicationPasswords_MissingUserId(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing user_id") {
 		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+}
+
+// Tests for change_user_manager action
+
+func TestUpdateUserManager_Success(t *testing.T) {
+	state := &testServerStateWithOrgUnit{
+		users: map[string]*testUserWithOrgUnit{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				OrgUnitPath:  "/",
+				ManagerEmail: "old-manager@example.com",
+			},
+		},
+	}
+	server := newTestServerWithOrgUnit(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "new-manager@example.com"}},
+	}}
+
+	resp, _, err := userRT.updateUserManagerActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("updateUserManager: %v", err)
+	}
+
+	// Verify user was updated
+	if state.users["user123"].ManagerEmail != "new-manager@example.com" {
+		t.Fatalf("expected manager email to be 'new-manager@example.com', got '%s'", state.users["user123"].ManagerEmail)
+	}
+
+	// Verify response
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+	if resp.GetFields()["resource"] == nil {
+		t.Fatalf("expected resource in response")
+	}
+
+	// Verify PUT was called
+	if state.putCount != 1 {
+		t.Fatalf("expected 1 PUT, got %d", state.putCount)
+	}
+}
+
+func TestUpdateUserManager_Idempotent(t *testing.T) {
+	state := &testServerStateWithOrgUnit{
+		users: map[string]*testUserWithOrgUnit{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				OrgUnitPath:  "/",
+				ManagerEmail: "manager@example.com",
+			},
+		},
+	}
+	server := newTestServerWithOrgUnit(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "manager@example.com"}},
+	}}
+
+	resp, _, err := userRT.updateUserManagerActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("updateUserManager: %v", err)
+	}
+
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	// Verify PUT was NOT called (idempotent)
+	if state.putCount != 0 {
+		t.Fatalf("expected 0 PUT calls (idempotent), got %d", state.putCount)
+	}
+
+	// Verify GET was called to check current state
+	if state.getCount < 1 {
+		t.Fatalf("expected at least 1 GET call, got %d", state.getCount)
+	}
+}
+
+func TestUpdateUserManager_MissingUserId(t *testing.T) {
+	state := &testServerStateWithOrgUnit{users: map[string]*testUserWithOrgUnit{}}
+	server := newTestServerWithOrgUnit(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "manager@example.com"}},
+	}}
+
+	_, _, err := userRT.updateUserManagerActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_id")
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+}
+
+func TestUpdateUserManager_MissingManagerEmail(t *testing.T) {
+	state := &testServerStateWithOrgUnit{users: map[string]*testUserWithOrgUnit{}}
+	server := newTestServerWithOrgUnit(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+	}}
+
+	_, _, err := userRT.updateUserManagerActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing manager_email")
+	}
+	if !strings.Contains(err.Error(), "missing manager_email") {
+		t.Fatalf("expected error message to contain 'missing manager_email', got: %v", err)
+	}
+}
+
+func TestUpdateUserManager_UserNotFound(t *testing.T) {
+	state := &testServerStateWithOrgUnit{users: map[string]*testUserWithOrgUnit{}}
+	server := newTestServerWithOrgUnit(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "manager@example.com"}},
+	}}
+
+	_, _, err := userRT.updateUserManagerActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for nonexistent user")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected error message to contain 'not found', got: %v", err)
 	}
 }

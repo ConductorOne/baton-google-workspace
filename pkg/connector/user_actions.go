@@ -5,15 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -52,7 +55,7 @@ var (
 				Field:       &config.Field_ResourceField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
 	}
 
 	offboardingProfileUpdateActionSchema = &v2.BatonActionSchema{
@@ -142,6 +145,43 @@ var (
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
 	}
 
+	updateUserManagerActionSchema = &v2.BatonActionSchema{
+		Name:        "update_user_manager",
+		DisplayName: "Update User Manager",
+		Description: "Updates the manager relation for a user in Google Workspace. Updates the 'manager' entry in the user's Relations field.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User ID",
+				Description: "The resource ID of the user whose manager should be changed.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "manager_email",
+				DisplayName: "Manager Email",
+				Description: "The email address of the new manager.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user's manager was changed successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "resource",
+				DisplayName: "Updated User",
+				Description: "The updated user resource with the new manager.",
+				Field:       &config.Field_ResourceField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
+
 	deleteAllApplicationPasswordsActionSchema = &v2.BatonActionSchema{
 		Name:        "delete_all_application_passwords",
 		DisplayName: "Delete All Application Passwords",
@@ -190,6 +230,9 @@ func (o *userResourceType) ResourceActions(ctx context.Context, registry actions
 		return err
 	}
 	if err := o.registerDeleteAllApplicationPasswordsAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerUpdateUserManagerAction(ctx, registry); err != nil {
 		return err
 	}
 	return nil
@@ -588,4 +631,104 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", float64(passwordsDeleted))
 
 	return actions.NewReturnValues(true, passwordsDeletedRv), nil, nil
+}
+
+func (o *userResourceType) registerUpdateUserManagerAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, updateUserManagerActionSchema, o.updateUserManagerActionHandler)
+}
+
+func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.userProvisioningService == nil {
+		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	}
+
+	// Extract user_id argument
+	userId, err := extractUserId(args, l, "update_user_manager")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Extract manager_email argument
+	managerEmailValue, ok := args.Fields["manager_email"]
+	if !ok || managerEmailValue == nil {
+		l.Debug("google-workspace: user action handler: missing manager_email argument", zap.Any("args", args))
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing manager_email argument")
+	}
+	managerEmailField, ok := managerEmailValue.GetKind().(*structpb.Value_StringValue)
+	if !ok || managerEmailField.StringValue == "" {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "invalid manager_email argument")
+	}
+	managerEmail := managerEmailField.StringValue
+
+	// Validate that managerEmail is a valid email address
+	if _, err := mail.ParseAddress(managerEmail); err != nil {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid email address: %s", managerEmail), err)
+	}
+
+	// Get current user to check current manager
+	currentUser, err := o.userProvisioningService.Users.Get(userId).Projection("full").Context(ctx).Do()
+	if err != nil {
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to retrieve user: %s", userId))
+	}
+
+	// Check if already set to the target manager (idempotency)
+	currentManagerEmail := extractManagerEmail(currentUser)
+	if emailsEqual(currentManagerEmail, managerEmail) {
+		userResource, err := o.userResource(ctx, currentUser)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
+		}
+
+		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+		if err != nil {
+			l.Error("failed to build resource return field", zap.Error(err))
+			return nil, nil, err
+		}
+
+		return actions.NewReturnValues(true, resourceRv), nil, nil
+	}
+
+	// Build updated relations: keep all non-manager relations, replace/add manager
+	currentRelations := extractRelations(currentUser)
+	updatedRelations := make([]admin.UserRelation, 0, len(currentRelations)+1)
+	for _, rel := range currentRelations {
+		if rel.Type != relTypeManager {
+			updatedRelations = append(updatedRelations, *rel)
+		}
+	}
+	// Add the new manager relation
+	updatedRelations = append(updatedRelations, admin.UserRelation{
+		Type:  relTypeManager,
+		Value: managerEmail,
+	})
+
+	// Update the user's relations
+	updatedUser, err := o.userProvisioningService.Users.Update(userId, &admin.User{
+		Relations:       updatedRelations,
+		ForceSendFields: []string{"Relations"},
+	}).Context(ctx).Do()
+	if err != nil {
+		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to update user manager: %s", userId))
+	}
+
+	l.Debug("google-workspace: user action handler: changed manager",
+		zap.String("user_id", userId),
+		zap.String("old_manager", currentManagerEmail),
+		zap.String("new_manager", managerEmail))
+
+	// Create the user resource
+	userResource, err := o.userResource(ctx, updatedUser)
+	if err != nil {
+		l.Error("failed to create user resource", zap.Error(err))
+		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
+	}
+
+	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	if err != nil {
+		l.Error("failed to build resource return field", zap.Error(err))
+		return nil, nil, err
+	}
+
+	return actions.NewReturnValues(true, resourceRv), nil, nil
 }
