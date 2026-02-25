@@ -1,0 +1,562 @@
+---
+title: "Set up a Google Workspace connector"
+og:title: "Set up a Google Workspace connector"
+description: "ConductorOne provides identity governance and just-in-time provisioning for Google Workspace. Integrate your Google Workspace instance with ConductorOne to run user access reviews (UARs) and enable just-in-time access requests."
+og:description: "ConductorOne provides identity governance and just-in-time provisioning for Google Workspace. Integrate your Google Workspace instance with ConductorOne to run user access reviews (UARs) and enable just-in-time access requests."
+sidebarTitle: "Google Workspace"
+---
+
+<Tip>
+**This is an updated and improved version of the Google Workspace integration!** If you're setting up a Google Workspace connector with ConductorOne for the first time, you're in the right place.
+</Tip>
+
+## Capabilities
+
+| Resource | Sync | Provision |
+| :--- | :--- | :--- |
+| Accounts | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> |
+| Groups | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> |
+| Roles | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> |
+
+The Google Workspace connector supports [automatic account provisioning and deprovisioning](/product/admin/account-provisioning).  
+
+### Connector actions
+
+Connector actions are custom capabilities that extend ConductorOne automations with app-specific operations. You can use connector actions in the [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) automation step.
+
+| Action name | Additional fields | Description |
+|-------------|-------------------|-------------|
+| update_user_status | `resource_id` (string, required)<br/>`is_suspended` (boolean, required) | Suspends or activates a user account |
+| disable_user | `user_id` (string, required) | Suspends a user account (idempotent) |
+| enable_user | `user_id` (string, required) | Unsuspends a user account (idempotent) |
+| change_user_primary_email | `resource_id` (string, required)<br/>`new_primary_email` (string, required) | Updates a user's primary email address |
+| transfer_user_drive_files | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`privacy_levels` (string, optional) | Transfers Google Drive ownership from one user to another. Accepts `private` or `shared` for privacy_levels |
+| transfer_user_calendar | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`release_resources` (boolean, optional) | Transfers Google Calendar data from one user to another |
+| change_user_org_unit | `user_id` (string, required)<br/>`org_unit_path` (string, required) | Moves a user to a different organizational unit |
+| offboarding_profile_update | `user_id` (string, required)<br/>`archive_account` (boolean, optional) | Comprehensive offboarding: removes from GAL, clears recovery details, deletes addresses/phones, optionally archives |
+| sign_out_user | `user_id` (string, required) | Signs user out of all sessions and resets sign-in cookies |
+| delete_all_oauth_tokens | `user_id` (string, required) | Revokes all third-party app authorizations |
+| delete_all_application_passwords | `user_id` (string, required) | Deletes all app-specific passwords |
+| create_group | `email` (string, required)<br/>`name` (string, required)<br/>`description` (string, optional) | Creates a new Google Workspace group |
+
+## Gather Google Workspace credentials 
+
+Configuring the connector requires you to pass in credentials generated in Google Workspace. Gather these credentials before you move on. 
+
+<Warning>
+A user with the **Super Admin** role in Google Workspace must perform this task.
+</Warning>
+
+### Create a new project
+
+<Steps>
+<Step>
+As a Google Workspace Super Admin, sign in to [https://console.cloud.google.com](https://console.cloud.google.com/).
+</Step>
+<Step>
+In the toolbar, click the project select dropdown, and click **NEW PROJECT**.
+   <Frame>
+   <img src="/images/product/assets/google-1.png" alt="" />
+   </Frame>
+
+   <Frame>
+   <img src="/images/product/assets/google-2.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Create a new project for your organization:
+
+   - **Project Name**: Choose a names, such as "ConductorOne Integration"
+   - **Organization/Location**: Choose the appropriate Organization/Location
+
+   <Frame>
+   <img src="/images/product/assets/google-3.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+After the project is created, make sure the correct project is selected in the dropdown at the top.
+
+   <Frame>
+   <img src="/images/product/assets/google-4.png" alt="" />
+   </Frame>
+</Step>
+</Steps>
+### Enable the API
+
+<Steps>
+<Step>
+In the navigation menu, navigate to > **APIs & Services** > **Library**.
+
+   <Frame>
+   <img src="/images/product/assets/google-5.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Search for and select the **Admin SDK API**.
+
+   <Frame>
+   <img src="/images/product/assets/google-6.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Click **Enable**.
+
+
+   <Frame>
+   <img src="/images/product/assets/google-7.png" alt="" />
+   </Frame>
+</Step>
+
+<Step>
+**Optional.** If you want to use the group settings connector action, you must also search for, select, and enable the **Groups Settings API**. 
+
+   <Frame>
+   <img src="/images/product/assets/google-19.png" alt="" />
+   </Frame>
+</Step>
+</Steps>
+### Create a service account
+
+<Steps>
+<Step>
+In the navigation menu, navigate to > **APIs & Services** > **Credentials**.
+
+   <Frame>
+   <img src="/images/product/assets/google-8.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Select **CREATE CREDENTIALS** > **Service Account**.
+
+   <Frame>
+   <img src="/images/product/assets/google-9.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Under **Service account details**, fill in the following:
+
+   - **Service account name:** ConductorOne Integration
+   - **Service account description:** for example, "Service account for ConductorOne Google Workspace Integration"
+   - Click **CREATE AND CONTINUE**
+
+   <Frame>
+   <img src="/images/product/assets/google-10.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Under **Grant this service account access to a project**, grant the **Editor** role.
+
+   <Frame>
+   <img src="/images/product/assets/google-11.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+Leave **Grant users access to this service account** blank.
+</Step>
+<Step>
+Click **DONE**.
+
+   <Frame>
+   <img src="/images/product/assets/google-12.png" alt="" />
+   </Frame>
+</Step>
+</Steps>
+
+### Get credentials
+
+<Steps>
+<Step>
+Navigate back to **APIs & Services** > **Credentials** and select the service account you just created.
+
+  <Frame>
+  <img src="/images/product/assets/google-13.png" alt="" />
+  </Frame>
+
+  <Frame>
+  <img src="/images/product/assets/google-14.png" alt="" />
+  </Frame>
+</Step>
+<Step>
+Click the service account's email address. Locate and save the **Unique ID**.
+
+  <Frame>
+  <img src="/images/product/assets/gworkspace-1.png" alt="" />
+  </Frame>
+</Step>
+<Step>
+On the **Service Account Details Page**, click **KEYS**.
+
+  <Frame>
+  <img src="/images/product/assets/google-15.png" alt="" />
+  </Frame>
+</Step>
+<Step>
+Click **ADD KEY** > **Create new key**.
+
+  <Frame>
+  <img src="/images/product/assets/google-16.png" alt="" />
+  </Frame>
+</Step>
+<Step>
+Choose **JSON** and click **CREATE**.
+
+  <Frame>
+  <img src="/images/product/assets/google-17.png" alt="" />
+  </Frame>
+
+  <Frame>
+  <img src="/images/product/assets/google-18.png" alt="" />
+  </Frame>
+</Step>
+<Step>
+Keep the downloaded file somewhere safe.
+</Step>
+</Steps> 
+
+### Add the service account to Google Workspace
+
+<Steps>
+<Step>
+Go to [https://admin.google.com](https://admin.google.com) as a **SUPER ADMIN**.
+</Step>
+<Step>
+In the navigation menu, select **Security** > **Access and data control** > **API Controls**.
+</Step>
+<Step>
+Click **MANAGE DOMAIN WIDE DELEGATION**.
+
+  <Frame>
+  <img src="/images/product/assets/gworkspace-2.png" alt="" />
+  </Frame>
+</Step>
+<Step>
+Click **Add new** and fill out the form:
+
+   - **Client ID**: The service account's unique ID
+   - **OAuth Scopes**: Copy and paste in the relevant scopes
+
+      Use the following scopes to give ConductorOne **READ** access (for syncing access data):
+      
+      ```bash
+      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly
+      ```
+
+      Here's an explanation of each scope's purpose:
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.domain.readonly <br/>
+        Purpose: To identify the primary domain of the Google Workspace account.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.group.readonly <br/>
+        Purpose: To read and sync Google Groups.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.group.member.readonly <br/>
+        Purpose: To read and sync the members of each group.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly <br/>
+        Purpose: To read and sync roles and their assignments.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.user.readonly <br/>
+        Purpose: To read and sync users.
+
+      - Scope:   https://www.googleapis.com/auth/admin.reports.audit.readonly <br/>
+        Purpose: To sync usage events and admin events (used in conjunction with incremental sync).
+
+      Use the following scopes to give ConductorOne **READ/WRITE** access (for syncing access data and provisioning access):
+
+      ```bash
+      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings
+      ```
+
+      Here's an explanation of each scope's purpose:
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.domain.readonly <br/>
+        Purpose: To identify the primary domain of the Google Workspace account.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.group.readonly <br/>
+        Purpose: To read and sync Google Groups.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.group.member <br/>
+        Purpose: (Write) To manage group memberships (add or remove users from groups).
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.rolemanagement <br/>
+        Purpose: (Write) To manage role assignments (grant or revoke roles).
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.user <br/>
+        Purpose: (Write) To provision/deprovision accounts.
+
+      - Scope:   https://www.googleapis.com/auth/admin.reports.audit.readonly <br/>
+        Purpose: To sync usage events and admin events (used in conjunction with continuous sync).
+
+      - Scope:   https://www.googleapis.com/auth/admin.datatransfer <br/>
+        Purpose: (Write) To transfer user data between Google accounts.
+
+      - Scope:   https://www.googleapis.com/auth/admin.directory.group <br/>
+        Purpose: (Write) To provision groups.
+      
+      - Scope:   https://www.googleapis.com/auth/admin.directory.user.security <br/>
+        Purpose: (Write) To run actions for removing a user's access (sign out, delete auth tokens and app passwords).
+
+      - Scope: https://www.googleapis.com/auth/apps.groups.settings <br/>
+        Purpose: (Write) To edit group settings.
+</Step>
+<Step>
+Click **AUTHORIZE**.
+
+   <Frame>
+   <img src="/images/product/assets/gworkspace-3.png" alt="" />
+   </Frame>
+</Step>
+<Step>
+In the navigation menu, select **Account > Account Settings**.
+</Step>
+<Step>
+Copy the **Customer ID** from this page.
+
+  <Frame>
+  <img src="/images/product/assets/gworkspace-4.png" alt="" />
+  </Frame>
+</Step>
+</Steps>
+
+### Locate your primary domain
+
+<Steps>
+<Step>
+In the navigation panel on the left, click **Account** > **Domains**.
+</Step>
+<Step>
+Click **Manage Domains**. Locate and copy the domain labeled as the **Primary Domain** in the **Type** column.
+
+  <Frame>
+  <img src="/images/product/assets/gworkspace-5.png" alt="" />
+  </Frame>
+</Step>
+</Steps>
+
+**That's it!** Next, move on to the connector configuration instructions. 
+
+## Configure the Google Workspace connector
+
+<Warning>
+This task requires either the **Connector Administrator** or **Super Administrator** role in ConductorOne.
+</Warning>
+
+<Tabs>
+<Tab title="Cloud-hosted">
+**Follow these instructions to use a built-in, no-code connector hosted by ConductorOne.**
+
+<Steps>
+<Step>
+In ConductorOne, navigate to **Integrations** > **Connectors** and click **Add connector**.
+</Step>
+<Step>
+Search for **Google Workspace v2** and click **Add**.
+</Step>
+<Step>
+Choose how to set up the new Google Workspace connector:
+
+   - Add the connector to a currently unmanaged app (select from the list of apps that were discovered in your identity, SSO, or federation provider that aren't yet managed with ConductorOne)
+
+   - Add the connector to a managed app (select from the list of existing managed apps)
+
+   - Create a new managed app
+</Step>
+<Step>
+Set the owner for this connector. You can manage the connector yourself, or choose someone else from the list of ConductorOne users. Setting multiple owners is allowed.
+</Step>
+<Step>
+Click **Next**.
+
+   - **If you are the connector owner**, go on to the next step.
+
+   - **If someone else is the connector owner**, you can stop here. ConductorOne will notify the connector owner by email that their help is needed to complete the setup process.
+</Step>
+<Step>
+Find the **Settings** area of the page and click **Edit**.
+</Step>
+<Step>
+In the **Customer ID** field, enter the Google Workspace customer ID.
+</Step>
+<Step>
+**Optional.** If you want to limit which domains ConductorOne syncs, in the **Domain** field, enter the primary domain from Step 6. If you leave this field blank, ConductorOne will sync all available domains.
+</Step>
+<Step>
+In the **Administrator email** field, enter the email address associated with your domain or a super admin.
+</Step>
+<Step>
+In the **Credentials (JSON)** area, click **Choose file** and upload the file.
+</Step>
+<Step>
+Click **Save**.
+</Step>
+<Step>
+The connector's label changes to **Syncing**, followed by **Connected**. You can view the logs to ensure that information is syncing.
+</Step>
+</Steps>
+
+**That's it!** Your Google Workspace connector is now pulling access data into ConductorOne.
+</Tab>
+
+<Tab title="Self-hosted">
+**Follow these instructions to use the Google Workspace connector, hosted and run in your own environment.** 
+
+When running in service mode on Kubernetes, a self-hosted connector maintains an ongoing connection with ConductorOne, automatically syncing and uploading data at regular intervals. This data is immediately available in the ConductorOne UI for access reviews and access requests.
+
+### Resources
+
+* [Official download center](https://dist.conductorone.com/ConductorOne/baton-google-workspace): For stable binaries (Windows/Linux/macOS) and container images.
+
+* [GitHub repository](https://github.com/ConductorOne/baton-google-workspace): Access the source code, report issues, or contribute to the project.
+
+### Step 1: Set up a new Google Workspace connector
+
+<Steps>
+<Step>
+In ConductorOne, navigate to **Integrations** **Connectors** > **Add connector**
+</Step>
+<Step>
+Search for **Baton** and click **Add**
+</Step>
+<Step>
+Choose whether to add to an existing application or create new
+</Step>
+<Step>
+Set the connector owner(s)
+</Step>
+<Step>
+Click **Create and add details**
+</Step>
+<Step>
+In the **Settings** area, click **Edit**
+</Step>
+<Step>
+Click **Rotate** to generate a new Client ID and Secret
+
+   <Warning>
+   Save these credentials securely - you'll need them for the Kubernetes configuration
+   </Warning>
+</Step>
+</Steps>
+
+### Step 2: Create Kubernetes configuration files
+
+Create two Kubernetes manifest files for your Google Workspace connector deployment:
+
+#### Secrets configuration
+
+```yaml expandable
+# baton-google-workspace-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: baton-google-workspace-secrets
+type: Opaque
+data:
+  # ConductorOne credentials
+  BATON_CLIENT_ID: <base64 encoded ConductorOne client ID>
+  BATON_CLIENT_SECRET: <base64 encoded ConductorOne client secret>
+  
+  # Google Workspace specific credentials
+  BATON_CUSTOMER_ID: <base64 encoded customer ID>
+  BATON_DOMAIN: <base64 encoded domain>
+  BATON_ADMINISTRATOR_EMAIL: <base64 encoded administrator email>
+  BATON_CREDENTIALS_JSON: <base64 encoded credentials JSON>
+
+  # Optional: include if you want ConductorOne to provision access using this connector
+  BATON_PROVISIONING: true
+```
+
+**Base64 Encoding:** Use `echo -n "your-value" | base64` to encode your secrets,
+
+See the connector's README or run `--help` to see all available configuration flags and environment variables.
+
+#### Deployment configuration
+
+```yaml expandable
+# baton-google-workspace.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: baton-google-workspace
+  labels:
+    app: baton-google-workspace
+spec:
+  selector:
+    matchLabels:
+      app: baton-google-workspace
+  template:
+    metadata:
+      labels:
+        app: baton-google-workspace
+        baton: true
+        baton-app: google-workspace
+    spec:
+      containers:
+      - name: baton-google-workspace
+        image: ghcr.io/conductorone/baton-google-workspace:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: BATON_HOST_ID
+          value: baton-google-workspace
+        envFrom:
+        - secretRef:
+            name: baton-google-workspace-secrets
+```
+
+### Step 3: Deploy the connector
+
+<Steps>
+<Step>
+Create a namespace in which to run ConductorOne connectors (if desired), then apply the secret config and deployment config files.
+</Step>
+<Step>
+Check that the connector data uploaded correctly. In ConductorOne, click **Apps**. On the **Managed apps** tab, locate and click the name of the application you added the Google Workspace connector to. Google Workspace data should be found on the **Entitlements** and **Accounts** tabs.
+</Step>
+</Steps>
+
+**That's it!** Your Google Workspace connector is now pulling access data into ConductorOne.
+</Tab>
+</Tabs>
+
+### What's next?
+
+If Google Workspace is your company's identity provider (meaning that it is used to SSO into other software), the integration sync will automatically create applications in ConductorOne for all of your SCIMed software. Before you move on, review the [Create applications](/product/admin/applications) page for important information about how to set up integrations with the SCIMed apps.
+
+## Troubleshooting the Google Workspace integration
+
+### When adding permissions to my Google Workspace API Client permissions I get authorization errors
+
+**Example error:**
+
+`error using connector deprovision [attempt #3]: error: delete resource failed: googleapi: Error 403: Request had insufficient authentication scopes. Details: [ { "@type": "type.googleapis.com/google.rpc.ErrorInfo", "domain": "googleapis.com", "metadata": { "method": "ccc.hosted.frontend.directory.v1.DirectoryUsers.Update", "service": "admin.googleapis.com" }, "reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT" } ] More details: Reason: insufficientPermissions, Message: Insufficient Permission`
+
+**To resolve this issue:** 
+
+Remove the Google Workspace API Client, then re-add with the correct permissions.
+<Steps>
+<Step>
+ Copy the Client ID.
+</Step>
+<Step>
+Delete the API Client.
+</Step>
+<Step>
+Add a new Client ID.
+</Step>
+<Step>
+Re-add the relevant scopes:
+
+   Read-only
+
+   ```bash
+   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly
+   ```
+
+   Read/Write
+
+   ```bash 
+   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings
+   ```
+</Step>
+</Steps>
+
