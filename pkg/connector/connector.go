@@ -322,10 +322,10 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	}
 
 	httpClient = &http.Client{
-		Transport: &oauth2.Transport{
+		Transport: newRetryTransport(&oauth2.Transport{
 			Base:   httpClient.Transport,
 			Source: oauth2.ReuseTokenSource(token, tokenSrc),
-		},
+		}),
 	}
 	srv, err := newService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
