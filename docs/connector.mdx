@@ -38,6 +38,8 @@ Connector actions are custom capabilities that extend ConductorOne automations w
 | delete_all_oauth_tokens | `user_id` (string, required) | Revokes all third-party app authorizations |
 | delete_all_application_passwords | `user_id` (string, required) | Deletes all app-specific passwords |
 | create_group | `email` (string, required)<br/>`name` (string, required)<br/>`description` (string, optional) | Creates a new Google Workspace group |
+| modify_group_settings | `group_key` (string, required)<br/>`allow_external_members` (boolean, optional)<br/>`allow_web_posting` (boolean, optional)<br/>`who_can_post_message` (string, optional)<br/>`message_moderation_level` (string, optional) | Update settings for an existing Google Group |
+| update_user_manager | `user_id` (string, required)<br/> `manager_email` (string, required) | Updates the manager relation for a user in Google Workspace. Updates the 'manager' entry in the user's Relations field |
 
 ## Gather Google Workspace credentials 
 
