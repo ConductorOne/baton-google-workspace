@@ -117,7 +117,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 			// Return no grants if the group no longer exists. This might happen if the group is deleted during a sync.
 			return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
 		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to list group members: %w", err)
 	}
 
 	var rv []*v2.Grant
@@ -249,7 +249,7 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	g, err := o.client.GetGroup(ctx, resourceId.Resource)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to get group: %w", err)
 	}
 
 	// TODO: If o.domainId is set, check if the group is still in the domain.

@@ -50,7 +50,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	r, err := f.client.ListActivities(ctx, "all", "admin", "", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities: %w", err)
 	}
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)

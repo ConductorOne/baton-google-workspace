@@ -21,6 +21,15 @@ type testUserWithOrgUnit struct {
 	ManagerEmail string
 }
 
+// userWithOrgUnitAPIResponse is a User-shaped response without secret fields (avoids gosec G117).
+type userWithOrgUnitAPIResponse struct {
+	Id           string                        `json:"id,omitempty"`
+	PrimaryEmail string                        `json:"primaryEmail,omitempty"`
+	OrgUnitPath  string                        `json:"orgUnitPath,omitempty"`
+	Name         *directoryAdmin.UserName      `json:"name,omitempty"`
+	Relations    []directoryAdmin.UserRelation `json:"relations,omitempty"`
+}
+
 type testServerStateWithOrgUnit struct {
 	mtx      sync.Mutex
 	users    map[string]*testUserWithOrgUnit
@@ -44,7 +53,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 				http.Error(w, "not found", http.StatusNotFound)
 				return
 			}
-			resp := &directoryAdmin.User{
+			resp := userWithOrgUnitAPIResponse{
 				Id:           u.Id,
 				PrimaryEmail: u.PrimaryEmail,
 				OrgUnitPath:  u.OrgUnitPath,
@@ -87,7 +96,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					}
 				}
 			}
-			resp := &directoryAdmin.User{
+			resp := userWithOrgUnitAPIResponse{
 				Id:           u.Id,
 				PrimaryEmail: u.PrimaryEmail,
 				OrgUnitPath:  u.OrgUnitPath,

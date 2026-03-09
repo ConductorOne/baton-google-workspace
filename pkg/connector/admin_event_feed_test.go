@@ -16,6 +16,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
+type safeUserResponse struct {
+	Id           string                      `json:"id,omitempty"`
+	PrimaryEmail string                      `json:"primaryEmail,omitempty"`
+	Name         *directoryAdmin.UserName    `json:"name,omitempty"`
+}
+
 // Minimal fake for Reports Activities.List + Directory lookups used by admin_event_feed.
 func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[string]*directoryAdmin.Group, activities *reportsAdmin.Activities) *httptest.Server {
 	mux := http.NewServeMux()
@@ -32,7 +39,7 @@ func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[st
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(u)
+		_ = json.NewEncoder(w).Encode(safeUserResponse{Id: u.Id, PrimaryEmail: u.PrimaryEmail, Name: u.Name})
 	})
 
 	mux.HandleFunc("/admin/directory/v1/groups/", func(w http.ResponseWriter, r *http.Request) {

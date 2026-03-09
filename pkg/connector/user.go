@@ -422,8 +422,8 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		return nil, nil, nil, fmt.Errorf("credentialOptions cannot be nil")
 	}
 
-	if o.client.userProvisioningService == nil {
-		return nil, nil, nil, fmt.Errorf("user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	if err := o.client.RequireUserProvisioning(); err != nil {
+		return nil, nil, nil, err
 	}
 
 	var password string
@@ -467,8 +467,8 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 }
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
-	if o.client.userProvisioningService == nil {
-		return nil, fmt.Errorf("user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	if err := o.client.RequireUserProvisioning(); err != nil {
+		return nil, err
 	}
 
 	if err := o.client.DeleteUser(ctx, resourceId.Resource); err != nil {
