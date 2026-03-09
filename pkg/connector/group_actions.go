@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+
 var (
 	createGroupActionSchema = &v2.BatonActionSchema{
 		Name:        "create_group",
@@ -224,7 +225,7 @@ func (o *groupResourceType) registerModifyGroupSettingsAction(ctx context.Contex
 
 func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.groupProvisioningService == nil {
+	if o.client.groupProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: group provisioning service not available - requires %s scope", admin.AdminDirectoryGroupScope)
 	}
 
@@ -267,7 +268,7 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 		Description: description,
 	}
 	l.Debug("google-workspace: group action handler: create group input", zap.Any("group", group))
-	createdGroup, err := o.groupProvisioningService.Groups.Insert(group).Context(ctx).Do()
+	createdGroup, err := o.client.InsertGroup(ctx, group)
 	if err != nil {
 		// Check if it's a 403 Forbidden error and enhance the message
 		gerr := &googleapi.Error{}
@@ -280,7 +281,7 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 					"3) invalid email domain '%s' (domain must be verified in Google Workspace): %w",
 				admin.AdminDirectoryGroupScope, email, err)
 		}
-		return nil, nil, fmt.Errorf("google-workspace: failed to create group: %w", err)
+		return nil, nil, err
 	}
 	l.Debug("google-workspace: group action handler: created group", zap.Any("createdGroup", createdGroup))
 	// Create the group resource
@@ -313,14 +314,11 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 	hasAllowExternal bool,
 	hasAllowWebPosting bool,
 ) (bool, map[string]string, map[string]string, error) {
-	if o.groupsSettingsService == nil {
-		return false, nil, nil, fmt.Errorf("group settings service not available")
-	}
 	previousSettings := make(map[string]string)
 	newSettings := make(map[string]string)
 
 	// Fetch current settings for idempotency check
-	currentSettings, err := o.groupsSettingsService.Groups.Get(groupEmail).Context(ctx).Do()
+	currentSettings, err := o.client.GetGroupSettings(ctx, groupEmail)
 	if err != nil {
 		return false, nil, nil, err
 	}
@@ -397,7 +395,7 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 	}
 
 	// Update settings
-	_, err = o.groupsSettingsService.Groups.Patch(groupEmail, updatedSettings).Context(ctx).Do()
+	_, err = o.client.PatchGroupSettings(ctx, groupEmail, updatedSettings)
 	if err != nil {
 		return false, previousSettings, newSettings, err
 	}
@@ -463,13 +461,11 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 	}
 
 	// Verify group exists and get its email
-	group, err := o.groupService.Groups.Get(groupKey).Context(ctx).Do()
+	group, err := o.client.GetGroup(ctx, groupKey)
 	if err != nil {
 		var gerr *googleapi.Error
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil, fmt.Errorf("group not found: %s", groupKey)
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			return nil, nil, fmt.Errorf("group not found: %s", groupKey)
 		}
 		return nil, nil, err
 	}

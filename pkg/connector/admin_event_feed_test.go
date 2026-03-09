@@ -105,12 +105,13 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsService(t, server.URL, server.Client())
 
-	c := newTestConnector()
-	// prime directory read-only scopes for admin_event_feed
-	primeServiceCache(c, dir, nil)
-	c.reportService = rep
+	client := &GoogleWorkspaceClient{
+		userService:  dir,
+		groupService: dir,
+		reportService: rep,
+	}
 
-	feed := newAdminEventFeed(c)
+	feed := newAdminEventFeed(client)
 	start := timestamppb.Now()
 	st := &pagination.StreamToken{Size: 100}
 	events, state, _, err := feed.ListEvents(context.Background(), start, st)

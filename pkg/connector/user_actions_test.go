@@ -113,11 +113,13 @@ func newTestUserResourceType(t *testing.T, server *httptest.Server) *userResourc
 	t.Helper()
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	return &userResourceType{
-		resourceType:            resourceTypeUser,
-		userService:             dir,
-		userProvisioningService: dir,
-		customerId:              "test-customer",
-		domain:                  "",
+		resourceType: resourceTypeUser,
+		client: &GoogleWorkspaceClient{
+			userService:             dir,
+			userProvisioningService: dir,
+		},
+		customerId: "test-customer",
+		domain:     "",
 	}
 }
 
@@ -251,12 +253,14 @@ func newTestUserResourceTypeWithSecurity(t *testing.T, server *httptest.Server) 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	securityDir := newTestDirectoryService(t, server.URL, server.Client())
 	return &userResourceType{
-		resourceType:            resourceTypeUser,
-		userService:             dir,
-		userProvisioningService: dir,
-		userSecurityService:     securityDir,
-		customerId:              "test-customer",
-		domain:                  "",
+		resourceType: resourceTypeUser,
+		client: &GoogleWorkspaceClient{
+			userService:             dir,
+			userProvisioningService: dir,
+			userSecurityService:     securityDir,
+		},
+		customerId: "test-customer",
+		domain:     "",
 	}
 }
 
@@ -499,7 +503,7 @@ func TestSignOutUser_MissingUserId(t *testing.T) {
 
 func TestSignOutUser_NoSecurityService(t *testing.T) {
 	userRT := &userResourceType{
-		userSecurityService: nil,
+		client: &GoogleWorkspaceClient{userSecurityService: nil},
 	}
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
