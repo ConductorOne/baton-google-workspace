@@ -42,7 +42,7 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 		ForceSendFields: []string{"Suspended"},
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to update user status: %w", err)
 	}
 
 	response := structpb.Struct{
@@ -69,7 +69,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for disableUser: %w", userId, err)
 	}
 	if u.Suspended { // already suspended
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -83,7 +83,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		ForceSendFields: []string{"Suspended"},
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -105,7 +105,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for enableUser: %w", userId, err)
 	}
 	if !u.Suspended { // already active
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -119,7 +119,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		ForceSendFields: []string{"Suspended"}, // This is needed because the SDK would omit any field that has the field type default value (false).
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -152,7 +152,7 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	// fetch current for return payload
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for changeUserPrimaryEmail: %w", userId, err)
 	}
 	prev := u.PrimaryEmail
 	if emailsEqual(prev, newPrimary) { // Already primary email
@@ -169,7 +169,7 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		ForceSendFields: []string{"PrimaryEmail"},
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to update primary email for user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -259,7 +259,7 @@ func (c *GoogleWorkspace) dataTransferInsert(
 		// If there is, return the transfer ID and status.
 		transfers, err := client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("google-workspace: failed to list data transfers: %w", err)
 		}
 		if transfers == nil {
 			break
@@ -298,7 +298,7 @@ func (c *GoogleWorkspace) dataTransferInsert(
 
 	created, err := client.InsertDataTransfer(ctx, transfer)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to create data transfer: %w", err)
 	}
 
 	resp := &structpb.Struct{Fields: map[string]*structpb.Value{
