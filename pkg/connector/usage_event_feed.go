@@ -22,7 +22,7 @@ import (
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
 type usageEventFeed struct {
-	c *GoogleWorkspace
+	c *GoogleWorkspaceClient
 }
 
 func rfc3339ToTimestamp(s string) *timestamppb.Timestamp {
@@ -123,30 +123,15 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	l := ctxzap.Extract(ctx)
 
 	var streamState *pagination.StreamState
-	s, err := f.c.getReportService(ctx)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get report service in usage event feed: %w", err)
-	}
-
-	req := s.Activities.List("all", "token")
-	req.MaxResults(int64(pToken.Size))
-	req.EventName("authorize")
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token in usage event feed: %w", err)
 	}
 
-	if cursor.StartAt != "" {
-		req.StartTime(cursor.StartAt)
-	}
-	if cursor.NextPageToken != "" {
-		req.PageToken(cursor.NextPageToken)
-	}
-
-	r, err := req.Do()
+	r, err := f.c.ListActivities(ctx, "all", "token", "authorize", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
 	if err != nil {
-		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list usage activities")
+		return nil, nil, nil, err
 	}
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
@@ -256,8 +241,8 @@ func (f *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 	}
 }
 
-func newUsageEventFeed(connector *GoogleWorkspace) *usageEventFeed {
+func newUsageEventFeed(client *GoogleWorkspaceClient) *usageEventFeed {
 	return &usageEventFeed{
-		c: connector,
+		c: client,
 	}
 }

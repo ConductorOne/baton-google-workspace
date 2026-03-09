@@ -18,7 +18,6 @@ import (
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
-	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/grpc/codes"
 )
 
@@ -27,14 +26,10 @@ const (
 )
 
 type groupResourceType struct {
-	resourceType                   *v2.ResourceType
-	groupService                   *admin.Service
-	customerId                     string
-	domain                         string
-	groupMemberService             *admin.Service
-	groupMemberProvisioningService *admin.Service
-	groupProvisioningService       *admin.Service
-	groupsSettingsService          *groupssettings.Service
+	resourceType *v2.ResourceType
+	client       *GoogleWorkspaceClient
+	customerId   string
+	domain       string
 }
 
 func (o *groupResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -53,25 +48,11 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 		})
 	}
 	l := ctxzap.Extract(ctx)
-	r := o.groupService.Groups.List()
-
-	if o.domain != "" {
-		r = r.Domain(o.domain)
-	} else {
-		r = r.Customer(o.customerId)
-	}
-
 	// https://developers.google.com/admin-sdk/directory/v1/limits
 	// Groups and group members – A default and maximum of 200 entries per page.
-	r = r.MaxResults(200)
-
-	if bag.PageToken() != "" {
-		r = r.PageToken(bag.PageToken())
-	}
-
-	groups, err := r.Context(ctx).Do()
+	groups, err := o.client.ListGroups(ctx, o.customerId, o.domain, bag.PageToken())
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list groups")
+		return nil, nil, err
 	}
 
 	serverResponse := groups.ServerResponse
@@ -129,21 +110,14 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 		})
 	}
 
-	r := o.groupMemberService.Members.List(resource.Id.Resource).MaxResults(200)
-	if bag.PageToken() != "" {
-		r = r.PageToken(bag.PageToken())
-	}
-
-	members, err := r.Context(ctx).Do()
+	members, err := o.client.ListMembers(ctx, resource.Id.Resource, bag.PageToken())
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
 			// Return no grants if the group no longer exists. This might happen if the group is deleted during a sync.
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
-			}
+			return nil, nil, uhttp.WrapErrors(codes.NotFound, fmt.Sprintf("no group found with id %s", resource.Id.Resource))
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list group members")
+		return nil, nil, err
 	}
 
 	var rv []*v2.Grant
@@ -184,24 +158,12 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func groupBuilder(
-	groupService *admin.Service,
-	customerId string,
-	domain string,
-	groupMemberService *admin.Service,
-	groupMemberProvisioningService *admin.Service,
-	groupProvisioningService *admin.Service,
-	groupsSettingsService *groupssettings.Service,
-) *groupResourceType {
+func groupBuilder(client *GoogleWorkspaceClient, customerId string, domain string) *groupResourceType {
 	return &groupResourceType{
-		resourceType:                   resourceTypeGroup,
-		groupService:                   groupService,
-		customerId:                     customerId,
-		domain:                         domain,
-		groupMemberService:             groupMemberService,
-		groupMemberProvisioningService: groupMemberProvisioningService,
-		groupProvisioningService:       groupProvisioningService,
-		groupsSettingsService:          groupsSettingsService,
+		resourceType: resourceTypeGroup,
+		client:       client,
+		customerId:   customerId,
+		domain:       domain,
 	}
 }
 
@@ -233,25 +195,24 @@ func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, err
 }
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
-	if o.groupMemberProvisioningService == nil {
+	if o.client.groupMemberProvisioningService == nil {
 		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope))
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "user principal is required")
 	}
 
-	r := o.groupMemberProvisioningService.Members.Insert(entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
-	assignment, err := r.Context(ctx).Do()
+	assignment, err := o.client.InsertMember(ctx, entitlement.Resource.Id.Resource, &admin.Member{Id: principal.GetId().GetResource()})
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusConflict {
 			// Member already exists, fetch it to return as grant (idempotency)
-			assignment, err = o.groupMemberProvisioningService.Members.Get(entitlement.Resource.Id.Resource, principal.GetId().GetResource()).Context(ctx).Do()
+			assignment, err = o.client.GetMember(ctx, entitlement.Resource.Id.Resource, principal.GetId().GetResource())
 			if err != nil {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to get existing group member")
+				return nil, nil, err
 			}
 		} else {
-			return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to add group member")
+			return nil, nil, err
 		}
 	}
 
@@ -261,7 +222,7 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 }
 
 func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	if o.groupMemberProvisioningService == nil {
+	if o.client.groupMemberProvisioningService == nil {
 		return nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope))
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
@@ -269,31 +230,26 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 	}
 	l := ctxzap.Extract(ctx)
 
-	r := o.groupMemberProvisioningService.Members.Delete(grant.Entitlement.Resource.Id.Resource, grant.Principal.GetId().GetResource())
-	err := r.Context(ctx).Do()
+	err := o.client.DeleteMember(ctx, grant.Entitlement.Resource.Id.Resource, grant.Principal.GetId().GetResource())
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				// This should only hit if someone double-revokes, but I'd rather we log something about it
-				l.Info("google-workspace-v2: group member is being deleted but doesn't exist",
-					zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
-					zap.String("user_id", grant.Principal.GetId().GetResource()))
-				return nil, nil
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// This should only hit if someone double-revokes, but I'd rather we log something about it
+			l.Info("google-workspace-v2: group member is being deleted but doesn't exist",
+				zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
+				zap.String("user_id", grant.Principal.GetId().GetResource()))
+			return nil, nil
 		}
-		return nil, wrapGoogleApiErrorWithContext(err, "failed to delete group member")
+		return nil, err
 	}
 
 	return nil, nil
 }
 
 func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
-	r := o.groupService.Groups.Get(resourceId.Resource)
-
-	g, err := r.Context(ctx).Do()
+	g, err := o.client.GetGroup(ctx, resourceId.Resource)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to retrieve group: %s", resourceId.Resource))
+		return nil, nil, err
 	}
 
 	// TODO: If o.domainId is set, check if the group is still in the domain.
@@ -308,14 +264,14 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 }
 
 func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (annotations.Annotations, error) {
-	if o.groupProvisioningService == nil {
+	if o.client.groupProvisioningService == nil {
 		return nil, fmt.Errorf("google-workspace: group provisioning service not available - requires %s scope", admin.AdminDirectoryGroupScope)
 	}
 	if resourceId.ResourceType != resourceTypeGroup.Id {
 		return nil, fmt.Errorf("google-workspace: resource type is not group")
 	}
 
-	err := o.groupProvisioningService.Groups.Delete(resourceId.Resource).Context(ctx).Do()
+	err := o.client.DeleteGroup(ctx, resourceId.Resource)
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
@@ -324,14 +280,14 @@ func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceI
 				return nil, nil
 			}
 			if gerr.Code == http.StatusForbidden {
-				return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+				return nil, fmt.Errorf(
 					"google-workspace: failed to delete group (403 Forbidden). "+
 						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions",
-					admin.AdminDirectoryGroupScope))
+						"2) insufficient admin permissions: %w",
+					admin.AdminDirectoryGroupScope, err)
 			}
 		}
-		return nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to delete group")
+		return nil, err
 	}
 
 	return nil, nil
