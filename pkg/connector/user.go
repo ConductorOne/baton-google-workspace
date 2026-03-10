@@ -68,7 +68,7 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 	// Users – A default of 100 entries and a maximum of 500 entries per page.
 	users, err := o.client.ListUsers(ctx, o.customerId, o.domain, bag.PageToken())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to list users: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
@@ -219,7 +219,7 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user: %w", err)
 	}
 
 	if o.domain != "" {
@@ -452,7 +452,7 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 
 	user, err = o.client.InsertUser(ctx, user)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to insert user: %w", err)
 	}
 
 	userResource, err := o.userResource(ctx, user)
@@ -472,7 +472,7 @@ func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId
 	}
 
 	if err := o.client.DeleteUser(ctx, resourceId.Resource); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("google-workspace: failed to delete user: %w", err)
 	}
 
 	return nil, nil
