@@ -362,11 +362,11 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			l.Info("user no longer exists", zap.String("email", email))
+			l.Debug("user no longer exists", zap.String("email", email))
 			delete(f.userCache, email)
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("google-workspace: failed to get user in admin event feed: %w", err)
 	}
 
 	entry := cacheEntry{
@@ -398,11 +398,11 @@ func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheE
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			l.Info("group no longer exists", zap.String("email", email))
+			l.Debug("group no longer exists", zap.String("email", email))
 			delete(f.groupCache, email)
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("google-workspace: failed to get group in admin event feed: %w", err)
 	}
 
 	entry := cacheEntry{

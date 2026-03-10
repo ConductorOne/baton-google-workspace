@@ -209,10 +209,10 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 			// Member already exists, fetch it to return as grant (idempotency)
 			assignment, err = o.client.GetMember(ctx, entitlement.Resource.Id.Resource, principal.GetId().GetResource())
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, fmt.Errorf("google-workspace: failed to get existing group member: %w", err)
 			}
 		} else {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("google-workspace: failed to insert group member: %w", err)
 		}
 	}
 
@@ -240,7 +240,7 @@ func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annota
 				zap.String("user_id", grant.Principal.GetId().GetResource()))
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("google-workspace: failed to delete group member: %w", err)
 	}
 
 	return nil, nil
