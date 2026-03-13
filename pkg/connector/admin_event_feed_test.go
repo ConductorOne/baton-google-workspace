@@ -16,6 +16,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
+type safeUserResponse struct {
+	Id           string                      `json:"id,omitempty"`
+	PrimaryEmail string                      `json:"primaryEmail,omitempty"`
+	Name         *directoryAdmin.UserName    `json:"name,omitempty"`
+}
+
 // Minimal fake for Reports Activities.List + Directory lookups used by admin_event_feed.
 func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[string]*directoryAdmin.Group, activities *reportsAdmin.Activities) *httptest.Server {
 	mux := http.NewServeMux()
@@ -32,7 +39,7 @@ func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[st
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(u)
+		_ = json.NewEncoder(w).Encode(safeUserResponse{Id: u.Id, PrimaryEmail: u.PrimaryEmail, Name: u.Name})
 	})
 
 	mux.HandleFunc("/admin/directory/v1/groups/", func(w http.ResponseWriter, r *http.Request) {
@@ -105,12 +112,13 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsService(t, server.URL, server.Client())
 
-	c := newTestConnector()
-	// prime directory read-only scopes for admin_event_feed
-	primeServiceCache(c, dir, nil)
-	c.reportService = rep
+	client := &GoogleWorkspaceClient{
+		userService:  dir,
+		groupService: dir,
+		reportService: rep,
+	}
 
-	feed := newAdminEventFeed(c)
+	feed := newAdminEventFeed(client)
 	start := timestamppb.Now()
 	st := &pagination.StreamToken{Size: 100}
 	events, state, _, err := feed.ListEvents(context.Background(), start, st)

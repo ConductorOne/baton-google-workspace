@@ -31,22 +31,18 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing is_suspended")
 	}
 
-	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get directory service for updateUserStatus: %w", err)
-	}
-
 	isSuspended := isSuspendedField.BoolValue
-
 	userId := guidField.StringValue
 
+	client := c.getClient(ctx)
+
 	// update user.isSuspended state
-	_, err = userService.Users.Update(userId, &directoryAdmin.User{
+	_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
 		Suspended:       isSuspended,
 		ForceSendFields: []string{"Suspended"},
-	}).Context(ctx).Do()
+	})
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user status: %s", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to update user status: %w", err)
 	}
 
 	response := structpb.Struct{
@@ -67,17 +63,13 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
-	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get directory service for disableUser: %w", err)
-	}
-
 	userId := guidField.StringValue
+	client := c.getClient(ctx)
 
 	// fetch current to ensure idempotency
-	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user %s for disableUser", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for disableUser: %w", userId, err)
 	}
 	if u.Suspended { // already suspended
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -86,15 +78,12 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		return &response, nil, nil
 	}
 
-	_, err = userService.Users.Update(
-		userId,
-		&directoryAdmin.User{
-			Suspended:       true,
-			ForceSendFields: []string{"Suspended"},
-		},
-	).Context(ctx).Do()
+	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
+		Suspended:       true,
+		ForceSendFields: []string{"Suspended"},
+	})
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to suspend user in disableUser: %s", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -110,17 +99,13 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
-	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get directory service for enableUser: %w", err)
-	}
-
 	userId := guidField.StringValue
+	client := c.getClient(ctx)
 
 	// fetch current to ensure idempotency
-	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user %s for enableUser", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for enableUser: %w", userId, err)
 	}
 	if !u.Suspended { // already active
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -129,15 +114,12 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		return &response, nil, nil
 	}
 
-	_, err = userService.Users.Update(
-		userId,
-		&directoryAdmin.User{
-			Suspended:       false,
-			ForceSendFields: []string{"Suspended"}, // This is needed becasuse the SDK would omit any field that has the field type default value (false).
-		},
-	).Context(ctx).Do()
+	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
+		Suspended:       false,
+		ForceSendFields: []string{"Suspended"}, // This is needed because the SDK would omit any field that has the field type default value (false).
+	})
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to unsuspend user: %s", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -165,15 +147,12 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid email address: %s", newPrimary), err)
 	}
 
-	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get directory service for changeUserPrimaryEmail: %w", err)
-	}
+	client := c.getClient(ctx)
 
 	// fetch current for return payload
-	u, err := userService.Users.Get(userId).Context(ctx).Do()
+	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user %s for changeUserPrimaryEmail", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for changeUserPrimaryEmail: %w", userId, err)
 	}
 	prev := u.PrimaryEmail
 	if emailsEqual(prev, newPrimary) { // Already primary email
@@ -185,15 +164,12 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return &response, nil, nil
 	}
 
-	_, err = userService.Users.Update(
-		userId,
-		&directoryAdmin.User{
-			PrimaryEmail:    newPrimary,
-			ForceSendFields: []string{"PrimaryEmail"},
-		},
-	).Context(ctx).Do()
+	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
+		PrimaryEmail:    newPrimary,
+		ForceSendFields: []string{"PrimaryEmail"},
+	})
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user primary email: %s", userId))
+		return nil, nil, fmt.Errorf("google-workspace: failed to update primary email for user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
@@ -275,35 +251,29 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	newOwnerUserId string,
 	params []*datatransferAdmin.ApplicationTransferParam,
 ) (*structpb.Struct, annotations.Annotations, error) {
-	dtService, err := c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get data transfer service: %w", err)
-	}
+	client := c.getClient(ctx)
 
 	pageToken := ""
 	for {
 		// Go through the transfers list and check if there is a transfer in progress for the given appID, source and target users.
 		// If there is, return the transfer ID and status.
-		listCall := dtService.Transfers.List().OldOwnerUserId(oldOwnerUserId).NewOwnerUserId(newOwnerUserId)
-		if pageToken != "" {
-			listCall = listCall.PageToken(pageToken)
-		}
-		transfers, err := listCall.Context(ctx).Do()
+		transfers, err := client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
 		if err != nil {
-			return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list data transfers")
+			return nil, nil, fmt.Errorf("google-workspace: failed to list data transfers: %w", err)
 		}
-		if transfers != nil {
-			for _, t := range transfers.DataTransfers {
-				if strings.EqualFold(t.OverallTransferStatusCode, "new") || strings.EqualFold(t.OverallTransferStatusCode, "inProgress") {
-					for _, adt := range t.ApplicationDataTransfers {
-						if adt.ApplicationId == appID {
-							resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-								"success":     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-								"transfer_id": {Kind: &structpb.Value_StringValue{StringValue: t.Id}},
-								"status":      {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
-							}}
-							return resp, nil, nil
-						}
+		if transfers == nil {
+			break
+		}
+		for _, t := range transfers.DataTransfers {
+			if strings.EqualFold(t.OverallTransferStatusCode, "new") || strings.EqualFold(t.OverallTransferStatusCode, "inProgress") {
+				for _, adt := range t.ApplicationDataTransfers {
+					if adt.ApplicationId == appID {
+						resp := &structpb.Struct{Fields: map[string]*structpb.Value{
+							"success":     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+							"transfer_id": {Kind: &structpb.Value_StringValue{StringValue: t.Id}},
+							"status":      {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
+						}}
+						return resp, nil, nil
 					}
 				}
 			}
@@ -326,9 +296,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 		},
 	}
 
-	created, err := dtService.Transfers.Insert(transfer).Context(ctx).Do()
+	created, err := client.InsertDataTransfer(ctx, transfer)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to create data transfer")
+		return nil, nil, fmt.Errorf("google-workspace: failed to create data transfer: %w", err)
 	}
 
 	resp := &structpb.Struct{Fields: map[string]*structpb.Value{

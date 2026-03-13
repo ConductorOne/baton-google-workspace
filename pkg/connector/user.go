@@ -20,12 +20,10 @@ import (
 )
 
 type userResourceType struct {
-	resourceType            *v2.ResourceType
-	userService             *admin.Service
-	userProvisioningService *admin.Service
-	userSecurityService     *admin.Service
-	customerId              string
-	domain                  string
+	resourceType *v2.ResourceType
+	client       *GoogleWorkspaceClient
+	customerId   string
+	domain       string
 }
 
 func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -66,24 +64,11 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 		})
 	}
 
-	r := o.userService.Users.List().OrderBy("email").Projection("full")
-	if o.domain != "" {
-		r = r.Domain(o.domain)
-	} else {
-		r = r.Customer(o.customerId)
-	}
-
 	// https://developers.google.com/admin-sdk/directory/v1/limits
 	// Users – A default of 100 entries and a maximum of 500 entries per page.
-	r = r.MaxResults(500)
-
-	if bag.PageToken() != "" {
-		r = r.PageToken(bag.PageToken())
-	}
-
-	users, err := r.Context(ctx).Do()
+	users, err := o.client.ListUsers(ctx, o.customerId, o.domain, bag.PageToken())
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list users")
+		return nil, nil, fmt.Errorf("google-workspace: failed to list users: %w", err)
 	}
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
@@ -116,14 +101,12 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ rs.SyncOp
 	return nil, nil, nil
 }
 
-func userBuilder(userService *admin.Service, customerId string, domain string, userProvisioningService *admin.Service, userSecurityService *admin.Service) *userResourceType {
+func userBuilder(client *GoogleWorkspaceClient, customerId string, domain string) *userResourceType {
 	return &userResourceType{
-		resourceType:            resourceTypeUser,
-		userService:             userService,
-		userProvisioningService: userProvisioningService,
-		userSecurityService:     userSecurityService,
-		customerId:              customerId,
-		domain:                  domain,
+		resourceType: resourceTypeUser,
+		client:       client,
+		customerId:   customerId,
+		domain:       domain,
 	}
 }
 
@@ -234,11 +217,9 @@ func extractFromInterface[T any](data interface{}) ([]T, error) {
 func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	r := o.userService.Users.Get(resourceId.Resource).Projection("full")
-
-	user, err := r.Context(ctx).Do()
+	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to retrieve user: %s", resourceId.Resource))
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user: %w", err)
 	}
 
 	if o.domain != "" {
@@ -441,8 +422,8 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		return nil, nil, nil, fmt.Errorf("credentialOptions cannot be nil")
 	}
 
-	if o.userProvisioningService == nil {
-		return nil, nil, nil, fmt.Errorf("user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	if err := o.client.RequireUserProvisioning(); err != nil {
+		return nil, nil, nil, err
 	}
 
 	var password string
@@ -469,9 +450,9 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 
 	user.Password = password
 
-	user, err = o.userProvisioningService.Users.Insert(user).Context(ctx).Do()
+	user, err = o.client.InsertUser(ctx, user)
 	if err != nil {
-		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to create account")
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to insert user: %w", err)
 	}
 
 	userResource, err := o.userResource(ctx, user)
@@ -486,13 +467,12 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 }
 
 func (o *userResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
-	if o.userProvisioningService == nil {
-		return nil, fmt.Errorf("user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+	if err := o.client.RequireUserProvisioning(); err != nil {
+		return nil, err
 	}
 
-	err := o.userProvisioningService.Users.Delete(resourceId.Resource).Context(ctx).Do()
-	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to delete user: %s", resourceId.Resource))
+	if err := o.client.DeleteUser(ctx, resourceId.Resource); err != nil {
+		return nil, fmt.Errorf("google-workspace: failed to delete user: %w", err)
 	}
 
 	return nil, nil

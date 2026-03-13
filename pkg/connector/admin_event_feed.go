@@ -16,7 +16,6 @@ import (
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
-	directory "google.golang.org/api/admin/directory/v1"
 	reports "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -30,7 +29,7 @@ type cacheEntry struct {
 type cacheMap map[string]cacheEntry
 
 type adminEventFeed struct {
-	connector *GoogleWorkspace
+	client *GoogleWorkspaceClient
 
 	groupCache cacheMap
 	userCache  cacheMap
@@ -43,29 +42,15 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	l := ctxzap.Extract(ctx)
 
 	var streamState *pagination.StreamState
-	s, err := f.connector.getReportService(ctx)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get report service: %w", err)
-	}
-
-	req := s.Activities.List("all", "admin")
-	req.MaxResults(int64(pToken.Size))
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token: %w", err)
 	}
 
-	if cursor.StartAt != "" {
-		req.StartTime(cursor.StartAt)
-	}
-	if cursor.NextPageToken != "" {
-		req.PageToken(cursor.NextPageToken)
-	}
-
-	r, err := req.Do()
+	r, err := f.client.ListActivities(ctx, "all", "admin", "", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
 	if err != nil {
-		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list admin activities")
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities: %w", err)
 	}
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
@@ -373,22 +358,15 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 
 	l := ctxzap.Extract(ctx)
 
-	userService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryUserReadonlyScope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get directory service for user lookup in event feed: %w", err)
-	}
-
-	user, err := userService.Users.Get(email).Do()
+	user, err := f.client.GetUser(ctx, email)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				l.Info("user no longer exists", zap.String("email", email))
-				delete(f.userCache, email)
-				return nil, nil
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			l.Debug("user no longer exists", zap.String("email", email))
+			delete(f.userCache, email)
+			return nil, nil
 		}
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user in event feed lookup: %s", email))
+		return nil, fmt.Errorf("google-workspace: failed to get user in admin event feed: %w", err)
 	}
 
 	entry := cacheEntry{
@@ -416,22 +394,15 @@ func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheE
 
 	l := ctxzap.Extract(ctx)
 
-	groupService, err := f.connector.getDirectoryService(ctx, directory.AdminDirectoryGroupReadonlyScope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get directory service for group lookup in event feed: %w", err)
-	}
-
-	group, err := groupService.Groups.Get(email).Do()
+	group, err := f.client.GetGroup(ctx, email)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				l.Info("group no longer exists", zap.String("email", email))
-				delete(f.groupCache, email)
-				return nil, nil
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			l.Debug("group no longer exists", zap.String("email", email))
+			delete(f.groupCache, email)
+			return nil, nil
 		}
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get group: %s", email))
+		return nil, fmt.Errorf("google-workspace: failed to get group in admin event feed: %w", err)
 	}
 
 	entry := cacheEntry{
@@ -459,9 +430,9 @@ func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 	}
 }
 
-func newAdminEventFeed(connector *GoogleWorkspace) *adminEventFeed {
+func newAdminEventFeed(client *GoogleWorkspaceClient) *adminEventFeed {
 	return &adminEventFeed{
-		connector:  connector,
+		client:     client,
 		groupCache: make(cacheMap),
 		userCache:  make(cacheMap),
 	}

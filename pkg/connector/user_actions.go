@@ -20,6 +20,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// Ensure googleapi import is used.
+var _ = googleapi.Error{}
+
 var (
 	changeUserOrgUnitActionSchema = &v2.BatonActionSchema{
 		Name:        "change_user_org_unit",
@@ -244,7 +247,7 @@ func (o *userResourceType) registerChangeUserOrgUnitAction(ctx context.Context, 
 
 func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.userProvisioningService == nil {
+	if o.client.userProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
@@ -272,9 +275,9 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Get current user to check current org unit
-	currentUser, err := o.userProvisioningService.Users.Get(userId).Context(ctx).Do()
+	currentUser, err := o.client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to retrieve user: %s", userId))
+		return nil, nil, err
 	}
 
 	// Check if already in the target org unit
@@ -295,25 +298,25 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Update the user's organizational unit
-	updatedUser, err := o.userProvisioningService.Users.Update(userId, &admin.User{
+	updatedUser, err := o.client.UpdateUser(ctx, userId, &admin.User{
 		OrgUnitPath:     orgUnitPath,
 		ForceSendFields: []string{"OrgUnitPath"},
-	}).Context(ctx).Do()
+	})
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			// Check if it's a 400 Bad Request error (INVALID_OU_ID)
 			if gerr.Code == http.StatusBadRequest {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+				return nil, nil, fmt.Errorf(
 					"google-workspace: failed to change user org unit (400 Bad Request). "+
 						"Invalid org_unit_path '%s'. "+
 						"Note: Org unit paths should NOT include the domain name. "+
 						"They start from '/' and list only the OU hierarchy (e.g., '/test_unit_02/child-test-ou-01' not '/batonc1/test_unit_02/child-test-ou-01'). "+
-						"Please verify the path exists and try again",
-					orgUnitPath))
+						"Please verify the path exists and try again: %w",
+					orgUnitPath, err)
 			}
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to change user org unit: %s", userId))
+		return nil, nil, err
 	}
 
 	l.Debug("google-workspace: user action handler: changed org unit",
@@ -343,7 +346,7 @@ func (o *userResourceType) registerOffboardingProfileUpdateAction(ctx context.Co
 
 func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.userProvisioningService == nil {
+	if o.client.userProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
@@ -382,28 +385,25 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 	// 3. Delete addresses, phone numbers, and additional email addresses (using NullFields)
 	//    Note: The primary email cannot be removed and will remain
 	// 4. Optionally archive the account
-	_, err = o.userProvisioningService.Users.Update(userId, updateUser).Context(ctx).Do()
+	_, err = o.client.UpdateUser(ctx, userId, updateUser)
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusForbidden {
-				return nil, nil, wrapGoogleApiErrorWithContext(err,
-					fmt.Sprintf("google-workspace: failed to update offboarding profile (403 Forbidden). "+
+				return nil, nil, fmt.Errorf(
+					"google-workspace: failed to update offboarding profile (403 Forbidden). "+
 						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions", admin.AdminDirectoryUserScope))
-			}
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
+						"2) insufficient admin permissions: %w", admin.AdminDirectoryUserScope, err)
 			}
 			if gerr.Code == http.StatusPreconditionFailed {
-				return nil, nil, wrapGoogleApiErrorWithContext(err,
+				return nil, nil, fmt.Errorf(
 					"google-workspace: failed to archive user account (412 Precondition Failed). "+
 						"Insufficient archived user licenses. "+
 						"Archiving a user requires an archived user license. "+
-						"Please ensure you have available archived user licenses in your Google Workspace subscription.")
+						"Please ensure you have available archived user licenses in your Google Workspace subscription: %w", err)
 			}
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to update offboarding profile")
+		return nil, nil, err
 	}
 
 	actionsList := "removed from GAL, cleared recovery details, deleted addresses/phones/emails"
@@ -432,7 +432,7 @@ func (o *userResourceType) registerDeleteAllApplicationPasswordsAction(ctx conte
 
 func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.userSecurityService == nil {
+	if o.client.userSecurityService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
 	}
 
@@ -443,22 +443,19 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 	}
 
 	// Sign out the user
-	err = o.userSecurityService.Users.SignOut(userId).Context(ctx).Do()
+	err = o.client.SignOutUser(ctx, userId)
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusForbidden {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
+				return nil, nil, fmt.Errorf(
 					"google-workspace: failed to sign out user (403 Forbidden). "+
 						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions",
-					admin.AdminDirectoryUserSecurityScope))
-			}
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
+						"2) insufficient admin permissions: %w",
+					admin.AdminDirectoryUserSecurityScope, err)
 			}
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to sign out user")
+		return nil, nil, err
 	}
 
 	l.Debug("google-workspace: user action handler: signed out user",
@@ -469,7 +466,7 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 
 func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.userSecurityService == nil {
+	if o.client.userSecurityService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
 	}
 
@@ -480,22 +477,17 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	}
 
 	// List all tokens for the user
-	tokens, err := o.userSecurityService.Tokens.List(userId).Context(ctx).Do()
+	tokens, err := o.client.ListTokens(ctx, userId)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusForbidden {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
-					"google-workspace: failed to list OAuth tokens (403 Forbidden). "+
-						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions",
-					admin.AdminDirectoryUserSecurityScope))
-			}
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
+			return nil, nil, fmt.Errorf(
+				"google-workspace: failed to list OAuth tokens (403 Forbidden). "+
+					"This may be due to: 1) missing OAuth scope %s, "+
+					"2) insufficient admin permissions: %w",
+				admin.AdminDirectoryUserSecurityScope, err)
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to list OAuth tokens")
+		return nil, nil, err
 	}
 
 	// If no tokens, return success with 0 deleted
@@ -515,7 +507,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 			continue
 		}
 
-		err := o.userSecurityService.Tokens.Delete(userId, token.ClientId).Context(ctx).Do()
+		err := o.client.DeleteToken(ctx, userId, token.ClientId)
 		if err != nil {
 			gerr := &googleapi.Error{}
 			if errors.As(err, &gerr) {
@@ -540,8 +532,8 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 
 	// If we failed to delete some tokens, return an error
 	if lastErr != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(lastErr, fmt.Sprintf("google-workspace: failed to delete some OAuth tokens (deleted %d of %d)",
-			tokensDeleted, len(tokens.Items)))
+		return nil, nil, fmt.Errorf("google-workspace: failed to delete some OAuth tokens (deleted %d of %d): %w",
+			tokensDeleted, len(tokens.Items), lastErr)
 	}
 
 	l.Debug("google-workspace: user action handler: deleted all OAuth tokens",
@@ -555,7 +547,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 
 func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.userSecurityService == nil {
+	if o.client.userSecurityService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
 	}
 
@@ -566,22 +558,17 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	}
 
 	// List all application-specific passwords (ASPs) for the user
-	asps, err := o.userSecurityService.Asps.List(userId).Context(ctx).Do()
+	asps, err := o.client.ListAsps(ctx, userId)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusForbidden {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf(
-					"google-workspace: failed to list application passwords (403 Forbidden). "+
-						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions",
-					admin.AdminDirectoryUserSecurityScope))
-			}
-			if gerr.Code == http.StatusNotFound {
-				return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: user not found")
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
+			return nil, nil, fmt.Errorf(
+				"google-workspace: failed to list application passwords (403 Forbidden). "+
+					"This may be due to: 1) missing OAuth scope %s, "+
+					"2) insufficient admin permissions: %w",
+				admin.AdminDirectoryUserSecurityScope, err)
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "google-workspace: failed to list application passwords")
+		return nil, nil, err
 	}
 
 	// If no application passwords, return success with 0 deleted
@@ -594,7 +581,7 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	passwordsDeleted := 0
 	var lastErr error
 	for _, asp := range asps.Items {
-		err := o.userSecurityService.Asps.Delete(userId, asp.CodeId).Context(ctx).Do()
+		err := o.client.DeleteAsp(ctx, userId, asp.CodeId)
 		if err != nil {
 			gerr := &googleapi.Error{}
 			if errors.As(err, &gerr) {
@@ -620,8 +607,8 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 
 	// If we failed to delete some application passwords, return an error
 	if lastErr != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(lastErr, fmt.Sprintf("google-workspace: failed to delete some application passwords (deleted %d of %d)",
-			passwordsDeleted, len(asps.Items)))
+		return nil, nil, fmt.Errorf("google-workspace: failed to delete some application passwords (deleted %d of %d): %w",
+			passwordsDeleted, len(asps.Items), lastErr)
 	}
 
 	l.Debug("google-workspace: user action handler: deleted all application passwords",
@@ -639,7 +626,7 @@ func (o *userResourceType) registerUpdateUserManagerAction(ctx context.Context, 
 
 func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.userProvisioningService == nil {
+	if o.client.userProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
@@ -667,9 +654,9 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	// Get current user to check current manager
-	currentUser, err := o.userProvisioningService.Users.Get(userId).Projection("full").Context(ctx).Do()
+	currentUser, err := o.client.GetUserFullForProvisioning(ctx, userId)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to retrieve user: %s", userId))
+		return nil, nil, err
 	}
 
 	// Check if already set to the target manager (idempotency)
@@ -704,12 +691,12 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	})
 
 	// Update the user's relations
-	updatedUser, err := o.userProvisioningService.Users.Update(userId, &admin.User{
+	updatedUser, err := o.client.UpdateUser(ctx, userId, &admin.User{
 		Relations:       updatedRelations,
 		ForceSendFields: []string{"Relations"},
-	}).Context(ctx).Do()
+	})
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("google-workspace: failed to update user manager: %s", userId))
+		return nil, nil, err
 	}
 
 	l.Debug("google-workspace: user action handler: changed manager",

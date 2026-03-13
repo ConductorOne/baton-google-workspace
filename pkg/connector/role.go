@@ -27,10 +27,9 @@ const (
 )
 
 type roleResourceType struct {
-	resourceType            *v2.ResourceType
-	roleService             *admin.Service
-	roleProvisioningService *admin.Service
-	customerId              string
+	resourceType *v2.ResourceType
+	client       *GoogleWorkspaceClient
+	customerId   string
 }
 
 func (o *roleResourceType) ResourceType(_ context.Context) *v2.ResourceType {
@@ -49,15 +48,9 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 			ResourceTypeID: resourceTypeRole.Id,
 		})
 	}
-	r := o.roleService.Roles.List(o.customerId).MaxResults(100)
-
-	if bag.PageToken() != "" {
-		r = r.PageToken(bag.PageToken())
-	}
-
-	roles, err := r.Context(ctx).Do()
+	roles, err := o.client.ListRoles(ctx, o.customerId, bag.PageToken())
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list roles")
+		return nil, nil, err
 	}
 
 	rv := make([]*v2.Resource, 0, len(roles.Items))
@@ -110,21 +103,14 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 		})
 	}
 
-	r := o.roleService.RoleAssignments.List(o.customerId).RoleId(resource.Id.Resource).MaxResults(100)
-	if bag.PageToken() != "" {
-		r = r.PageToken(bag.PageToken())
-	}
-
-	roleAssignments, err := r.Context(ctx).Do()
+	roleAssignments, err := o.client.ListRoleAssignments(ctx, o.customerId, resource.Id.Resource, bag.PageToken())
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				// Role not found, return empty list
-				return nil, nil, nil
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// Role not found, return empty list
+			return nil, nil, nil
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list role assignments")
+		return nil, nil, err
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {
@@ -166,12 +152,11 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func roleBuilder(roleService *admin.Service, customerId string, roleProvisioningService *admin.Service) *roleResourceType {
+func roleBuilder(client *GoogleWorkspaceClient, customerId string) *roleResourceType {
 	return &roleResourceType{
-		resourceType:            resourceTypeRole,
-		roleService:             roleService,
-		customerId:              customerId,
-		roleProvisioningService: roleProvisioningService,
+		resourceType: resourceTypeRole,
+		client:       client,
+		customerId:   customerId,
 	}
 }
 
@@ -183,7 +168,7 @@ func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
 }
 
 func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
-	if o.roleProvisioningService == nil {
+	if o.client.roleProvisioningService == nil {
 		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope))
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
@@ -194,22 +179,19 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 	if err != nil {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to convert roleId to integer", err)
 	}
-	r := o.roleProvisioningService.RoleAssignments.Insert(o.customerId, &admin.RoleAssignment{
+	assignment, err := o.client.InsertRoleAssignment(ctx, o.customerId, &admin.RoleAssignment{
 		AssignedTo: principal.GetId().GetResource(),
 		RoleId:     tempRoleId,
 		ScopeType:  "CUSTOMER",
 	})
-	assignment, err := r.Context(ctx).Do()
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusConflict {
-				// We don't need to do anything here, the user is already a member of the role
-				// We unfortunately can't get the role assignment to return as a grant, so we just return nil
-				return nil, nil, nil
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusConflict {
+			// We don't need to do anything here, the user is already a member of the role
+			// We unfortunately can't get the role assignment to return as a grant, so we just return nil
+			return nil, nil, nil
 		}
-		return nil, nil, wrapGoogleApiErrorWithContext(err, "failed to assign role")
+		return nil, nil, err
 	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
@@ -218,7 +200,7 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 }
 
 func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	if o.roleProvisioningService == nil {
+	if o.client.roleProvisioningService == nil {
 		return nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope))
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
@@ -226,20 +208,17 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 	}
 	l := ctxzap.Extract(ctx)
 
-	r := o.roleProvisioningService.RoleAssignments.Delete(o.customerId, grant.Id)
-	err := r.Context(ctx).Do()
+	err := o.client.DeleteRoleAssignment(ctx, o.customerId, grant.Id)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				// This should only hit if someone double-revokes, but I'd rather we log something about it
-				l.Info("google-workspace-v2: role member is being deleted but doesn't exist",
-					zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
-					zap.String("user_id", grant.Principal.GetId().GetResource()))
-				return nil, nil
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// This should only hit if someone double-revokes, but I'd rather we log something about it
+			l.Info("google-workspace-v2: role member is being deleted but doesn't exist",
+				zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
+				zap.String("user_id", grant.Principal.GetId().GetResource()))
+			return nil, nil
 		}
-		return nil, wrapGoogleApiErrorWithContext(err, "failed to delete role assignment")
+		return nil, err
 	}
 
 	return nil, nil
@@ -247,11 +226,10 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 
 func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	r := o.roleService.Roles.Get(o.customerId, resourceId.Resource)
 
-	role, err := r.Context(ctx).Do()
+	role, err := o.client.GetRole(ctx, o.customerId, resourceId.Resource)
 	if err != nil {
-		return nil, nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to retrieve role: %s", resourceId.Resource))
+		return nil, nil, err
 	}
 
 	tempRoleId := strconv.FormatInt(role.RoleId, 10)
