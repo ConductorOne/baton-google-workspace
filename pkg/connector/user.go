@@ -15,9 +15,17 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
 
 	mapset "github.com/deckarep/golang-set/v2"
 )
+
+// userListFields requests only the user fields we actually use, reducing
+// response payload size to avoid Google's 412 "response size too large" error.
+const userListFields googleapi.Field = "users(id,primaryEmail,name,suspended,suspensionReason,archived," +
+	"deletionTime,creationTime,lastLoginTime,thumbnailPhotoUrl,isEnrolledIn2Sv," +
+	"orgUnitPath,includeInGlobalAddressList,organizations,relations," +
+	"customSchemas,posixAccounts,externalIds,customerId)"
 
 type userResourceType struct {
 	resourceType            *v2.ResourceType
@@ -66,7 +74,8 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 		})
 	}
 
-	r := o.userService.Users.List().OrderBy("email").Projection("full")
+	r := o.userService.Users.List().OrderBy("email").Projection("full").
+		Fields("nextPageToken", userListFields)
 	if o.domain != "" {
 		r = r.Domain(o.domain)
 	} else {
@@ -75,7 +84,8 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	// https://developers.google.com/admin-sdk/directory/v1/limits
 	// Users – A default of 100 entries and a maximum of 500 entries per page.
-	r = r.MaxResults(500)
+	// Using 200 to avoid 412 "response size too large" errors with full projection.
+	r = r.MaxResults(200)
 
 	if bag.PageToken() != "" {
 		r = r.PageToken(bag.PageToken())
