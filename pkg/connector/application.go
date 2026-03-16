@@ -20,11 +20,11 @@ import (
 const applicationAccessEntitlement = "access"
 
 type applicationResource struct {
-	userListService     *admin.Service
-	appDiscoveryService *admin.Service
-	reportsService      *reportsAdmin.Service
+	userListService      *admin.Service
+	appDiscoveryService  *admin.Service
+	reportsService       *reportsAdmin.Service
 	cloudIdentityService *cloudidentity.Service
-	customerID          string
+	customerID           string
 }
 
 func newApplicationResource(
@@ -49,8 +49,6 @@ func (ar *applicationResource) ResourceType(_ context.Context) *v2.ResourceType 
 func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	l := ctxzap.Extract(ctx)
 
-	// Must run before loadLoginEvents — loadLoginEvents only runs once per sync,
-	// so SAML IDs would be unstable for the entire sync if the map isn't ready first.
 	var samlProfileMap map[string]string
 	if ar.cloudIdentityService != nil {
 		var err error
