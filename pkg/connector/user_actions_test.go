@@ -57,7 +57,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					{Type: relTypeManager, Value: u.ManagerEmail},
 				}
 			}
-			_ = json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
 		case http.MethodPut:
 			state.putCount++
 			// Decode into raw map to handle Relations as interface{}
@@ -100,7 +100,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					{Type: relTypeManager, Value: u.ManagerEmail},
 				}
 			}
-			_ = json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

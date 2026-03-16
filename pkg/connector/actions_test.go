@@ -57,7 +57,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
 			}
-			_ = json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
 		case http.MethodPut:
 			state.putCount++
 			var body directoryAdmin.User
@@ -77,7 +77,7 @@ func newTestServer(state *testServerState) *httptest.Server {
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
 			}
-			_ = json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
