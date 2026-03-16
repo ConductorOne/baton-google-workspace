@@ -24,6 +24,7 @@ import (
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	cloudidentity "google.golang.org/api/cloudidentity/v1"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
@@ -52,10 +53,11 @@ var (
 		},
 		Annotations: v1AnnotationsForResourceType("user"),
 	}
-	resourceTypeEnterpriseApplication = &v2.ResourceType{
+	resourceTypeApplication = &v2.ResourceType{
 		Id:          "enterprise_application",
-		DisplayName: "Enterprise Application",
+		DisplayName: "Application",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+		Annotations: v1AnnotationsForResourceType("enterprise_application"),
 	}
 	updateUserStatusActionSchema = &v2.BatonActionSchema{
 		Name: "update_user_status",
@@ -278,6 +280,7 @@ type Config struct {
 	AdministratorEmail string
 	Domain             string
 	Credentials        []byte
+	SyncApps           bool
 }
 
 type GoogleWorkspace struct {
@@ -285,6 +288,7 @@ type GoogleWorkspace struct {
 	domain             string
 	administratorEmail string
 	credentials        []byte
+	syncApps bool
 
 	mtx          sync.Mutex
 	serviceCache map[string]any
@@ -359,6 +363,10 @@ func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope stri
 	return getService(ctx, c, scope, datatransferAdmin.NewService)
 }
 
+func (c *GoogleWorkspace) getCloudIdentityService(ctx context.Context) (*cloudidentity.Service, error) {
+	return getService(ctx, c, cloudidentity.CloudIdentityInboundssoReadonlyScope, cloudidentity.NewService)
+}
+
 // New creates a new Google Workspace connector with the V2 interface.
 func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOpts) (connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error) {
 	var credentialBytes []byte
@@ -376,6 +384,7 @@ func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOp
 		AdministratorEmail: config.AdministratorEmail,
 		Domain:             config.Domain,
 		Credentials:        credentialBytes,
+		SyncApps:           config.SyncApps,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -392,6 +401,7 @@ func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) 
 		credentials:        config.Credentials,
 		serviceCache:       map[string]any{},
 		domain:             config.Domain,
+		syncApps:           config.SyncApps,
 	}
 	return rv, nil
 }
@@ -498,6 +508,15 @@ func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations
 		return nil, fmt.Errorf("domain '%s' is not a valid domain for customer '%s'", c.domain, c.customerID)
 	}
 
+	if c.syncApps {
+		if _, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope); err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: --sync-apps requires the %s scope: %w", directoryAdmin.AdminDirectoryUserSecurityScope, err)
+		}
+		if _, err := c.getReportService(ctx); err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: --sync-apps requires the %s scope: %w", reportsAdmin.AdminReportsAuditReadonlyScope, err)
+		}
+	}
+
 	return nil, nil
 }
 
@@ -533,70 +552,64 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	l := ctxzap.Extract(ctx)
 	rs := []connectorbuilder.ResourceSyncerV2{}
 
-	// Initialize role services for role resource syncer
-	// Authorization errors are expected when scopes are not available and are handled gracefully
-	roleProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning")
+	tryDir := func(scope, purpose string) *directoryAdmin.Service {
+		svc, err := c.getDirectoryService(ctx, scope)
+		if err != nil {
+			logServiceInitError(l, err, scope, purpose)
+		}
+		return svc
 	}
-	roleService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization")
+
+	tryReports := func() *reportsAdmin.Service {
+		svc, err := c.getReportService(ctx)
+		if err != nil {
+			logServiceInitError(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "app login event synchronization")
+		}
+		return svc
 	}
-	if err == nil {
+
+	roleProvisioningService := tryDir(directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning")
+	if roleService := tryDir(directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization"); roleService != nil {
 		rs = append(rs, roleBuilder(roleService, c.customerID, roleProvisioningService))
 	}
 
-	// Initialize user services for user resource syncer
-	// Authorization errors are expected when scopes are not available and are handled gracefully
-	userProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning")
+	if c.syncApps {
+		appDiscoveryService := tryDir(directoryAdmin.AdminDirectoryUserSecurityScope, "auth token app discovery")
+		reportsService := tryReports()
+		userReadonlyService := tryDir(directoryAdmin.AdminDirectoryUserReadonlyScope, "application synchronization")
+		ciService, err := c.getCloudIdentityService(ctx)
+		if err != nil {
+			logServiceInitError(l, err, cloudidentity.CloudIdentityInboundssoReadonlyScope, "SAML/OIDC app discovery")
+		}
+		if appDiscoveryService != nil && reportsService != nil && userReadonlyService != nil {
+			rs = append(rs, newApplicationResource(userReadonlyService, appDiscoveryService, reportsService, ciService, c.customerID))
+		} else {
+			l.Debug("google-workspace: enterprise_application resource type unavailable due to failed service initialization",
+				zap.Bool("app_discovery_service", appDiscoveryService != nil),
+				zap.Bool("reports_service", reportsService != nil),
+				zap.Bool("user_readonly_service", userReadonlyService != nil))
+		}
 	}
-	userSecurityService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations")
-	}
-	userService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization")
-	} else {
+
+	userProvisioningService := tryDir(directoryAdmin.AdminDirectoryUserScope, "user resource provisioning")
+	userSecurityService := tryDir(directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations")
+	if userService := tryDir(directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization"); userService != nil {
 		rs = append(rs, userBuilder(userService, c.customerID, c.domain, userProvisioningService, userSecurityService))
 	}
 
-	// Initialize group services for group resource syncer
-	// Authorization errors are expected when scopes are not available and are handled gracefully
-	groupProvisioningService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning")
-	}
-	groupCreateService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning")
-	}
+	groupProvisioningService := tryDir(directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning")
+	groupCreateService := tryDir(directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning")
 	groupSettingsService, err := c.getGroupsSettingsService(ctx)
 	if err != nil {
 		logServiceInitError(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings")
 	}
-	groupService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
-	} else {
-		groupMemberService, err := c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
-		if err != nil {
-			logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization")
-		} else {
-			rs = append(rs, groupBuilder(
-				groupService,
-				c.customerID,
-				c.domain,
-				groupMemberService,
-				groupProvisioningService,
-				groupCreateService,
-				groupSettingsService,
-			))
-		}
+	groupService := tryDir(directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
+	groupMemberService := tryDir(directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization")
+	if groupService != nil && groupMemberService != nil {
+		rs = append(rs, groupBuilder(groupService, c.customerID, c.domain, groupMemberService,
+			groupProvisioningService, groupCreateService, groupSettingsService))
 	}
+
 	return rs
 }
 
@@ -671,13 +684,17 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 }
 
 func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
-	usageEventFeed := newUsageEventFeed(c)
-	adminEventFeed := newAdminEventFeed(c)
-
-	return []connectorbuilder.EventFeed{
-		usageEventFeed,
-		adminEventFeed,
+	feeds := []connectorbuilder.EventFeed{
+		newOAuthEventFeed(c),
+		newAdminEventFeed(c),
 	}
+
+	if c.syncApps {
+		feeds = append(feeds, newSamlEventFeed(c))
+		feeds = append(feeds, newGoogleLoginEventFeed(c))
+	}
+
+	return feeds
 }
 
 func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {

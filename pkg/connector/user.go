@@ -375,16 +375,20 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		rs.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 	)
 
-	userResource, err := rs.NewUserResource(
-		user.Name.FullName,
-		resourceTypeUser,
-		user.Id,
-		traitOpts,
+	rsOptions := []rs.ResourceOption{
 		rs.WithAnnotation(
 			&v2.V1Identifier{
 				Id: user.Id,
 			},
 		),
+	}
+
+	userResource, err := rs.NewUserResource(
+		user.Name.FullName,
+		resourceTypeUser,
+		user.Id,
+		traitOpts,
+		rsOptions...,
 	)
 	return userResource, err
 }

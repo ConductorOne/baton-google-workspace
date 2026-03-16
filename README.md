@@ -41,6 +41,30 @@ baton resources
 - Users
 - Roles
 
+# Required Permissions
+
+The service account credentials must be granted the following OAuth scopes via Google Workspace domain-wide delegation:
+
+| Scope | Purpose |
+|-------|---------|
+| `https://www.googleapis.com/auth/admin.directory.domain.readonly` | Validate connector credentials |
+| `https://www.googleapis.com/auth/admin.directory.user.readonly` | Sync users |
+| `https://www.googleapis.com/auth/admin.directory.user` | Provision users (create/delete) |
+| `https://www.googleapis.com/auth/admin.directory.group.readonly` | Sync groups |
+| `https://www.googleapis.com/auth/admin.directory.group.member.readonly` | Sync group memberships |
+| `https://www.googleapis.com/auth/admin.directory.group` | Provision group memberships |
+| `https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly` | Sync roles |
+| `https://www.googleapis.com/auth/admin.directory.rolemanagement` | Provision role assignments |
+| `https://www.googleapis.com/auth/admin.reports.audit.readonly` | Sync usage event feeds (OAuth token and admin activity) |
+
+**Permissions for `--sync-apps`**: The following additional scopes are required when enabling enterprise application and login activity syncing:
+
+| Scope | Purpose |
+|-------|---------|
+| `https://www.googleapis.com/auth/admin.directory.user.security` | Discover OAuth apps via per-user token listing |
+| `https://www.googleapis.com/auth/admin.reports.audit.readonly` | Fetch SAML and Google login events for last-login timestamps |
+| `https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly` | Discover SAML/OIDC app profiles (optional) |
+
 # Contributing, Support and Issues
 
 We started Baton because we were tired of taking screenshots and manually building spreadsheets. We welcome contributions, and ideas, no matter how small -- our goal is to make identity and permissions sprawl less painful for everyone. If you have questions, problems, or ideas: Please open a Github Issue!

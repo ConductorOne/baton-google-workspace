@@ -13,15 +13,22 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	reportsUserAll  = "all"
+	reportsAppToken = "token"
+	reportsAppSAML  = "saml"
+	reportsAppLogin = "login"
+)
+
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
-type usageEventFeed struct {
+// oauthEventFeed emits UsageEvents from OAuth app authorization activity.
+// Tracks when users grant consent to third-party OAuth apps via the "token/authorize" audit log.
+type oauthEventFeed struct {
 	c *GoogleWorkspace
 }
 
@@ -53,7 +60,6 @@ func convertIdTimeToTimestamp(s string) *timestamppb.Timestamp {
 
 func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEventsParameters) string {
 	for _, p := range parameters {
-		p := p
 		if p.Name == name {
 			return p.Value
 		}
@@ -62,7 +68,6 @@ func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEven
 }
 func hasParameter(name string, parameters []*reportsAdmin.ActivityEventsParameters) bool {
 	for _, p := range parameters {
-		p := p
 		if p.Name == name {
 			return true
 		}
@@ -119,22 +124,28 @@ func (pt *pageToken) marshal() (string, error) {
 	return basedToken, nil
 }
 
-func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-
+// ListEvents tracks OAuth app usage via Google's "token" audit log.
+//
+// Limitation: We use the "authorize" event, which only fires when a user first grants (or re-grants)
+// OAuth consent — not on every app login. So "last login" for OAuth apps reflects when the user
+// approved the app's permissions, not when they last used it.
+// Google's "activity" event would solve this — it fires every time an OAuth app makes an API call
+// on behalf of a user, giving us actual usage timestamps. But it requires premium editions
+// (Enterprise Standard+, Cloud Identity Premium). SAML apps are unaffected — see saml_event_feed.go.
+func (f *oauthEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	var streamState *pagination.StreamState
 	s, err := f.c.getReportService(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get report service in usage event feed: %w", err)
+		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to get report service in usage event feed: %w", err)
 	}
 
-	req := s.Activities.List("all", "token")
+	req := s.Activities.List(reportsUserAll, reportsAppToken).Context(ctx)
 	req.MaxResults(int64(pToken.Size))
 	req.EventName("authorize")
 
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token in usage event feed: %w", err)
+		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to unmarshal page token in usage event feed: %w", err)
 	}
 
 	if cursor.StartAt != "" {
@@ -151,7 +162,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse latest event time in usage event feed: %w", err)
+		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to parse latest event time in usage event feed: %w", err)
 	}
 	events := []*v2.Event{}
 	for _, activity := range r.Items {
@@ -174,17 +185,9 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("failed to create user trait: %w", err)
 			}
-			event, err := newV2Event(activity, occurredAt, e, userTrait)
-			if err != nil {
-				l.Error("google-workspace-event-feed: failed to create event", zap.Error(err))
-				// Let's not bail the whole feed because of one bad event
-				continue
+			if event := newV2Event(activity, occurredAt, e, userTrait); event != nil {
+				events = append(events, event)
 			}
-			if event == nil {
-				continue
-			}
-
-			events = append(events, event)
 		}
 	}
 
@@ -196,7 +199,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	cursorToken, err := cursor.marshal()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to marshal cursor token in usage event feed: %w", err)
+		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to marshal cursor token in usage event feed: %w", err)
 	}
 	streamState = &pagination.StreamState{
 		Cursor:  cursorToken,
@@ -205,30 +208,33 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	return events, streamState, nil, nil
 }
 
-func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait) (*v2.Event, error) {
+func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait) *v2.Event {
 	if !hasParameter("client_id", e.Parameters) {
-		return nil, fmt.Errorf("no client_id in event parameters")
+		return nil
 	}
 	if !hasParameter("app_name", e.Parameters) {
-		return nil, fmt.Errorf("no app_name in event parameters")
+		return nil
 	}
 
 	clientID := getValueFromParameters("client_id", e.Parameters)
 	appName := getValueFromParameters("app_name", e.Parameters)
 
 	if clientID == appName && privateAppIDRegex.MatchString(clientID) {
-		// This is a private app, we don't want to report on these
-		return nil, nil
+		return nil
 	}
 
-	event := &v2.Event{
+	if activity.Actor.ProfileId == "" {
+		return nil
+	}
+
+	return &v2.Event{
 		Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
 		OccurredAt: occurredAt,
 		Event: &v2.Event_UsageEvent{
 			UsageEvent: &v2.UsageEvent{
 				TargetResource: &v2.Resource{
 					Id: &v2.ResourceId{
-						ResourceType: resourceTypeEnterpriseApplication.Id,
+						ResourceType: resourceTypeApplication.Id,
 						Resource:     clientID,
 					},
 					DisplayName: appName,
@@ -244,20 +250,19 @@ func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timesta
 			},
 		},
 	}
-	return event, nil
 }
 
-func (f *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
+func (f *oauthEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
 	return &v2.EventFeedMetadata{
-		Id: "usage_event_feed",
+		Id: "oauth_event_feed",
 		SupportedEventTypes: []v2.EventType{
 			v2.EventType_EVENT_TYPE_USAGE,
 		},
 	}
 }
 
-func newUsageEventFeed(connector *GoogleWorkspace) *usageEventFeed {
-	return &usageEventFeed{
+func newOAuthEventFeed(connector *GoogleWorkspace) *oauthEventFeed {
+	return &oauthEventFeed{
 		c: connector,
 	}
 }
