@@ -160,9 +160,11 @@ func (f *oauthEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		return nil, nil, nil, wrapGoogleApiErrorWithContext(err, "failed to list usage activities")
 	}
 
+	// latestEvent is a running max; epoch is a safe fallback — all real event timestamps are after
+	// epoch, so the cursor self-heals after one batch if LatestEventSeen is ever corrupted.
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to parse latest event time in usage event feed: %w", err)
+		latestEvent = time.Unix(0, 0)
 	}
 	events := []*v2.Event{}
 	for _, activity := range r.Items {
