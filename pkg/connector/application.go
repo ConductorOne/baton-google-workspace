@@ -54,7 +54,8 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		var err error
 		samlProfileMap, err = buildSAMLProfileMap(ctx, ar.cloudIdentityService, ar.customerID)
 		if err != nil {
-			l.Info("google-workspace: failed to load SAML profiles from Cloud Identity; SAML app IDs will use display names — renaming an app in Google Workspace will orphan its grants. Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
+			l.Info("google-workspace: failed to load SAML profiles from Cloud Identity; SAML app IDs will use display names. "+
+				"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
 		}
 	}
 

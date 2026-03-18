@@ -50,9 +50,11 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Tim
 	// so we call the API directly each time rather than using an in-memory cache.
 	var samlProfileMap map[string]string
 	if ciSvc, err := f.connector.getCloudIdentityService(ctx); err != nil {
-		l.Info("google-workspace: cloud identity service unavailable in saml event feed; SAML app IDs will use display names — renaming an app in Google Workspace will orphan its grants. Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
+		l.Info("google-workspace: cloud identity service unavailable in saml event feed; SAML app IDs will use display names. "+
+			"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
 	} else if m, err := buildSAMLProfileMap(ctx, ciSvc, f.connector.customerID); err != nil {
-		l.Info("google-workspace: failed to load SAML profiles from Cloud Identity in event feed; SAML app IDs will use display names — renaming an app in Google Workspace will orphan its grants. Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
+		l.Info("google-workspace: failed to load SAML profiles from Cloud Identity in event feed; SAML app IDs will use display names. "+
+			"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
 	} else {
 		samlProfileMap = m
 	}
