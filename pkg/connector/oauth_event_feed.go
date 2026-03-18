@@ -26,9 +26,9 @@ const (
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
-// oauthEventFeed emits UsageEvents from OAuth app authorization activity.
+// usageEventFeed emits UsageEvents from OAuth app authorization activity.
 // Tracks when users grant consent to third-party OAuth apps via the "token/authorize" audit log.
-type oauthEventFeed struct {
+type usageEventFeed struct {
 	c *GoogleWorkspace
 }
 
@@ -132,7 +132,7 @@ func (pt *pageToken) marshal() (string, error) {
 // Google's "activity" event would solve this — it fires every time an OAuth app makes an API call
 // on behalf of a user, giving us actual usage timestamps. But it requires premium editions
 // (Enterprise Standard+, Cloud Identity Premium). SAML apps are unaffected — see saml_event_feed.go.
-func (f *oauthEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	var streamState *pagination.StreamState
 	s, err := f.c.getReportService(ctx)
 	if err != nil {
@@ -254,17 +254,17 @@ func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timesta
 	}
 }
 
-func (f *oauthEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
+func (f *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
 	return &v2.EventFeedMetadata{
-		Id: "oauth_event_feed",
+		Id: "usage_event_feed",
 		SupportedEventTypes: []v2.EventType{
 			v2.EventType_EVENT_TYPE_USAGE,
 		},
 	}
 }
 
-func newOAuthEventFeed(connector *GoogleWorkspace) *oauthEventFeed {
-	return &oauthEventFeed{
+func newUsageEventFeed(connector *GoogleWorkspace) *usageEventFeed {
+	return &usageEventFeed{
 		c: connector,
 	}
 }

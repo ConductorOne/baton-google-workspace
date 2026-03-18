@@ -288,7 +288,7 @@ type GoogleWorkspace struct {
 	domain             string
 	administratorEmail string
 	credentials        []byte
-	syncApps bool
+	syncApps           bool
 
 	mtx          sync.Mutex
 	serviceCache map[string]any
@@ -584,7 +584,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 		if appDiscoveryService != nil && reportsService != nil && userReadonlyService != nil {
 			rs = append(rs, newApplicationResource(userReadonlyService, appDiscoveryService, reportsService, ciService, c.customerID))
 		} else {
-			l.Debug("google-workspace: enterprise_application resource type unavailable due to failed service initialization",
+			l.Info("google-workspace: enterprise_application resource type unavailable due to failed service initialization",
 				zap.Bool("app_discovery_service", appDiscoveryService != nil),
 				zap.Bool("reports_service", reportsService != nil),
 				zap.Bool("user_readonly_service", userReadonlyService != nil))
@@ -685,7 +685,7 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 
 func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
 	feeds := []connectorbuilder.EventFeed{
-		newOAuthEventFeed(c),
+		newUsageEventFeed(c),
 		newAdminEventFeed(c),
 	}
 
