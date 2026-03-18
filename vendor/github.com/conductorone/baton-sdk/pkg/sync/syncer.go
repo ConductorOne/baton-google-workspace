@@ -449,17 +449,22 @@ func (s *syncer) Sync(ctx context.Context) error {
 		return err
 	}
 
+	err = s.store.Cleanup(runCtx)
+	if err != nil {
+		// If we hit the context deadline while cleaning up, return ErrSyncNotComplete.
+		// Since the sync isn't ended yet, we can resume this sync and make more progress in cleanup.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return ErrSyncNotComplete
+		}
+		return err
+	}
+
 	err = s.store.EndSync(ctx)
 	if err != nil {
 		return err
 	}
 
 	l.Info("Sync complete.")
-
-	err = s.store.Cleanup(ctx)
-	if err != nil {
-		return err
-	}
 
 	_, err = s.connector.Cleanup(ctx, v2.ConnectorServiceCleanupRequest_builder{
 		ActiveSyncId: s.getActiveSyncID(),
@@ -2575,34 +2580,39 @@ func (s *syncer) Close(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "syncer.Close")
 	defer span.End()
 
-	var err error
+	var errs []error
+
+	var storeCloseErr error
 	if s.store != nil {
-		err = s.store.Close(ctx)
-		if err != nil {
-			return fmt.Errorf("error closing store: %w", err)
+		storeCloseErr = s.store.Close(ctx)
+		if storeCloseErr != nil {
+			errs = append(errs, fmt.Errorf("error closing store: %w", storeCloseErr))
 		}
 	}
 
 	if s.externalResourceReader != nil {
-		err = s.externalResourceReader.Close(ctx)
-		if err != nil {
-			return fmt.Errorf("error closing external resource reader: %w", err)
+		if err := s.externalResourceReader.Close(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("error closing external resource reader: %w", err))
 		}
 	}
 
 	if s.c1zManager != nil {
-		err = s.c1zManager.SaveC1Z(ctx)
-		if err != nil {
-			return err
+		// Only persist the c1z if the store closed cleanly. If the store
+		// failed to close (e.g. WAL checkpoint failure), saving would
+		// persist a potentially corrupt state.
+		if storeCloseErr == nil {
+			if err := s.c1zManager.SaveC1Z(ctx); err != nil {
+				errs = append(errs, err)
+			}
 		}
-
-		err = s.c1zManager.Close(ctx)
-		if err != nil {
-			return err
+		// Always close the manager to clean up temp files, even if save
+		// was skipped or failed.
+		if err := s.c1zManager.Close(ctx); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 type SyncOpt func(s *syncer)

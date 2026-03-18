@@ -75,7 +75,8 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	// https://developers.google.com/admin-sdk/directory/v1/limits
 	// Users – A default of 100 entries and a maximum of 500 entries per page.
-	r = r.MaxResults(500)
+	// Using 200 to avoid 412 "response size too large" errors with Projection("full").
+	r = r.MaxResults(200)
 
 	if bag.PageToken() != "" {
 		r = r.PageToken(bag.PageToken())

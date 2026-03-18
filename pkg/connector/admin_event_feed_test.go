@@ -32,7 +32,7 @@ func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[st
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(u) //nolint:gosec
+		_ = json.NewEncoder(w).Encode(u) //nolint:gosec // G117: test data, no real secrets
 	})
 
 	mux.HandleFunc("/admin/directory/v1/groups/", func(w http.ResponseWriter, r *http.Request) {

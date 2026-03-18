@@ -235,6 +235,36 @@ type ErrorResponse interface {
 	Message() string
 }
 
+// GrpcCodeFromHTTPStatus maps an HTTP status code to the appropriate gRPC status code.
+func GrpcCodeFromHTTPStatus(httpStatus int) codes.Code {
+	switch httpStatus {
+	case http.StatusBadRequest:
+		return codes.InvalidArgument
+	case http.StatusRequestTimeout:
+		return codes.DeadlineExceeded
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return codes.Unavailable
+	case http.StatusNotFound:
+		return codes.NotFound
+	case http.StatusUnauthorized:
+		return codes.Unauthenticated
+	case http.StatusForbidden:
+		return codes.PermissionDenied
+	case http.StatusConflict:
+		return codes.AlreadyExists
+	case http.StatusNotImplemented:
+		return codes.Unimplemented
+	}
+	switch {
+	case httpStatus >= 500 && httpStatus <= 599:
+		return codes.Unavailable
+	case httpStatus >= 400 && httpStatus <= 499:
+		return codes.InvalidArgument
+	default:
+		return codes.Unknown
+	}
+}
+
 func WithErrorResponse(resource ErrorResponse) DoOption {
 	return func(resp *WrapperResponse) error {
 		if resp.StatusCode < 300 {
@@ -243,21 +273,27 @@ func WithErrorResponse(resource ErrorResponse) DoOption {
 
 		contentHeader := resp.Header.Get(ContentType)
 
+		grpcCode := GrpcCodeFromHTTPStatus(resp.StatusCode)
+
 		if !IsJSONContentType(contentHeader) {
 			// to print the response, set the envvar BATON_DEBUG_PRINT_RESPONSE_BODY as non-empty, instead
-			return fmt.Errorf("unexpected content type for JSON error response: %s. status code: %d. body: %s", contentHeader, resp.StatusCode, string(resp.Body))
+			return status.Errorf(grpcCode,
+				"unexpected content type for JSON error response: %s. status code: %d. body: %s",
+				contentHeader, resp.StatusCode, string(resp.Body))
 		}
 
 		// Decode the JSON response body into the ErrorResponse
 		if err := json.Unmarshal(resp.Body, &resource); err != nil {
 			// to print the response, set the envvar BATON_DEBUG_PRINT_RESPONSE_BODY as non-empty, instead
-			return fmt.Errorf("failed to unmarshal JSON error response: %w. status code: %d. body: %s", err, resp.StatusCode, string(resp.Body))
+			return status.Errorf(grpcCode,
+				"failed to unmarshal JSON error response: %v. status code: %d. body: %s",
+				err, resp.StatusCode, string(resp.Body))
 		}
 
 		// Construct a more detailed error message
 		errMsg := fmt.Sprintf("Request failed with status %d: %s", resp.StatusCode, resource.Message())
 
-		return status.Error(codes.Unknown, errMsg)
+		return status.Error(grpcCode, errMsg)
 	}
 }
 
@@ -295,6 +331,8 @@ func WithResponse(response any) DoOption {
 
 // Handle anything that can be marshaled into JSON or XML.
 // If the response is a list, its values will be put into the "items" field.
+// If the response is a single value (int, string, bool, etc), it will be put into the "value" field.
+// A response of `null` results in the "value" field being set to `nil`.
 func WithGenericResponse(response *map[string]any) DoOption {
 	return func(resp *WrapperResponse) error {
 		if response == nil {
@@ -302,6 +340,10 @@ func WithGenericResponse(response *map[string]any) DoOption {
 		}
 
 		if resp.StatusCode == http.StatusNoContent {
+			return nil
+		}
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 && len(resp.Body) == 0 {
 			return nil
 		}
 
@@ -317,8 +359,17 @@ func WithGenericResponse(response *map[string]any) DoOption {
 				(*response)["items"] = list
 			} else if vMap, ok := v.(map[string]any); ok {
 				*response = vMap
+			} else if boolValue, ok := v.(bool); ok {
+				(*response) = map[string]any{"value": boolValue}
+			} else if floatValue, ok := v.(float64); ok {
+				(*response) = map[string]any{"value": floatValue}
+			} else if stringValue, ok := v.(string); ok {
+				(*response) = map[string]any{"value": stringValue}
+			} else if v == nil {
+				// JSON response is literally `null`.
+				(*response) = map[string]any{"value": nil}
 			} else {
-				return status.Errorf(codes.Internal, "unsupported content type: %T", v)
+				return status.Errorf(codes.Internal, "unsupported value type: %T", v)
 			}
 			return nil
 		}
@@ -479,36 +530,21 @@ func (c *BaseHttpClient) Do(req *http.Request, options ...DoOption) (*http.Respo
 	// Log response headers directly for certain errors
 	if resp.StatusCode >= 400 {
 		redactedHeaders := RedactSensitiveHeaders(resp.Header)
-		l.Error("base-http-client: HTTP error status",
+		logFields := []zap.Field{
 			zap.Int("status_code", resp.StatusCode),
 			zap.String("status", resp.Status),
 			zap.Any("headers", redactedHeaders),
-		)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusRequestTimeout:
-		return resp, WrapErrorsWithRateLimitInfo(codes.DeadlineExceeded, resp, optErrs...)
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unavailable, resp, optErrs...)
-	case http.StatusNotFound:
-		return resp, WrapErrorsWithRateLimitInfo(codes.NotFound, resp, optErrs...)
-	case http.StatusUnauthorized:
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unauthenticated, resp, optErrs...)
-	case http.StatusForbidden:
-		return resp, WrapErrorsWithRateLimitInfo(codes.PermissionDenied, resp, optErrs...)
-	case http.StatusConflict:
-		return resp, WrapErrorsWithRateLimitInfo(codes.AlreadyExists, resp, optErrs...)
-	case http.StatusNotImplemented:
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unimplemented, resp, optErrs...)
-	}
-
-	if resp.StatusCode >= 500 && resp.StatusCode <= 599 {
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unavailable, resp, optErrs...)
+		}
+		if resp.StatusCode >= 500 {
+			l.Error("base-http-client: HTTP error status", logFields...)
+		} else {
+			l.Warn("base-http-client: HTTP error status", logFields...)
+		}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unknown, resp, append(optErrs, fmt.Errorf("unexpected status code: %d", resp.StatusCode))...)
+		grpcCode := GrpcCodeFromHTTPStatus(resp.StatusCode)
+		return resp, WrapErrorsWithRateLimitInfo(grpcCode, resp, optErrs...)
 	}
 
 	if req.Method == http.MethodGet && resp.StatusCode == http.StatusOK {
