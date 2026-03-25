@@ -19,6 +19,8 @@ import (
 	reports "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 type cacheEntry struct {
@@ -29,7 +31,7 @@ type cacheEntry struct {
 type cacheMap map[string]cacheEntry
 
 type adminEventFeed struct {
-	client *GoogleWorkspaceClient
+	client *gwclient.GoogleWorkspaceClient
 
 	groupCache cacheMap
 	userCache  cacheMap
@@ -430,7 +432,7 @@ func (f *adminEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 	}
 }
 
-func newAdminEventFeed(client *GoogleWorkspaceClient) *adminEventFeed {
+func newAdminEventFeed(client *gwclient.GoogleWorkspaceClient) *adminEventFeed {
 	return &adminEventFeed{
 		client:     client,
 		groupCache: make(cacheMap),

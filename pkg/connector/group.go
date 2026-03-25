@@ -19,6 +19,8 @@ import (
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 const (
@@ -27,7 +29,7 @@ const (
 
 type groupResourceType struct {
 	resourceType *v2.ResourceType
-	client       *GoogleWorkspaceClient
+	client       *gwclient.GoogleWorkspaceClient
 	customerId   string
 	domain       string
 }
@@ -158,7 +160,7 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func groupBuilder(client *GoogleWorkspaceClient, customerId string, domain string) *groupResourceType {
+func groupBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, domain string) *groupResourceType {
 	return &groupResourceType{
 		resourceType: resourceTypeGroup,
 		client:       client,
@@ -195,7 +197,7 @@ func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, err
 }
 
 func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
-	if o.client.groupMemberProvisioningService == nil {
+	if o.client.GroupMemberProvisioningService == nil {
 		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope))
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
@@ -222,7 +224,7 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 }
 
 func (o *groupResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	if o.client.groupMemberProvisioningService == nil {
+	if o.client.GroupMemberProvisioningService == nil {
 		return nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryGroupMemberScope))
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {
@@ -264,7 +266,7 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 }
 
 func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (annotations.Annotations, error) {
-	if o.client.groupProvisioningService == nil {
+	if o.client.GroupProvisioningService == nil {
 		return nil, fmt.Errorf("google-workspace: group provisioning service not available - requires %s scope", admin.AdminDirectoryGroupScope)
 	}
 	if resourceId.ResourceType != resourceTypeGroup.Id {

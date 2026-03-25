@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 var (
@@ -293,7 +294,7 @@ type GoogleWorkspace struct {
 
 	// client is lazily initialised on first use via getClient().
 	clientOnce sync.Once
-	client     *GoogleWorkspaceClient
+	client     *gwclient.GoogleWorkspaceClient
 }
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
@@ -410,7 +411,7 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	if err != nil {
 		return nil, err
 	}
-	client := &GoogleWorkspaceClient{domainService: domainService}
+	client := &gwclient.GoogleWorkspaceClient{DomainService: domainService}
 
 	resp, err := client.ListDomains(ctx, c.customerID)
 	if err != nil {
@@ -485,7 +486,7 @@ func (c *GoogleWorkspace) Validate(ctx context.Context) (annotations.Annotations
 	if err != nil {
 		return nil, err
 	}
-	client := &GoogleWorkspaceClient{domainService: domainService}
+	client := &gwclient.GoogleWorkspaceClient{DomainService: domainService}
 
 	resp, err := client.ListDomains(ctx, c.customerID)
 	if err != nil {
@@ -536,66 +537,66 @@ func logServiceInitError(l *zap.Logger, err error, scope, purpose string) {
 	}
 }
 
-func (c *GoogleWorkspace) newClient(ctx context.Context) *GoogleWorkspaceClient {
+func (c *GoogleWorkspace) newClient(ctx context.Context) *gwclient.GoogleWorkspaceClient {
 	l := ctxzap.Extract(ctx)
-	client := &GoogleWorkspaceClient{}
+	client := &gwclient.GoogleWorkspaceClient{}
 
 	var err error
 
-	client.domainService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
+	client.DomainService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryDomainReadonlyScope, "domain service")
 	}
 
-	client.roleService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
+	client.RoleService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization")
 	}
-	client.roleProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
+	client.RoleProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning")
 	}
 
-	client.userService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
+	client.UserService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization")
 	}
-	client.userProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
+	client.UserProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning")
 	}
-	client.userSecurityService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
+	client.UserSecurityService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations")
 	}
 
-	client.groupService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
+	client.GroupService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
 	}
-	client.groupMemberService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
+	client.GroupMemberService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization")
 	}
-	client.groupMemberProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
+	client.GroupMemberProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning")
 	}
-	client.groupProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
+	client.GroupProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning")
 	}
-	client.groupsSettingsService, err = c.getGroupsSettingsService(ctx)
+	client.GroupsSettingsService, err = c.getGroupsSettingsService(ctx)
 	if err != nil {
 		logServiceInitError(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings")
 	}
 
-	client.dataTransferService, err = c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
+	client.DataTransferService, err = c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
 	if err != nil {
 		logServiceInitError(l, err, datatransferAdmin.AdminDatatransferScope, "data transfer service")
 	}
 
-	client.reportService, err = c.getReportService(ctx)
+	client.ReportService, err = c.getReportService(ctx)
 	if err != nil {
 		logServiceInitError(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "report service")
 	}
@@ -607,15 +608,15 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	client := c.getClient(ctx)
 	rs := []connectorbuilder.ResourceSyncerV2{}
 
-	if client.roleService != nil {
+	if client.RoleService != nil {
 		rs = append(rs, roleBuilder(client, c.customerID))
 	}
 
-	if client.userService != nil {
+	if client.UserService != nil {
 		rs = append(rs, userBuilder(client, c.customerID, c.domain))
 	}
 
-	if client.groupService != nil && client.groupMemberService != nil {
+	if client.GroupService != nil && client.GroupMemberService != nil {
 		rs = append(rs, groupBuilder(client, c.customerID, c.domain))
 	}
 
@@ -694,7 +695,7 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 
 // getClient returns the shared GoogleWorkspaceClient, initialising it once.
 // It is safe to call from multiple goroutines.
-func (c *GoogleWorkspace) getClient(ctx context.Context) *GoogleWorkspaceClient {
+func (c *GoogleWorkspace) getClient(ctx context.Context) *gwclient.GoogleWorkspaceClient {
 	c.clientOnce.Do(func() {
 		c.client = c.newClient(ctx)
 	})

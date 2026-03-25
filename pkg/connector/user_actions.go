@@ -247,7 +247,7 @@ func (o *userResourceType) registerChangeUserOrgUnitAction(ctx context.Context, 
 
 func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.userProvisioningService == nil {
+	if o.client.UserProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
@@ -346,7 +346,7 @@ func (o *userResourceType) registerOffboardingProfileUpdateAction(ctx context.Co
 
 func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.userProvisioningService == nil {
+	if o.client.UserProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 
@@ -432,7 +432,7 @@ func (o *userResourceType) registerDeleteAllApplicationPasswordsAction(ctx conte
 
 func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.userSecurityService == nil {
+	if o.client.UserSecurityService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
 	}
 
@@ -466,7 +466,7 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 
 func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.userSecurityService == nil {
+	if o.client.UserSecurityService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
 	}
 
@@ -547,7 +547,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 
 func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.userSecurityService == nil {
+	if o.client.UserSecurityService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
 	}
 
@@ -626,7 +626,7 @@ func (o *userResourceType) registerUpdateUserManagerAction(ctx context.Context, 
 
 func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.userProvisioningService == nil {
+	if o.client.UserProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
 	}
 

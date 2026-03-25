@@ -14,6 +14,8 @@ import (
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 // safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
@@ -112,10 +114,10 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsService(t, server.URL, server.Client())
 
-	client := &GoogleWorkspaceClient{
-		userService:  dir,
-		groupService: dir,
-		reportService: rep,
+	client := &gwclient.GoogleWorkspaceClient{
+		UserService:   dir,
+		GroupService:  dir,
+		ReportService: rep,
 	}
 
 	feed := newAdminEventFeed(client)

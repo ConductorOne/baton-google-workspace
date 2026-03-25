@@ -17,12 +17,14 @@ import (
 	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
 type usageEventFeed struct {
-	c *GoogleWorkspaceClient
+	c *gwclient.GoogleWorkspaceClient
 }
 
 func rfc3339ToTimestamp(s string) *timestamppb.Timestamp {
@@ -241,7 +243,7 @@ func (f *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 	}
 }
 
-func newUsageEventFeed(client *GoogleWorkspaceClient) *usageEventFeed {
+func newUsageEventFeed(client *gwclient.GoogleWorkspaceClient) *usageEventFeed {
 	return &usageEventFeed{
 		c: client,
 	}

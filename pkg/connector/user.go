@@ -17,11 +17,13 @@ import (
 	admin "google.golang.org/api/admin/directory/v1"
 
 	mapset "github.com/deckarep/golang-set/v2"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 type userResourceType struct {
 	resourceType *v2.ResourceType
-	client       *GoogleWorkspaceClient
+	client       *gwclient.GoogleWorkspaceClient
 	customerId   string
 	domain       string
 }
@@ -101,7 +103,7 @@ func (o *userResourceType) Grants(_ context.Context, _ *v2.Resource, _ rs.SyncOp
 	return nil, nil, nil
 }
 
-func userBuilder(client *GoogleWorkspaceClient, customerId string, domain string) *userResourceType {
+func userBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, domain string) *userResourceType {
 	return &userResourceType{
 		resourceType: resourceTypeUser,
 		client:       client,

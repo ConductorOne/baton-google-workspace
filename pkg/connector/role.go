@@ -20,6 +20,8 @@ import (
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 const (
@@ -28,7 +30,7 @@ const (
 
 type roleResourceType struct {
 	resourceType *v2.ResourceType
-	client       *GoogleWorkspaceClient
+	client       *gwclient.GoogleWorkspaceClient
 	customerId   string
 }
 
@@ -152,7 +154,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	return rv, &rs.SyncOpResults{NextPageToken: nextPage}, nil
 }
 
-func roleBuilder(client *GoogleWorkspaceClient, customerId string) *roleResourceType {
+func roleBuilder(client *gwclient.GoogleWorkspaceClient, customerId string) *roleResourceType {
 	return &roleResourceType{
 		resourceType: resourceTypeRole,
 		client:       client,
@@ -168,7 +170,7 @@ func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
 }
 
 func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
-	if o.client.roleProvisioningService == nil {
+	if o.client.RoleProvisioningService == nil {
 		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope))
 	}
 	if principal.GetId().GetResourceType() != resourceTypeUser.Id {
@@ -200,7 +202,7 @@ func (o *roleResourceType) Grant(ctx context.Context, principal *v2.Resource, en
 }
 
 func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	if o.client.roleProvisioningService == nil {
+	if o.client.RoleProvisioningService == nil {
 		return nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("unable to get service for scope %s", admin.AdminDirectoryRolemanagementScope))
 	}
 	if grant.Principal.GetId().GetResourceType() != resourceTypeUser.Id {

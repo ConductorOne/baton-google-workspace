@@ -12,6 +12,8 @@ import (
 
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 type testUserWithOrgUnit struct {
@@ -66,7 +68,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					{Type: relTypeManager, Value: u.ManagerEmail},
 				}
 			}
-			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
+			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
 			state.putCount++
 			// Decode into raw map to handle Relations as interface{}
@@ -109,7 +111,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					{Type: relTypeManager, Value: u.ManagerEmail},
 				}
 			}
-			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -123,9 +125,9 @@ func newTestUserResourceType(t *testing.T, server *httptest.Server) *userResourc
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	return &userResourceType{
 		resourceType: resourceTypeUser,
-		client: &GoogleWorkspaceClient{
-			userService:             dir,
-			userProvisioningService: dir,
+		client: &gwclient.GoogleWorkspaceClient{
+			UserService:             dir,
+			UserProvisioningService: dir,
 		},
 		customerId: "test-customer",
 		domain:     "",
@@ -263,10 +265,10 @@ func newTestUserResourceTypeWithSecurity(t *testing.T, server *httptest.Server) 
 	securityDir := newTestDirectoryService(t, server.URL, server.Client())
 	return &userResourceType{
 		resourceType: resourceTypeUser,
-		client: &GoogleWorkspaceClient{
-			userService:             dir,
-			userProvisioningService: dir,
-			userSecurityService:     securityDir,
+		client: &gwclient.GoogleWorkspaceClient{
+			UserService:             dir,
+			UserProvisioningService: dir,
+			UserSecurityService:     securityDir,
 		},
 		customerId: "test-customer",
 		domain:     "",
@@ -512,7 +514,7 @@ func TestSignOutUser_MissingUserId(t *testing.T) {
 
 func TestSignOutUser_NoSecurityService(t *testing.T) {
 	userRT := &userResourceType{
-		client: &GoogleWorkspaceClient{userSecurityService: nil},
+		client: &gwclient.GoogleWorkspaceClient{UserSecurityService: nil},
 	}
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{

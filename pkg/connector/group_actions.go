@@ -225,7 +225,7 @@ func (o *groupResourceType) registerModifyGroupSettingsAction(ctx context.Contex
 
 func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	if o.client.groupProvisioningService == nil {
+	if o.client.GroupProvisioningService == nil {
 		return nil, nil, fmt.Errorf("google-workspace: group provisioning service not available - requires %s scope", admin.AdminDirectoryGroupScope)
 	}
 
