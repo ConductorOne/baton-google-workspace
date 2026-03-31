@@ -13,10 +13,23 @@ import (
 
 // wrapGoogleApiErrorWithContext wraps a googleapi.Error with rate limit information and an optional context message.
 // The context message is prepended to the error message while preserving the gRPC status code.
-// If the error is not a googleapi.Error, it returns the error unchanged.
+// For non-googleapi errors (e.g., transient network errors like EOF), it wraps them as
+// codes.Unavailable so the baton framework treats them as retryable.
 func wrapGoogleApiErrorWithContext(err error, contextMsg string) error {
 	var e *googleapi.Error
 	if ok := errors.As(err, &e); !ok {
+		// Handle transient network errors that aren't googleapi.Error.
+		// These are typically EOF, connection reset, etc. that occur at the
+		// transport layer. Wrap them as Unavailable so the baton framework
+		// can retry the sync operation.
+		if isTransientError(err) {
+			msg := "transient network error"
+			if contextMsg != "" {
+				msg = contextMsg + ": " + msg
+			}
+			st := status.New(codes.Unavailable, msg)
+			return errors.Join(st.Err(), err)
+		}
 		return err
 	}
 
