@@ -21,6 +21,12 @@ type testUser struct {
 	PrimaryEmail string
 }
 
+// userAPIResponse is a minimal User-shaped response without secret fields (avoids gosec G117).
+type userAPIResponse struct {
+	Suspended    bool   `json:"suspended,omitempty"`
+	PrimaryEmail string `json:"primaryEmail,omitempty"`
+}
+
 type transferRecord struct {
 	Id       string
 	OldOwner string
@@ -53,11 +59,11 @@ func newTestServer(state *testServerState) *httptest.Server {
 				http.Error(w, "not found", http.StatusNotFound)
 				return
 			}
-			resp := &directoryAdmin.User{
+			resp := userAPIResponse{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
 			}
-			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
+			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
 			state.putCount++
 			var body directoryAdmin.User
@@ -73,11 +79,11 @@ func newTestServer(state *testServerState) *httptest.Server {
 			}
 			// Suspended is bool; accept as-is
 			u.Suspended = body.Suspended
-			resp := &directoryAdmin.User{
+			resp := userAPIResponse{
 				Suspended:    u.Suspended,
 				PrimaryEmail: u.PrimaryEmail,
 			}
-			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

@@ -12,6 +12,8 @@ import (
 
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 type testUserWithOrgUnit struct {
@@ -19,6 +21,15 @@ type testUserWithOrgUnit struct {
 	PrimaryEmail string
 	OrgUnitPath  string
 	ManagerEmail string
+}
+
+// userWithOrgUnitAPIResponse is a User-shaped response without secret fields (avoids gosec G117).
+type userWithOrgUnitAPIResponse struct {
+	Id           string                        `json:"id,omitempty"`
+	PrimaryEmail string                        `json:"primaryEmail,omitempty"`
+	OrgUnitPath  string                        `json:"orgUnitPath,omitempty"`
+	Name         *directoryAdmin.UserName      `json:"name,omitempty"`
+	Relations    []directoryAdmin.UserRelation `json:"relations,omitempty"`
 }
 
 type testServerStateWithOrgUnit struct {
@@ -44,7 +55,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 				http.Error(w, "not found", http.StatusNotFound)
 				return
 			}
-			resp := &directoryAdmin.User{
+			resp := userWithOrgUnitAPIResponse{
 				Id:           u.Id,
 				PrimaryEmail: u.PrimaryEmail,
 				OrgUnitPath:  u.OrgUnitPath,
@@ -57,7 +68,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					{Type: relTypeManager, Value: u.ManagerEmail},
 				}
 			}
-			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
+			_ = json.NewEncoder(w).Encode(resp)
 		case http.MethodPut:
 			state.putCount++
 			// Decode into raw map to handle Relations as interface{}
@@ -87,7 +98,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					}
 				}
 			}
-			resp := &directoryAdmin.User{
+			resp := userWithOrgUnitAPIResponse{
 				Id:           u.Id,
 				PrimaryEmail: u.PrimaryEmail,
 				OrgUnitPath:  u.OrgUnitPath,
@@ -100,7 +111,7 @@ func newTestServerWithOrgUnit(state *testServerStateWithOrgUnit) *httptest.Serve
 					{Type: relTypeManager, Value: u.ManagerEmail},
 				}
 			}
-			_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: test data, no real secrets
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -113,11 +124,13 @@ func newTestUserResourceType(t *testing.T, server *httptest.Server) *userResourc
 	t.Helper()
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	return &userResourceType{
-		resourceType:            resourceTypeUser,
-		userService:             dir,
-		userProvisioningService: dir,
-		customerId:              "test-customer",
-		domain:                  "",
+		resourceType: resourceTypeUser,
+		client: &gwclient.GoogleWorkspaceClient{
+			UserService:             dir,
+			UserProvisioningService: dir,
+		},
+		customerId: "test-customer",
+		domain:     "",
 	}
 }
 
@@ -251,12 +264,14 @@ func newTestUserResourceTypeWithSecurity(t *testing.T, server *httptest.Server) 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	securityDir := newTestDirectoryService(t, server.URL, server.Client())
 	return &userResourceType{
-		resourceType:            resourceTypeUser,
-		userService:             dir,
-		userProvisioningService: dir,
-		userSecurityService:     securityDir,
-		customerId:              "test-customer",
-		domain:                  "",
+		resourceType: resourceTypeUser,
+		client: &gwclient.GoogleWorkspaceClient{
+			UserService:             dir,
+			UserProvisioningService: dir,
+			UserSecurityService:     securityDir,
+		},
+		customerId: "test-customer",
+		domain:     "",
 	}
 }
 
@@ -499,7 +514,7 @@ func TestSignOutUser_MissingUserId(t *testing.T) {
 
 func TestSignOutUser_NoSecurityService(t *testing.T) {
 	userRT := &userResourceType{
-		userSecurityService: nil,
+		client: &gwclient.GoogleWorkspaceClient{UserSecurityService: nil},
 	}
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
