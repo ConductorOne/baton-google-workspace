@@ -48,6 +48,19 @@ var (
 		field.WithIsSecret(true),
 	)
 
+	// SyncAppsField enables enterprise application sync.
+	// Required scopes:
+	//   - admin.directory.user.readonly (list users for OAuth token discovery)
+	//   - admin.directory.user.security (read per-user OAuth tokens)
+	//   - admin.reports.audit.readonly (SAML + Google sign-in audit logs)
+	// Optional scope (SAML app IDs fall back to display names if missing):
+	//   - cloud-identity.inboundsso.readonly (stable SAML app IDs)
+	SyncAppsField = field.BoolField(
+		"sync-apps",
+		field.WithDisplayName("Sync Enterprise Apps"),
+		field.WithDescription("Sync enterprise applications and user login activity from the Google Workspace account."),
+	)
+
 	// Field relationships define constraints between fields.
 	fieldRelationships = []field.SchemaFieldRelationship{
 		field.FieldsMutuallyExclusive(
@@ -63,6 +76,7 @@ var (
 		AdministratorEmailField,
 		CredentialsJSONFilePathField,
 		CredentialsJSONField,
+		SyncAppsField,
 	}
 
 	// Configuration combines fields into a single configuration object with connector metadata.

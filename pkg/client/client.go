@@ -7,6 +7,7 @@ import (
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	cloudidentity "google.golang.org/api/cloudidentity/v1"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 )
 
@@ -44,6 +45,9 @@ type GoogleWorkspaceClient struct {
 	GroupsSettingsService *groupssettings.Service
 	DataTransferService   *datatransferAdmin.Service
 	ReportService         *reportsAdmin.Service
+
+	// Cloud Identity – SAML profiles (optional; nil when scope not granted)
+	CloudIdentityService *cloudidentity.Service
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +468,26 @@ func (c *GoogleWorkspaceClient) InsertDataTransfer(ctx context.Context, transfer
 	return resp, nil
 }
 
+// ListUserIDsPage lists users returning only id and primaryEmail fields, optimized for
+// high-volume app discovery where full user profiles are not needed.
+func (c *GoogleWorkspaceClient) ListUserIDsPage(ctx context.Context, customerID, pageToken string) (*directoryAdmin.Users, error) {
+	if c.UserService == nil {
+		return nil, errServiceNotAvailable("user service")
+	}
+	r := c.UserService.Users.List().
+		Customer(customerID).
+		MaxResults(500).
+		Fields("nextPageToken,users(id,primaryEmail)")
+	if pageToken != "" {
+		r = r.PageToken(pageToken)
+	}
+	resp, err := r.Context(ctx).Do()
+	if err != nil {
+		return nil, wrapGoogleApiErrorWithContext(err, "failed to list user IDs")
+	}
+	return resp, nil
+}
+
 // ---------------------------------------------------------------------------
 // Reports
 // ---------------------------------------------------------------------------
@@ -487,4 +511,40 @@ func (c *GoogleWorkspaceClient) ListActivities(ctx context.Context, userKey, app
 		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to list %s activities", applicationName))
 	}
 	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// Cloud Identity
+// ---------------------------------------------------------------------------
+
+// ListInboundSamlProfiles paginates InboundSamlSsoProfiles for the given customer,
+// calling fn for each page. Returns errServiceNotAvailable if CloudIdentityService is nil.
+func (c *GoogleWorkspaceClient) ListInboundSamlProfiles(ctx context.Context, customerID string, fn func(*cloudidentity.ListInboundSamlSsoProfilesResponse) error) error {
+	if c.CloudIdentityService == nil {
+		return errServiceNotAvailable("cloud identity service")
+	}
+	customerFilter := fmt.Sprintf(`customer=="customers/%s"`, customerID)
+	return c.CloudIdentityService.InboundSamlSsoProfiles.List().
+		Filter(customerFilter).
+		PageSize(100).
+		Pages(ctx, fn)
+}
+
+// BuildSAMLProfileMap returns a displayName → profile.Name mapping for all Cloud Identity SAML
+// profiles. profile.Name is the stable server-assigned ID that survives admin renames.
+// OIDC profiles are excluded. Returns errServiceNotAvailable if CloudIdentityService is nil.
+func (c *GoogleWorkspaceClient) BuildSAMLProfileMap(ctx context.Context, customerID string) (map[string]string, error) {
+	profileMap := map[string]string{}
+	if err := c.ListInboundSamlProfiles(ctx, customerID, func(resp *cloudidentity.ListInboundSamlSsoProfilesResponse) error {
+		for _, profile := range resp.InboundSamlSsoProfiles {
+			if profile.DisplayName == "" || profile.Name == "" {
+				continue
+			}
+			profileMap[profile.DisplayName] = profile.Name
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("google-workspace-connector: failed to list SAML profiles: %w", err)
+	}
+	return profileMap, nil
 }

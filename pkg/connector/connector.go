@@ -24,6 +24,7 @@ import (
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	cloudidentity "google.golang.org/api/cloudidentity/v1"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
@@ -279,6 +280,7 @@ type Config struct {
 	AdministratorEmail string
 	Domain             string
 	Credentials        []byte
+	SyncApps           bool
 }
 
 type GoogleWorkspace struct {
@@ -286,6 +288,7 @@ type GoogleWorkspace struct {
 	domain             string
 	administratorEmail string
 	credentials        []byte
+	syncApps           bool
 
 	mtx          sync.Mutex
 	serviceCache map[string]any
@@ -381,6 +384,7 @@ func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOp
 		AdministratorEmail: config.AdministratorEmail,
 		Domain:             config.Domain,
 		Credentials:        credentialBytes,
+		SyncApps:           config.SyncApps,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -397,6 +401,7 @@ func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) 
 		credentials:        config.Credentials,
 		serviceCache:       map[string]any{},
 		domain:             config.Domain,
+		syncApps:           config.SyncApps,
 	}
 	return rv, nil
 }
@@ -601,6 +606,11 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) *gwclient.GoogleWorkspa
 		logServiceInitError(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "report service")
 	}
 
+	client.CloudIdentityService, err = getService(ctx, c, cloudidentity.CloudIdentityInboundssoReadonlyScope, cloudidentity.NewService)
+	if err != nil {
+		logServiceInitError(l, err, cloudidentity.CloudIdentityInboundssoReadonlyScope, "SAML/OIDC app discovery")
+	}
+
 	return client
 }
 
@@ -618,6 +628,10 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 
 	if client.GroupService != nil && client.GroupMemberService != nil {
 		rs = append(rs, groupBuilder(client, c.customerID, c.domain))
+	}
+
+	if c.syncApps && client.UserService != nil && client.UserSecurityService != nil && client.ReportService != nil {
+		rs = append(rs, newApplicationResource(client, c.customerID))
 	}
 
 	return rs
@@ -704,13 +718,18 @@ func (c *GoogleWorkspace) getClient(ctx context.Context) *gwclient.GoogleWorkspa
 
 func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
 	client := c.getClient(ctx)
-	usageEventFeed := newUsageEventFeed(client)
-	adminEventFeed := newAdminEventFeed(client)
 
-	return []connectorbuilder.EventFeed{
-		usageEventFeed,
-		adminEventFeed,
+	feeds := []connectorbuilder.EventFeed{
+		newUsageEventFeed(client),
+		newAdminEventFeed(client),
 	}
+
+	if c.syncApps && client.ReportService != nil {
+		feeds = append(feeds, newSamlEventFeed(client, c.customerID))
+		feeds = append(feeds, newGoogleLoginEventFeed(client))
+	}
+
+	return feeds
 }
 
 func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
