@@ -1,3 +1,8 @@
+// app_login.go discovers which OAuth and Google Workspace apps users have accessed.
+// It uses two data sources: the Directory API's token list (OAuth apps a user has granted access to)
+// and the Admin Reports audit log (actual login events for OAuth and Google Workspace apps).
+// Results are stored in the session so applicationResource.List() and Grants() can read them
+// without re-fetching across sync phases.
 package connector
 
 import (
@@ -287,6 +292,7 @@ func discoverOAuthApps(
 	return apps, nil
 }
 
+// fetchUserTokens concurrently fetches OAuth tokens for each user using a bounded worker pool.
 func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwclient.GoogleWorkspaceClient, users []*admin.User) ([]userAppsResult, error) {
 	results := make([]userAppsResult, len(users))
 	var wg sync.WaitGroup
