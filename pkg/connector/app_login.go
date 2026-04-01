@@ -51,6 +51,8 @@ var (
 	appDiscoveryLoadedNamespace    = sessions.WithPrefix("app_login_tokens_loaded")
 	appLoginDataLoadedNamespace    = sessions.WithPrefix("app_login_data_loaded")
 	appLoginDirectoryUserNamespace = sessions.WithPrefix("app_login_directory_user")
+	samlProfileMapNamespace        = sessions.WithPrefix("saml_profile_map")
+	samlProfileMapLoadedNamespace  = sessions.WithPrefix("saml_profile_map_loaded")
 )
 
 func appLoginLoginsNamespace(appID string) sessions.SessionStoreOption {
@@ -384,4 +386,51 @@ func discoverSAMLApps(profileMap map[string]string) map[string]string {
 		apps[samlAppIDPrefix+profileName] = displayName
 	}
 	return apps
+}
+
+// fetchSAMLProfileMap calls Cloud Identity to build a displayName → profile.Name map.
+// Returns nil without error if the service is unavailable or the call fails (soft failure).
+func fetchSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) map[string]string {
+	if client.CloudIdentityService == nil {
+		return nil
+	}
+	m, err := client.BuildSAMLProfileMap(ctx, customerID)
+	if err != nil {
+		ctxzap.Extract(ctx).Info("google-workspace: failed to load SAML profiles from Cloud Identity; SAML app IDs will use display names. "+
+			"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
+		return nil
+	}
+	return m
+}
+
+// loadSAMLProfileMap returns the SAML profile map, using the session store as a cache
+// so Cloud Identity is queried at most once per sync.
+func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
+	ss, _ := ctx.Value(sessions.SessionStoreKey{}).(sessions.SessionStore)
+	if ss == nil {
+		return fetchSAMLProfileMap(ctx, client, customerID), nil
+	}
+
+	_, loaded, err := session.GetJSON[string](ctx, ss, "done", samlProfileMapLoadedNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace-connector: failed to check saml profile map loaded flag: %w", err)
+	}
+	if loaded {
+		m, err := session.GetAllJSON[string](ctx, ss, samlProfileMapNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: failed to read saml profile map from session: %w", err)
+		}
+		return m, nil
+	}
+
+	profileMap := fetchSAMLProfileMap(ctx, client, customerID)
+	if len(profileMap) > 0 {
+		if err := session.SetManyJSON(ctx, ss, profileMap, samlProfileMapNamespace); err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: failed to store saml profile map in session: %w", err)
+		}
+	}
+	if err := session.SetJSON(ctx, ss, "done", "true", samlProfileMapLoadedNamespace); err != nil {
+		return nil, fmt.Errorf("google-workspace-connector: failed to mark saml profile map as loaded: %w", err)
+	}
+	return profileMap, nil
 }

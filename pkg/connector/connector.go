@@ -711,7 +711,7 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 // It is safe to call from multiple goroutines.
 func (c *GoogleWorkspace) getClient(ctx context.Context) *gwclient.GoogleWorkspaceClient {
 	c.clientOnce.Do(func() {
-		c.client = c.newClient(context.Background())
+		c.client = c.newClient(ctx)
 	})
 	return c.client
 }

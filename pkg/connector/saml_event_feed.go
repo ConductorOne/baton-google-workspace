@@ -10,8 +10,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -42,17 +40,9 @@ func (f *samlEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFeedMetada
 // Unlike OAuth apps (see usage_event_feed.go), SAML "login_success" fires on every SSO authentication,
 // so last login timestamps are accurate. SAML apps are identified by app name (no numeric client_id).
 func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-
-	// Load SAML profile map for stable IDs.
-	var samlProfileMap map[string]string
-	if f.client.CloudIdentityService != nil {
-		if m, err := f.client.BuildSAMLProfileMap(ctx, f.customerID); err != nil {
-			l.Info("google-workspace: failed to load SAML profiles from Cloud Identity in event feed; SAML app IDs will use display names. "+
-				"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
-		} else {
-			samlProfileMap = m
-		}
+	samlProfileMap, err := loadSAMLProfileMap(ctx, f.client, f.customerID)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	cursor, err := unmarshalPageToken(pToken, startAt)

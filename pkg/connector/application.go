@@ -114,7 +114,7 @@ func (ar *applicationResource) Grants(ctx context.Context, resource *v2.Resource
 		return nil, nil, fmt.Errorf("google-workspace-connector: failed to read directory users from session: %w", err)
 	}
 	if len(directoryUsers) == 0 {
-		return nil, nil, fmt.Errorf("google-workspace-connector: directory users not found in session for app %s; List() may not have run", appID)
+		return nil, &rs.SyncOpResults{}, nil
 	}
 
 	grants := make([]*v2.Grant, 0, len(userLogins))
