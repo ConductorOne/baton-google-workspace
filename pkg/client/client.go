@@ -470,14 +470,18 @@ func (c *GoogleWorkspaceClient) InsertDataTransfer(ctx context.Context, transfer
 
 // ListUserIDsPage lists users returning only id and primaryEmail fields, optimized for
 // high-volume app discovery where full user profiles are not needed.
-func (c *GoogleWorkspaceClient) ListUserIDsPage(ctx context.Context, customerID, pageToken string) (*directoryAdmin.Users, error) {
+func (c *GoogleWorkspaceClient) ListUserIDsPage(ctx context.Context, customerID, domain, pageToken string) (*directoryAdmin.Users, error) {
 	if c.UserService == nil {
 		return nil, errServiceNotAvailable("user service")
 	}
 	r := c.UserService.Users.List().
-		Customer(customerID).
 		MaxResults(500).
 		Fields("nextPageToken,users(id,primaryEmail)")
+	if domain != "" {
+		r = r.Domain(domain)
+	} else {
+		r = r.Customer(customerID)
+	}
 	if pageToken != "" {
 		r = r.PageToken(pageToken)
 	}

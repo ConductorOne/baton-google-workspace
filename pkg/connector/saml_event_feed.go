@@ -44,8 +44,7 @@ func (f *samlEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFeedMetada
 func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	// Load SAML profile map for stable IDs. Session is not available in event feeds,
-	// so we call the API directly each time rather than using an in-memory cache.
+	// Load SAML profile map for stable IDs.
 	var samlProfileMap map[string]string
 	if f.client.CloudIdentityService != nil {
 		if m, err := f.client.BuildSAMLProfileMap(ctx, f.customerID); err != nil {

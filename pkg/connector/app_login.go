@@ -221,6 +221,7 @@ func discoverOAuthApps(
 	ss sessions.SessionStore,
 	client *gwclient.GoogleWorkspaceClient,
 	customerID string,
+	domain string,
 ) (map[string]string, error) {
 	_, loaded, err := session.GetJSON[string](ctx, ss, "done", appDiscoveryLoadedNamespace)
 	if err != nil {
@@ -239,7 +240,7 @@ func discoverOAuthApps(
 	var nextPageToken string
 
 	for range appDiscoveryMaxUserPages {
-		userResp, err := client.ListUserIDsPage(ctx, customerID, nextPageToken)
+		userResp, err := client.ListUserIDsPage(ctx, customerID, domain, nextPageToken)
 		if err != nil {
 			return nil, fmt.Errorf("google-workspace-connector: failed to list users for applications: %w", err)
 		}

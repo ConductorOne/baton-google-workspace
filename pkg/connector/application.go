@@ -21,12 +21,14 @@ const applicationAccessEntitlement = "access"
 type applicationResource struct {
 	client     *gwclient.GoogleWorkspaceClient
 	customerID string
+	domain     string
 }
 
-func newApplicationResource(client *gwclient.GoogleWorkspaceClient, customerID string) *applicationResource {
+func newApplicationResource(client *gwclient.GoogleWorkspaceClient, customerID, domain string) *applicationResource {
 	return &applicationResource{
 		client:     client,
 		customerID: customerID,
+		domain:     domain,
 	}
 }
 
@@ -47,7 +49,7 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		}
 	}
 
-	apps, err := discoverOAuthApps(ctx, attrs.Session, ar.client, ar.customerID)
+	apps, err := discoverOAuthApps(ctx, attrs.Session, ar.client, ar.customerID, ar.domain)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -110,6 +112,9 @@ func (ar *applicationResource) Grants(ctx context.Context, resource *v2.Resource
 	directoryUsers, err := session.GetAllJSON[string](ctx, attrs.Session, appLoginDirectoryUserNamespace)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace-connector: failed to read directory users from session: %w", err)
+	}
+	if len(directoryUsers) == 0 {
+		return nil, nil, fmt.Errorf("google-workspace-connector: directory users not found in session for app %s; List() may not have run", appID)
 	}
 
 	grants := make([]*v2.Grant, 0, len(userLogins))

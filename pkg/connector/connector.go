@@ -631,7 +631,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	}
 
 	if c.syncApps && client.UserService != nil && client.UserSecurityService != nil && client.ReportService != nil {
-		rs = append(rs, newApplicationResource(client, c.customerID))
+		rs = append(rs, newApplicationResource(client, c.customerID, c.domain))
 	}
 
 	return rs
@@ -711,7 +711,7 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 // It is safe to call from multiple goroutines.
 func (c *GoogleWorkspace) getClient(ctx context.Context) *gwclient.GoogleWorkspaceClient {
 	c.clientOnce.Do(func() {
-		c.client = c.newClient(ctx)
+		c.client = c.newClient(context.Background())
 	})
 	return c.client
 }
