@@ -36,8 +36,20 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 
 	client := c.getClient(ctx)
 
+	// fetch current state to ensure idempotency
+	u, err := client.GetUserForProvisioning(ctx, userId)
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for updateUserStatus: %w", userId, err)
+	}
+	if u.Suspended == isSuspended { // already in desired state
+		response := structpb.Struct{Fields: map[string]*structpb.Value{
+			"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		}}
+		return &response, nil, nil
+	}
+
 	// update user.isSuspended state
-	_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
 		Suspended:       isSuspended,
 		ForceSendFields: []string{"Suspended"},
 	})
