@@ -364,7 +364,7 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			l.Debug("user no longer exists", zap.String("email", email))
+			l.Debug("user no longer exists")
 			delete(f.userCache, email)
 			return nil, nil
 		}
@@ -379,7 +379,7 @@ func (f *adminEventFeed) lookupUser(ctx context.Context, email string) (*cacheEn
 	f.userCache[email] = entry
 
 	if user.Id == "" {
-		l.Warn("user has no id", zap.String("email", user.PrimaryEmail))
+		l.Debug("user has no id")
 		return nil, nil
 	}
 
@@ -400,7 +400,7 @@ func (f *adminEventFeed) lookupGroup(ctx context.Context, email string) (*cacheE
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			l.Debug("group no longer exists", zap.String("email", email))
+			l.Debug("group no longer exists")
 			delete(f.groupCache, email)
 			return nil, nil
 		}

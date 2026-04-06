@@ -281,7 +281,7 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 					"3) invalid email domain '%s' (domain must be verified in Google Workspace): %w",
 				admin.AdminDirectoryGroupScope, email, err)
 		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to create group: %w", err)
 	}
 	l.Debug("google-workspace: group action handler: created group", zap.Any("createdGroup", createdGroup))
 	// Create the group resource
@@ -406,7 +406,11 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 // modifyGroupSettingsActionHandler updates settings for an existing Google Group (idempotent: checks current settings before updating).
 func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	// Extract and validate group_key parameter
-	groupKeyField, ok := args.Fields["group_key"].GetKind().(*structpb.Value_StringValue)
+	groupKeyValue, exists := args.Fields["group_key"]
+	if !exists || groupKeyValue == nil {
+		return nil, nil, fmt.Errorf("missing group_key")
+	}
+	groupKeyField, ok := groupKeyValue.GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, fmt.Errorf("missing group_key")
 	}

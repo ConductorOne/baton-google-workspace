@@ -218,7 +218,7 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 		}
 	}
 
-	grant := sdkGrant.NewGrant(entitlement.Resource, roleMemberEntitlement, principal.GetId())
+	grant := sdkGrant.NewGrant(entitlement.Resource, groupMemberEntitlement, principal.GetId())
 	grant.Id = assignment.Id
 	return []*v2.Grant{grant}, nil, nil
 }
