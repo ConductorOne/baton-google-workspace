@@ -60,6 +60,20 @@
           {
             "@type":  "type.googleapis.com/c1.connector.v2.V1Identifier",
             "id":  "group"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.group"
+              },
+              {
+                "permission":  "admin.directory.group.member"
+              },
+              {
+                "permission":  "admin.directory.domain.readonly"
+              }
+            ]
           }
         ]
       },
@@ -69,7 +83,19 @@
         "CAPABILITY_PROVISION",
         "CAPABILITY_RESOURCE_DELETE"
       ],
-      "permissions":  {}
+      "permissions":  {
+        "permissions":  [
+          {
+            "permission":  "admin.directory.group"
+          },
+          {
+            "permission":  "admin.directory.group.member"
+          },
+          {
+            "permission":  "admin.directory.domain.readonly"
+          }
+        ]
+      }
     },
     {
       "resourceType":  {
@@ -82,6 +108,17 @@
           {
             "@type":  "type.googleapis.com/c1.connector.v2.V1Identifier",
             "id":  "role"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.rolemanagement"
+              },
+              {
+                "permission":  "admin.directory.domain.readonly"
+              }
+            ]
           }
         ]
       },
@@ -90,7 +127,16 @@
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
       ],
-      "permissions":  {}
+      "permissions":  {
+        "permissions":  [
+          {
+            "permission":  "admin.directory.rolemanagement"
+          },
+          {
+            "permission":  "admin.directory.domain.readonly"
+          }
+        ]
+      }
     },
     {
       "resourceType":  {
@@ -106,6 +152,20 @@
           },
           {
             "@type":  "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.user.readonly"
+              },
+              {
+                "permission":  "admin.directory.user.alias.readonly"
+              },
+              {
+                "permission":  "admin.directory.domain.readonly"
+              }
+            ]
           }
         ]
       },
@@ -115,7 +175,19 @@
         "CAPABILITY_ACCOUNT_PROVISIONING",
         "CAPABILITY_RESOURCE_DELETE"
       ],
-      "permissions":  {}
+      "permissions":  {
+        "permissions":  [
+          {
+            "permission":  "admin.directory.user.readonly"
+          },
+          {
+            "permission":  "admin.directory.user.alias.readonly"
+          },
+          {
+            "permission":  "admin.directory.domain.readonly"
+          }
+        ]
+      }
     }
   ],
   "connectorCapabilities":  [

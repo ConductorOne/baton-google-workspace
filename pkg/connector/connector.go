@@ -41,18 +41,31 @@ func capabilityPermissions(perms ...string) *v2.CapabilityPermissions {
 	return cp
 }
 
+func v1AnnotationsWithPermissions(resourceTypeID string, perms *v2.CapabilityPermissions) annotations.Annotations {
+	annos := v1AnnotationsForResourceType(resourceTypeID)
+	annos.Update(perms)
+	return annos
+}
+
 var (
 	resourceTypeRole = &v2.ResourceType{
 		Id:          "role",
 		DisplayName: "role",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
-		Annotations: v1AnnotationsForResourceType("role"),
+		Annotations: v1AnnotationsWithPermissions("role", capabilityPermissions(
+			"admin.directory.rolemanagement",
+			"admin.directory.domain.readonly",
+		)),
 	}
 	resourceTypeGroup = &v2.ResourceType{
 		Id:          "group",
 		DisplayName: "Group",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_GROUP},
-		Annotations: v1AnnotationsForResourceType("group"),
+		Annotations: v1AnnotationsWithPermissions("group", capabilityPermissions(
+			"admin.directory.group",
+			"admin.directory.group.member",
+			"admin.directory.domain.readonly",
+		)),
 	}
 	resourceTypeUser = &v2.ResourceType{
 		Id:          "user",
@@ -60,7 +73,11 @@ var (
 		Traits: []v2.ResourceType_Trait{
 			v2.ResourceType_TRAIT_USER,
 		},
-		Annotations: v1AnnotationsForResourceType("user"),
+		Annotations: v1AnnotationsWithPermissions("user", capabilityPermissions(
+			"admin.directory.user.readonly",
+			"admin.directory.user.alias.readonly",
+			"admin.directory.domain.readonly",
+		)),
 	}
 	resourceTypeEnterpriseApplication = &v2.ResourceType{
 		Id:          "enterprise_application",
