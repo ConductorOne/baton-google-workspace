@@ -131,12 +131,6 @@
           ".json"
         ]
       }
-    },
-    {
-      "name": "sync-apps",
-      "displayName": "Sync Enterprise Apps",
-      "description": "Sync enterprise applications and user login activity from the Google Workspace account.",
-      "boolField": {}
     }
   ],
   "displayName": "Google Workspace",

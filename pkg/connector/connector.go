@@ -33,6 +33,14 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
+func capabilityPermissions(perms ...string) *v2.CapabilityPermissions {
+	cp := &v2.CapabilityPermissions{}
+	for _, p := range perms {
+		cp.Permissions = append(cp.Permissions, &v2.CapabilityPermission{Permission: p})
+	}
+	return cp
+}
+
 var (
 	resourceTypeRole = &v2.ResourceType{
 		Id:          "role",
@@ -58,6 +66,14 @@ var (
 		Id:          "enterprise_application",
 		DisplayName: "Enterprise Application",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+		Annotations: annotations.New(
+			capabilityPermissions(
+				"admin.directory.user.readonly",
+				"admin.directory.user.security",
+				"admin.reports.audit.readonly",
+				"cloud-identity.inboundsso.readonly",
+			),
+		),
 	}
 	updateUserStatusActionSchema = &v2.BatonActionSchema{
 		Name: "update_user_status",
@@ -280,7 +296,6 @@ type Config struct {
 	AdministratorEmail string
 	Domain             string
 	Credentials        []byte
-	SyncApps           bool
 }
 
 type GoogleWorkspace struct {
@@ -288,8 +303,6 @@ type GoogleWorkspace struct {
 	domain             string
 	administratorEmail string
 	credentials        []byte
-	syncApps           bool
-
 	mtx          sync.Mutex
 	serviceCache map[string]any
 
@@ -384,7 +397,6 @@ func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOp
 		AdministratorEmail: config.AdministratorEmail,
 		Domain:             config.Domain,
 		Credentials:        credentialBytes,
-		SyncApps:           config.SyncApps,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -401,7 +413,6 @@ func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) 
 		credentials:        config.Credentials,
 		serviceCache:       map[string]any{},
 		domain:             config.Domain,
-		syncApps:           config.SyncApps,
 	}
 	return rv, nil
 }
@@ -630,7 +641,7 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 		rs = append(rs, groupBuilder(client, c.customerID, c.domain))
 	}
 
-	if c.syncApps && client.UserService != nil && client.UserSecurityService != nil && client.ReportService != nil {
+	if client.UserService != nil && client.UserSecurityService != nil && client.ReportService != nil {
 		rs = append(rs, newApplicationResource(client, c.customerID, c.domain))
 	}
 
@@ -724,7 +735,7 @@ func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.Eve
 		newAdminEventFeed(client),
 	}
 
-	if c.syncApps && client.ReportService != nil {
+	if client.ReportService != nil {
 		feeds = append(feeds, newSamlEventFeed(client, c.customerID))
 		feeds = append(feeds, newGoogleLoginEventFeed(client))
 	}
@@ -761,4 +772,38 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 	}
 
 	return nil
+}
+
+// DefaultCapabilitiesBuilder returns all resource types unconditionally so that
+// the generated capabilities are always complete regardless of connector configuration.
+func DefaultCapabilitiesBuilder() connectorbuilder.ConnectorBuilderV2 {
+	return &defaultCapabilitiesBuilder{}
+}
+
+type defaultCapabilitiesBuilder struct{}
+
+func (d *defaultCapabilitiesBuilder) Metadata(_ context.Context) (*v2.ConnectorMetadata, error) {
+	return &v2.ConnectorMetadata{DisplayName: "Google Workspace"}, nil
+}
+
+func (d *defaultCapabilitiesBuilder) Validate(_ context.Context) (annotations.Annotations, error) {
+	return nil, nil
+}
+
+func (d *defaultCapabilitiesBuilder) ResourceSyncers(_ context.Context) []connectorbuilder.ResourceSyncerV2 {
+	return []connectorbuilder.ResourceSyncerV2{
+		roleBuilder(nil, ""),
+		userBuilder(nil, "", ""),
+		groupBuilder(nil, "", ""),
+		newApplicationResource(nil, "", ""),
+	}
+}
+
+func (d *defaultCapabilitiesBuilder) EventFeeds(_ context.Context) []connectorbuilder.EventFeed {
+	return []connectorbuilder.EventFeed{
+		newUsageEventFeed(nil),
+		newAdminEventFeed(nil),
+		newSamlEventFeed(nil, ""),
+		newGoogleLoginEventFeed(nil),
+	}
 }
