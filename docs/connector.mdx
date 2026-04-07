@@ -21,8 +21,6 @@ sidebarTitle: "Google Workspace"
 
 The Google Workspace connector supports [automatic account provisioning and deprovisioning](/product/admin/account-provisioning).
 
-Enable **Sync Enterprise Apps** to track which users have accessed OAuth and SAML apps in your domain.
-
 ### Connector actions
 
 Connector actions are custom capabilities that extend C1 automations with app-specific operations. You can use connector actions in the [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) automation step.
@@ -93,7 +91,7 @@ Click **Enable**.
    </Frame>
 </Step>
 <Step>
-**Optional.** If you want to enable **Sync Enterprise Apps**, you must also search for, select, and enable the **Cloud Identity API**.
+You must also search for, select, and enable the **Cloud Identity API** (used for resolving SAML app IDs to stable identifiers).
 </Step>
 </Steps>
 ### Create a service account
@@ -166,9 +164,9 @@ Click **Add new** and fill out the form:
    - **OAuth Scopes**: Copy and paste in the relevant scopes
 
       Use the following scopes to give C1 **READ** access (for syncing access data):
-      
+
       ```bash
-      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly
+      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
       ```
 
       Here's an explanation of each scope's purpose:
@@ -191,10 +189,16 @@ Click **Add new** and fill out the form:
       - Scope:   https://www.googleapis.com/auth/admin.reports.audit.readonly <br/>
         Purpose: To sync usage events and admin events (used in conjunction with incremental sync).
 
+      - Scope:   https://www.googleapis.com/auth/admin.directory.user.security <br/>
+        Purpose: To discover OAuth apps via per-user token listing.
+
+      - Scope:   https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly <br/>
+        Purpose: (Optional) To resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names.
+
       Use the following scopes to give C1 **READ/WRITE** access (for syncing access data and provisioning access):
 
       ```bash
-      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings
+      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
       ```
 
       Here's an explanation of each scope's purpose:
@@ -222,20 +226,12 @@ Click **Add new** and fill out the form:
 
       - Scope:   https://www.googleapis.com/auth/admin.directory.group <br/>
         Purpose: (Write) To provision groups.
-      
+
       - Scope:   https://www.googleapis.com/auth/admin.directory.user.security <br/>
-        Purpose: (Write) To run actions for removing a user's access (sign out, delete auth tokens and app passwords).
+        Purpose: (Write) To discover OAuth apps and run actions for removing a user's access (sign out, delete auth tokens and app passwords).
 
       - Scope: https://www.googleapis.com/auth/apps.groups.settings <br/>
         Purpose: (Write) To edit group settings.
-
-      **If using Sync Enterprise Apps**, add the following additional scopes:
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.user.security <br/>
-        Purpose: To discover OAuth apps via per-user token listing.
-
-      - Scope:   https://www.googleapis.com/auth/admin.reports.audit.readonly <br/>
-        Purpose: To fetch SAML and Google login events for last-login timestamps.
 
       - Scope:   https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly <br/>
         Purpose: (Optional) To resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names.
@@ -316,9 +312,6 @@ In the **Administrator email** field, enter the email address associated with yo
 In the **Credentials (JSON)** area, click **Choose file** and upload the file.
 </Step>
 <Step>
-**(Optional)** To sync enterprise applications and user login activity, enable the **Sync Enterprise Apps** toggle. This requires the additional OAuth scopes described in the [Add the service account to Google Workspace](#add-the-service-account-to-google-workspace) section.
-</Step>
-<Step>
 Click **Save**.
 </Step>
 <Step>
@@ -396,9 +389,6 @@ data:
 
   # Optional: include if you want C1 to provision access using this connector
   BATON_PROVISIONING: true
-
-  # Optional: enable enterprise application and login activity syncing (requires additional OAuth scopes)
-  BATON_SYNC_APPS: true
 ```
 
 **Base64 Encoding:** Use `echo -n "your-value" | base64` to encode your secrets,
@@ -484,19 +474,13 @@ Re-add the relevant scopes:
    Read-only
 
    ```bash
-   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly
+   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
    ```
 
    Read/Write
 
    ```bash
-   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings
-   ```
-
-   If using Sync Enterprise Apps, also add:
-
-   ```bash
-   https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
+   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
    ```
 </Step>
 </Steps>

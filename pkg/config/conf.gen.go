@@ -9,7 +9,6 @@ type GoogleWorkspace struct {
 	AdministratorEmail string `mapstructure:"administrator-email"`
 	CredentialsJsonFilePath []byte `mapstructure:"credentials-json-file-path"`
 	CredentialsJson string `mapstructure:"credentials-json"`
-	SyncApps bool `mapstructure:"sync-apps"`
 }
 
 func (c *GoogleWorkspace) findFieldByTag(tagValue string) (any, bool) {

@@ -1,76 +1,196 @@
 {
-  "@type": "type.googleapis.com/c1.connector.v2.ConnectorCapabilities",
-  "resourceTypeCapabilities": [
+  "@type":  "type.googleapis.com/c1.connector.v2.ConnectorCapabilities",
+  "resourceTypeCapabilities":  [
     {
-      "resourceType": {
-        "id": "group",
-        "displayName": "Group",
-        "traits": [
-          "TRAIT_GROUP"
+      "resourceType":  {
+        "id":  "enterprise_application",
+        "displayName":  "Enterprise Application",
+        "traits":  [
+          "TRAIT_APP"
         ],
-        "annotations": [
+        "annotations":  [
           {
-            "@type": "type.googleapis.com/c1.connector.v2.V1Identifier",
-            "id": "group"
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.user.readonly"
+              },
+              {
+                "permission":  "admin.directory.user.security"
+              },
+              {
+                "permission":  "admin.reports.audit.readonly"
+              },
+              {
+                "permission":  "cloud-identity.inboundsso.readonly"
+              }
+            ]
           }
         ]
       },
-      "capabilities": [
+      "capabilities":  [
+        "CAPABILITY_SYNC",
+        "CAPABILITY_PROVISION"
+      ],
+      "permissions":  {
+        "permissions":  [
+          {
+            "permission":  "admin.directory.user.readonly"
+          },
+          {
+            "permission":  "admin.directory.user.security"
+          },
+          {
+            "permission":  "admin.reports.audit.readonly"
+          },
+          {
+            "permission":  "cloud-identity.inboundsso.readonly"
+          }
+        ]
+      }
+    },
+    {
+      "resourceType":  {
+        "id":  "group",
+        "displayName":  "Group",
+        "traits":  [
+          "TRAIT_GROUP"
+        ],
+        "annotations":  [
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.V1Identifier",
+            "id":  "group"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.group"
+              },
+              {
+                "permission":  "admin.directory.group.member"
+              },
+              {
+                "permission":  "admin.directory.domain.readonly"
+              }
+            ]
+          }
+        ]
+      },
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION",
         "CAPABILITY_RESOURCE_DELETE"
       ],
-      "permissions": {}
+      "permissions":  {
+        "permissions":  [
+          {
+            "permission":  "admin.directory.group"
+          },
+          {
+            "permission":  "admin.directory.group.member"
+          },
+          {
+            "permission":  "admin.directory.domain.readonly"
+          }
+        ]
+      }
     },
     {
-      "resourceType": {
-        "id": "role",
-        "displayName": "role",
-        "traits": [
+      "resourceType":  {
+        "id":  "role",
+        "displayName":  "role",
+        "traits":  [
           "TRAIT_ROLE"
         ],
-        "annotations": [
+        "annotations":  [
           {
-            "@type": "type.googleapis.com/c1.connector.v2.V1Identifier",
-            "id": "role"
+            "@type":  "type.googleapis.com/c1.connector.v2.V1Identifier",
+            "id":  "role"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.rolemanagement"
+              },
+              {
+                "permission":  "admin.directory.domain.readonly"
+              }
+            ]
           }
         ]
       },
-      "capabilities": [
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
       ],
-      "permissions": {}
-    },
-    {
-      "resourceType": {
-        "id": "user",
-        "displayName": "User",
-        "traits": [
-          "TRAIT_USER"
-        ],
-        "annotations": [
+      "permissions":  {
+        "permissions":  [
           {
-            "@type": "type.googleapis.com/c1.connector.v2.V1Identifier",
-            "id": "user"
+            "permission":  "admin.directory.rolemanagement"
           },
           {
-            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+            "permission":  "admin.directory.domain.readonly"
+          }
+        ]
+      }
+    },
+    {
+      "resourceType":  {
+        "id":  "user",
+        "displayName":  "User",
+        "traits":  [
+          "TRAIT_USER"
+        ],
+        "annotations":  [
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.V1Identifier",
+            "id":  "user"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          },
+          {
+            "@type":  "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions":  [
+              {
+                "permission":  "admin.directory.user.readonly"
+              },
+              {
+                "permission":  "admin.directory.user.alias.readonly"
+              },
+              {
+                "permission":  "admin.directory.domain.readonly"
+              }
+            ]
           }
         ]
       },
-      "capabilities": [
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_ACCOUNT_PROVISIONING",
         "CAPABILITY_RESOURCE_DELETE"
       ],
-      "permissions": {}
+      "permissions":  {
+        "permissions":  [
+          {
+            "permission":  "admin.directory.user.readonly"
+          },
+          {
+            "permission":  "admin.directory.user.alias.readonly"
+          },
+          {
+            "permission":  "admin.directory.domain.readonly"
+          }
+        ]
+      }
     }
   ],
-  "connectorCapabilities": [
+  "connectorCapabilities":  [
     "CAPABILITY_PROVISION",
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
@@ -80,12 +200,12 @@
     "CAPABILITY_EVENT_FEED_V2",
     "CAPABILITY_SERVICE_MODE_TARGETED_SYNC"
   ],
-  "credentialDetails": {
-    "capabilityAccountProvisioning": {
-      "supportedCredentialOptions": [
+  "credentialDetails":  {
+    "capabilityAccountProvisioning":  {
+      "supportedCredentialOptions":  [
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
       ],
-      "preferredCredentialOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
+      "preferredCredentialOption":  "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
     }
   }
 }
