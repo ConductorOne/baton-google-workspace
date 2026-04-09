@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/session"
 	"github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
@@ -132,12 +131,4 @@ func (ar *applicationResource) Grants(ctx context.Context, resource *v2.Resource
 	}
 
 	return grants, &rs.SyncOpResults{}, nil
-}
-
-func (ar *applicationResource) Grant(_ context.Context, _ *v2.Resource, _ *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
-	return nil, nil, nil
-}
-
-func (ar *applicationResource) Revoke(_ context.Context, _ *v2.Grant) (annotations.Annotations, error) {
-	return nil, nil
 }
