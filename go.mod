@@ -3,7 +3,7 @@ module github.com/conductorone/baton-google-workspace
 go 1.25.2
 
 require (
-	github.com/conductorone/baton-sdk v0.8.17
+	github.com/conductorone/baton-sdk v0.8.18
 	github.com/deckarep/golang-set/v2 v2.8.0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -11,6 +11,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.27.1
 	golang.org/x/oauth2 v0.32.0
+	golang.org/x/sync v0.18.0
 	google.golang.org/api v0.248.0
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.10
@@ -116,7 +117,6 @@ require (
 	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
