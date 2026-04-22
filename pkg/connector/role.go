@@ -52,6 +52,13 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 	}
 	roles, err := o.client.ListRoles(ctx, o.customerId, bag.PageToken())
 	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
+			l.Info("google-workspace: skipping roles sync (403). Service account needs Super Admin "+
+				"(or a custom admin role with the 'Admin Roles (Read)' privilege).",
+				zap.Error(err))
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
 
@@ -108,9 +115,19 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 	roleAssignments, err := o.client.ListRoleAssignments(ctx, o.customerId, resource.Id.Resource, bag.PageToken())
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			// Role not found, return empty list
-			return nil, nil, nil
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// Role not found, return empty list
+				return nil, nil, nil
+			}
+			if gerr.Code == http.StatusForbidden {
+				l := ctxzap.Extract(ctx)
+				l.Info("google-workspace: skipping role assignments (403). Service account needs Super Admin "+
+					"(or a custom admin role with the 'Admin Roles (Read)' privilege).",
+					zap.String("role_id", resource.Id.Resource),
+					zap.Error(err))
+				return nil, nil, nil
+			}
 		}
 		return nil, nil, err
 	}
@@ -231,6 +248,14 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 
 	role, err := o.client.GetRole(ctx, o.customerId, resourceId.Resource)
 	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
+			l.Info("google-workspace: skipping role Get (403). Service account needs Super Admin "+
+				"(or a custom admin role with the 'Admin Roles (Read)' privilege).",
+				zap.String("role_id", resourceId.Resource),
+				zap.Error(err))
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
 
