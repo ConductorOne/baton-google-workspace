@@ -54,8 +54,8 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 	if err != nil {
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
-			l.Info("google-workspace: skipping roles sync (403). Service account needs Super Admin "+
-				"(or a custom admin role with the 'Admin Roles (Read)' privilege).",
+			l.Warn("google-workspace: skipping roles sync (403). Service account needs Super Admin "+
+				"(or a custom admin role granting read access to role management).",
 				zap.Error(err))
 			return nil, nil, nil
 		}
@@ -123,7 +123,7 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 			if gerr.Code == http.StatusForbidden {
 				l := ctxzap.Extract(ctx)
 				l.Info("google-workspace: skipping role assignments (403). Service account needs Super Admin "+
-					"(or a custom admin role with the 'Admin Roles (Read)' privilege).",
+					"(or a custom admin role granting read access to role management).",
 					zap.String("role_id", resource.Id.Resource),
 					zap.Error(err))
 				return nil, nil, nil
@@ -251,7 +251,7 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
 			l.Info("google-workspace: skipping role Get (403). Service account needs Super Admin "+
-				"(or a custom admin role with the 'Admin Roles (Read)' privilege).",
+				"(or a custom admin role granting read access to role management).",
 				zap.String("role_id", resourceId.Resource),
 				zap.Error(err))
 			return nil, nil, nil
