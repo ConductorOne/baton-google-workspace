@@ -8,6 +8,8 @@ import (
 
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/grpc/codes"
@@ -58,8 +60,10 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 
 // disableUserActionHandler suspends a user (idempotent: if already suspended, returns success).
 func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
 	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
+		l.Error("google-workspace: disableUserActionHandler: missing user ID")
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
@@ -69,6 +73,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
+		l.Error("google-workspace: disableUserActionHandler: failed to get user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for disableUser: %w", userId, err)
 	}
 	if u.Suspended { // already suspended
@@ -83,6 +88,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		ForceSendFields: []string{"Suspended"},
 	})
 	if err != nil {
+		l.Error("google-workspace: disableUserActionHandler: failed to suspend user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
 	}
 
@@ -94,8 +100,10 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 
 // enableUserActionHandler unsuspends a user (idempotent: if already active, returns success).
 func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
 	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
 	if !ok {
+		l.Error("google-workspace: enableUserActionHandler: missing user ID")
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
@@ -105,6 +113,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
+		l.Error("google-workspace: enableUserActionHandler: failed to get user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for enableUser: %w", userId, err)
 	}
 	if !u.Suspended { // already active
@@ -119,6 +128,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		ForceSendFields: []string{"Suspended"}, // This is needed because the SDK would omit any field that has the field type default value (false).
 	})
 	if err != nil {
+		l.Error("google-workspace: enableUserActionHandler: failed to unsuspend user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
 	}
 
