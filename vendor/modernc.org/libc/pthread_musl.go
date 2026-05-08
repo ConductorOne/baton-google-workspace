@@ -331,7 +331,6 @@ func Xpthread_mutex_unlock(tls *TLS, m uintptr) int32 {
 		}
 
 		if atomic.AddInt32(&((*pthreadMutex)(unsafe.Pointer(m)).count), -1) == 0 {
-			atomic.StoreInt32(&((*pthreadMutex)(unsafe.Pointer(m)).count), 0)
 			atomic.StoreInt32(&((*pthreadMutex)(unsafe.Pointer(m)).owner), 0)
 			(*pthreadMutex)(unsafe.Pointer(m)).Unlock()
 		}
@@ -481,6 +480,65 @@ func Xpthread_equal(tls *TLS, t, u uintptr) int32 {
 // int pthread_sigmask(int how, const sigset_t *restrict set, sigset_t *restrict old)
 func _pthread_sigmask(tls *TLS, now int32, set, old uintptr) int32 {
 	// ignored
+	return 0
+}
+
+type barrierState struct {
+	mu         sync.Mutex
+	cond       *sync.Cond
+	count      uint32
+	tripCount  uint32
+	generation uint32
+}
+
+var (
+	barriers   = map[uintptr]*barrierState{}
+	barriersMu sync.Mutex
+)
+
+// int pthread_barrier_init(pthread_barrier_t *restrict barrier, const pthread_barrierattr_t *restrict attr, unsigned count);
+func Xpthread_barrier_init(tls *TLS, barrier, attr uintptr, count uint32) int32 {
+	if count == 0 {
+		return EINVAL
+	}
+	barriersMu.Lock()
+	defer barriersMu.Unlock()
+	state := &barrierState{tripCount: count}
+	state.cond = sync.NewCond(&state.mu)
+	barriers[barrier] = state
+	return 0
+}
+
+// int pthread_barrier_destroy(pthread_barrier_t *barrier);
+func Xpthread_barrier_destroy(tls *TLS, barrier uintptr) int32 {
+	barriersMu.Lock()
+	defer barriersMu.Unlock()
+	delete(barriers, barrier)
+	return 0
+}
+
+// int pthread_barrier_wait(pthread_barrier_t *barrier);
+func Xpthread_barrier_wait(tls *TLS, barrier uintptr) int32 {
+	barriersMu.Lock()
+	state := barriers[barrier]
+	barriersMu.Unlock()
+	if state == nil {
+		return EINVAL
+	}
+	state.mu.Lock()
+	gen := state.generation
+	state.count++
+	if state.count >= state.tripCount {
+		state.count = 0
+		state.generation++
+		state.cond.Broadcast()
+		state.mu.Unlock()
+		return -1 // PTHREAD_BARRIER_SERIAL_THREAD
+	}
+	for gen == state.generation {
+		state.cond.Wait()
+	}
+	state.mu.Unlock()
 	return 0
 }
 
