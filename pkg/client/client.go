@@ -86,8 +86,11 @@ func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerId, domai
 	if c.UserService == nil {
 		return nil, errServiceNotAvailable("user service")
 	}
-	// Using 200 to avoid 412 "response size too large" errors with Projection("full").
-	r := c.UserService.Users.List().OrderBy("email").Projection("full").MaxResults(200)
+	// Projection("full") returns extensive per-user data (orgs, custom schemas,
+	// relations, etc.). With large directories this can produce payloads that
+	// exceed Lambda memory or timeout limits, causing Unhandled crashes.
+	// Keep MaxResults low to bound per-page payload size.
+	r := c.UserService.Users.List().OrderBy("email").Projection("full").MaxResults(50)
 	if domain != "" {
 		r = r.Domain(domain)
 	} else {
