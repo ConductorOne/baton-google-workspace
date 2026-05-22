@@ -185,6 +185,38 @@ var (
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
 	}
 
+	deleteUserAliasActionSchema = &v2.BatonActionSchema{
+		Name:        "delete_user_alias",
+		DisplayName: "Delete User Alias",
+		Description: "Deletes an email alias from a Google Workspace user account. " +
+			"This removes the alias so that mail sent to that address is no longer delivered to the user.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: "User ID",
+				Description: "The resource ID of the user whose alias should be deleted.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "alias",
+				DisplayName: "Alias Email",
+				Description: "The email alias to delete (e.g., 'old-name@example.com').",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the alias was deleted successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+	}
+
 	deleteAllApplicationPasswordsActionSchema = &v2.BatonActionSchema{
 		Name:        "delete_all_application_passwords",
 		DisplayName: "Delete All Application Passwords",
@@ -236,6 +268,9 @@ func (o *userResourceType) ResourceActions(ctx context.Context, registry actions
 		return err
 	}
 	if err := o.registerUpdateUserManagerAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerDeleteUserAliasAction(ctx, registry); err != nil {
 		return err
 	}
 	return nil
@@ -718,4 +753,62 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
+}
+
+func (o *userResourceType) registerDeleteUserAliasAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, deleteUserAliasActionSchema, o.deleteUserAliasActionHandler)
+}
+
+func (o *userResourceType) deleteUserAliasActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.client.UserAliasService == nil {
+		return nil, nil, fmt.Errorf("google-workspace: user alias service not available - requires %s scope", admin.AdminDirectoryUserAliasScope)
+	}
+
+	userId, err := extractUserId(args, l, "delete_user_alias")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	aliasValue, ok := args.Fields["alias"]
+	if !ok || aliasValue == nil {
+		l.Debug("google-workspace: user action handler: missing alias argument", zap.Any("args", args))
+		return nil, nil, fmt.Errorf("missing alias argument")
+	}
+	aliasField, ok := aliasValue.GetKind().(*structpb.Value_StringValue)
+	if !ok || aliasField.StringValue == "" {
+		return nil, nil, fmt.Errorf("invalid alias argument")
+	}
+	alias := aliasField.StringValue
+
+	if _, err := mail.ParseAddress(alias); err != nil {
+		return nil, nil, fmt.Errorf("invalid alias email address: %s", alias)
+	}
+
+	err = o.client.DeleteUserAlias(ctx, userId, alias)
+	if err != nil {
+		gerr := &googleapi.Error{}
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				l.Debug("google-workspace: alias already deleted or does not exist",
+					zap.String("user_id", userId),
+					zap.String("alias", alias))
+				return actions.NewReturnValues(true), nil, nil
+			}
+			if gerr.Code == http.StatusForbidden {
+				return nil, nil, fmt.Errorf(
+					"google-workspace: failed to delete alias (403 Forbidden). "+
+						"This may be due to: 1) missing OAuth scope %s, "+
+						"2) insufficient admin permissions: %w",
+					admin.AdminDirectoryUserAliasScope, err)
+			}
+		}
+		return nil, nil, fmt.Errorf("google-workspace: failed to delete alias %s for user %s: %w", alias, userId, err)
+	}
+
+	l.Debug("google-workspace: user action handler: deleted alias",
+		zap.String("user_id", userId),
+		zap.String("alias", alias))
+
+	return actions.NewReturnValues(true), nil, nil
 }

@@ -604,6 +604,10 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) *gwclient.GoogleWorkspa
 	if err != nil {
 		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations")
 	}
+	client.UserAliasService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserAliasScope)
+	if err != nil {
+		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserAliasScope, "user alias operations")
+	}
 
 	client.GroupService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
 	if err != nil {
