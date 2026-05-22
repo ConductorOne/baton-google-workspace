@@ -954,3 +954,201 @@ func TestUpdateUserManager_UserNotFound(t *testing.T) {
 		t.Fatalf("expected error message to contain 'not found', got: %v", err)
 	}
 }
+
+// Tests for delete_user_alias action
+
+type testAliasState struct {
+	mtx      sync.Mutex
+	aliases  map[string]map[string]bool // userKey -> set of alias emails
+	delCount int
+}
+
+func newTestAliasServer(state *testAliasState) *httptest.Server {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/users/")
+		parts := strings.Split(path, "/")
+
+		if len(parts) == 3 && parts[1] == "aliases" && r.Method == http.MethodDelete {
+			state.mtx.Lock()
+			defer state.mtx.Unlock()
+			state.delCount++
+			userKey := parts[0]
+			alias := parts[2]
+
+			userAliases, ok := state.aliases[userKey]
+			if !ok {
+				http.Error(w, `{"error":{"code":404,"message":"Resource Not Found: userKey"}}`, http.StatusNotFound)
+				return
+			}
+			if !userAliases[alias] {
+				http.Error(w, `{"error":{"code":404,"message":"Resource Not Found: alias"}}`, http.StatusNotFound)
+				return
+			}
+			delete(userAliases, alias)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+
+	return httptest.NewServer(mux)
+}
+
+func newTestUserResourceTypeWithAlias(t *testing.T, server *httptest.Server) *userResourceType {
+	t.Helper()
+	aliasDir := newTestDirectoryService(t, server.URL, server.Client())
+	return &userResourceType{
+		resourceType: resourceTypeUser,
+		client: &gwclient.GoogleWorkspaceClient{
+			UserAliasService: aliasDir,
+		},
+		customerId: "test-customer",
+		domain:     "",
+	}
+}
+
+func TestDeleteUserAlias_Success(t *testing.T) {
+	state := &testAliasState{
+		aliases: map[string]map[string]bool{
+			"user123": {"old-name@example.com": true, "other@example.com": true},
+		},
+	}
+	server := newTestAliasServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceTypeWithAlias(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		"alias":   {Kind: &structpb.Value_StringValue{StringValue: "old-name@example.com"}},
+	}}
+
+	resp, _, err := userRT.deleteUserAliasActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("deleteUserAlias: %v", err)
+	}
+
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+
+	if state.delCount != 1 {
+		t.Fatalf("expected 1 DELETE call, got %d", state.delCount)
+	}
+
+	if state.aliases["user123"]["old-name@example.com"] {
+		t.Fatalf("expected alias to be deleted")
+	}
+	if !state.aliases["user123"]["other@example.com"] {
+		t.Fatalf("expected other alias to remain")
+	}
+}
+
+func TestDeleteUserAlias_NotFound_Idempotent(t *testing.T) {
+	state := &testAliasState{
+		aliases: map[string]map[string]bool{
+			"user123": {},
+		},
+	}
+	server := newTestAliasServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceTypeWithAlias(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		"alias":   {Kind: &structpb.Value_StringValue{StringValue: "nonexistent@example.com"}},
+	}}
+
+	resp, _, err := userRT.deleteUserAliasActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("deleteUserAlias should succeed when alias not found (idempotent): %v", err)
+	}
+
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("expected success to be true")
+	}
+}
+
+func TestDeleteUserAlias_MissingUserId(t *testing.T) {
+	state := &testAliasState{aliases: map[string]map[string]bool{}}
+	server := newTestAliasServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceTypeWithAlias(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"alias": {Kind: &structpb.Value_StringValue{StringValue: "old@example.com"}},
+	}}
+
+	_, _, err := userRT.deleteUserAliasActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing user_id")
+	}
+	if !strings.Contains(err.Error(), "missing user_id") {
+		t.Fatalf("expected error message to contain 'missing user_id', got: %v", err)
+	}
+}
+
+func TestDeleteUserAlias_MissingAlias(t *testing.T) {
+	state := &testAliasState{aliases: map[string]map[string]bool{}}
+	server := newTestAliasServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceTypeWithAlias(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+	}}
+
+	_, _, err := userRT.deleteUserAliasActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for missing alias")
+	}
+	if !strings.Contains(err.Error(), "missing alias") {
+		t.Fatalf("expected error message to contain 'missing alias', got: %v", err)
+	}
+}
+
+func TestDeleteUserAlias_InvalidAliasEmail(t *testing.T) {
+	state := &testAliasState{aliases: map[string]map[string]bool{}}
+	server := newTestAliasServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceTypeWithAlias(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		"alias":   {Kind: &structpb.Value_StringValue{StringValue: "not-an-email"}},
+	}}
+
+	_, _, err := userRT.deleteUserAliasActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid email")
+	}
+	if !strings.Contains(err.Error(), "invalid alias email") {
+		t.Fatalf("expected error message to contain 'invalid alias email', got: %v", err)
+	}
+}
+
+func TestDeleteUserAlias_NoAliasService(t *testing.T) {
+	userRT := &userResourceType{
+		client: &gwclient.GoogleWorkspaceClient{UserAliasService: nil},
+	}
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		"alias":   {Kind: &structpb.Value_StringValue{StringValue: "old@example.com"}},
+	}}
+
+	_, _, err := userRT.deleteUserAliasActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error when alias service is nil")
+	}
+	if !strings.Contains(err.Error(), "user alias service not available") {
+		t.Fatalf("expected error about missing service, got: %v", err)
+	}
+}

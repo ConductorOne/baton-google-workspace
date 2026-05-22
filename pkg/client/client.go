@@ -27,6 +27,7 @@ type GoogleWorkspaceClient struct {
 	UserService             *directoryAdmin.Service
 	UserProvisioningService *directoryAdmin.Service
 	UserSecurityService     *directoryAdmin.Service
+	UserAliasService        *directoryAdmin.Service
 
 	// Directory – groups
 	GroupService                   *directoryAdmin.Service
@@ -228,6 +229,21 @@ func (c *GoogleWorkspaceClient) DeleteAsp(ctx context.Context, userId string, co
 	err := c.UserSecurityService.Asps.Delete(userId, codeId).Context(ctx).Do()
 	if err != nil {
 		return wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to delete application password for user: %s", userId))
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Users – aliases (requires UserAliasService)
+// ---------------------------------------------------------------------------
+
+func (c *GoogleWorkspaceClient) DeleteUserAlias(ctx context.Context, userKey, alias string) error {
+	if c.UserAliasService == nil {
+		return errServiceNotAvailable("user alias service")
+	}
+	err := c.UserAliasService.Users.Aliases.Delete(userKey, alias).Context(ctx).Do()
+	if err != nil {
+		return wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to delete alias %s for user: %s", alias, userKey))
 	}
 	return nil
 }
