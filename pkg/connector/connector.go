@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -360,6 +361,7 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	}
 
 	httpClient = &http.Client{
+		Timeout: 30 * time.Second,
 		Transport: &oauth2.Transport{
 			Base:   httpClient.Transport,
 			Source: oauth2.ReuseTokenSource(token, tokenSrc),
