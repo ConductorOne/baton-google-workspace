@@ -23,6 +23,14 @@ import (
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
+// maxEventFeedLookback caps how far back event feeds query the Google Reports API.
+// Google page tokens expire after ~24h, so a cursor left mid-pagination (e.g. after
+// a connector restart or a transient timeout) would otherwise keep requesting the
+// full historical window on every retry, causing HTTP timeout death spirals on large
+// orgs. 31 days balances sufficient event history against query size; Google retains
+// Reports data for 6 months so there is headroom if the window needs to grow.
+const maxEventFeedLookback = 31 * 24 * time.Hour
+
 type usageEventFeed struct {
 	c *gwclient.GoogleWorkspaceClient
 }
@@ -94,13 +102,25 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 		pt.PageSize = token.Size
 	}
 
+	// Enforce the lookback cap regardless of what the caller passes as defaultStart.
+	// This prevents stale cursors (e.g. from an expired mid-pagination pageToken) from
+	// requesting years of data and timing out on every retry.
+	cutoff := time.Now().Add(-maxEventFeedLookback)
+	if defaultStart == nil || defaultStart.AsTime().Before(cutoff) {
+		// There's lag on these events, so we're going to start roughly when google says events should come in
+		// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
+		defaultStart = timestamppb.New(cutoff)
+	}
+
 	if pt.StartAt == "" {
-		if defaultStart == nil {
-			// There's lag on these events, so we're going to start roughly when google says events should come in
-			// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
-			defaultStart = timestamppb.New(time.Now().Add(-2 * time.Hour))
-		}
 		pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
+	} else {
+		cursorStart, err := time.Parse(time.RFC3339, pt.StartAt)
+		if err != nil || cursorStart.Before(cutoff) {
+			pt.StartAt = cutoff.Format(time.RFC3339)
+			pt.NextPageToken = ""
+			pt.LatestEventSeen = ""
+		}
 	}
 
 	if pt.LatestEventSeen == "" {
