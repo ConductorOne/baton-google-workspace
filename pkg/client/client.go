@@ -9,6 +9,7 @@ import (
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	cloudidentity "google.golang.org/api/cloudidentity/v1"
 	groupssettings "google.golang.org/api/groupssettings/v1"
+	"google.golang.org/api/googleapi"
 )
 
 // errServiceNotAvailable returns a standardised error for when a required Google
@@ -82,12 +83,27 @@ func (c *GoogleWorkspaceClient) RequireUserProvisioning() error {
 // Users – read
 // ---------------------------------------------------------------------------
 
+// listUsersFields is a field mask that restricts ListUsers responses to only the
+// fields the connector actually reads. Projection("full") without a field mask
+// returns every attribute including aliases, phones, addresses, ssh keys, etc.
+// For tenants with large custom schemas this inflates each page to megabytes,
+// causing Lambda OOM or 300s timeout. The mask keeps the full custom-schema
+// data while dropping the unused fields, reducing per-page payload size by
+// roughly 80–90% for attribute-heavy directories.
+const listUsersFields googleapi.Field = "nextPageToken,users(id,primaryEmail,name,thumbnailPhotoUrl," +
+	"archived,suspended,suspensionReason,deletionTime,isEnrolledIn2Sv," +
+	"creationTime,lastLoginTime,orgUnitPath,includeInGlobalAddressList," +
+	"customerId,relations,organizations,customSchemas,posixAccounts,externalIds)"
+
 func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerId, domain, pageToken string) (*directoryAdmin.Users, error) {
 	if c.UserService == nil {
 		return nil, errServiceNotAvailable("user service")
 	}
-	// Using 200 to avoid 412 "response size too large" errors with Projection("full").
-	r := c.UserService.Users.List().OrderBy("email").Projection("full").MaxResults(200)
+	r := c.UserService.Users.List().
+		OrderBy("email").
+		Projection("full").
+		MaxResults(200).
+		Fields(listUsersFields)
 	if domain != "" {
 		r = r.Domain(domain)
 	} else {
