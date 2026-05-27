@@ -27,9 +27,9 @@ var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 // Google page tokens expire after ~24h, so a cursor left mid-pagination (e.g. after
 // a connector restart or a transient timeout) would otherwise keep requesting the
 // full historical window on every retry, causing HTTP timeout death spirals on large
-// orgs. 31 days balances sufficient event history against query size; Google retains
+// orgs. 90 days balances sufficient event history against query size; Google retains
 // Reports data for 6 months so there is headroom if the window needs to grow.
-const maxEventFeedLookback = 31 * 24 * time.Hour
+const maxEventFeedLookback = 90 * 24 * time.Hour
 
 type usageEventFeed struct {
 	c *gwclient.GoogleWorkspaceClient
