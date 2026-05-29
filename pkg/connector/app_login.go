@@ -308,6 +308,15 @@ func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwcli
 		go func(idx int, user *admin.User) {
 			defer wg.Done()
 			defer sem.Release(1)
+			defer func() {
+				if r := recover(); r != nil {
+					ctxzap.Extract(ctx).Error("google-workspace-connector: fetchUserTokens goroutine recovered from panic",
+						zap.String("user_id", user.Id),
+						zap.Any("panic", r),
+						zap.Stack("stack"),
+					)
+				}
+			}()
 
 			tokenResp, err := client.ListTokens(ctx, user.Id)
 			if err != nil {
