@@ -29,6 +29,18 @@ jobs:
       - name: Test connector sync
         run: |
           ./baton-google-workspace --file /tmp/sync-test.c1z
+      - name: Install baton CLI from baton-sdk (conductorone/baton is archived)
+        run: |
+          set -euxo pipefail
+          BATON_VERSION=v0.11.0
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m)
+          if [ "${ARCH}" = "x86_64" ]; then ARCH="amd64"; fi
+          FILENAME="baton-${BATON_VERSION}-${OS}-${ARCH}.tar.gz"
+          curl -fsSL -O "https://github.com/conductorone/baton-sdk/releases/download/${BATON_VERSION}/${FILENAME}"
+          tar xzf "${FILENAME}"
+          mv baton /usr/local/bin/baton
+          baton --version
       - name: Install baton CLI
         uses: ConductorOne/github-workflows/actions/get-baton@v2
       - name: Test change user org unit action
