@@ -74,7 +74,8 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 
 	resources := make([]*v2.Resource, 0, len(apps))
 	for appID, displayName := range apps {
-		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil)
+		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil,
+			rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.oauth_app"))
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
