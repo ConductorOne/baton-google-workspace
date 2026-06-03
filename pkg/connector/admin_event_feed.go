@@ -64,6 +64,10 @@ type cacheEntry struct {
 
 type cacheMap map[string]cacheEntry
 
+// adminActivitiesPageSize is the number of activity items requested per ListActivities
+// call. The Google Reports API maximum is 1000.
+const adminActivitiesPageSize = 1000
+
 type adminEventFeed struct {
 	client *gwclient.GoogleWorkspaceClient
 
@@ -101,7 +105,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	nextTokens := make(map[string]string)
 
 	for _, eventName := range fetchNames {
-		r, err := f.client.ListActivities(ctx, "all", "admin", eventName, cursor.StartAt, cursor.EventPageTokens[eventName], int64(pToken.Size))
+		r, err := f.client.ListActivities(ctx, "all", "admin", eventName, cursor.StartAt, cursor.EventPageTokens[eventName], adminActivitiesPageSize)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities for %s: %w", eventName, err)
 		}
