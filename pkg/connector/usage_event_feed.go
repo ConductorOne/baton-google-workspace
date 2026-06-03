@@ -81,10 +81,13 @@ func hasParameter(name string, parameters []*reportsAdmin.ActivityEventsParamete
 }
 
 type pageToken struct {
-	LatestEventSeen string `json:"latest_event_seen,omitempty"`
-	NextPageToken   string `json:"next_page_token,omitempty"`
-	StartAt         string `json:"start_at,omitempty"`
-	PageSize        int    `json:"page_size,omitempty"`
+	LatestEventSeen string            `json:"latest_event_seen,omitempty"`
+	NextPageToken   string            `json:"next_page_token,omitempty"`
+	StartAt         string            `json:"start_at,omitempty"`
+	PageSize        int               `json:"page_size,omitempty"`
+	// EventPageTokens holds per-event-name pagination cursors for feeds that
+	// issue one ListActivities request per event name (e.g. adminEventFeed).
+	EventPageTokens map[string]string `json:"event_page_tokens,omitempty"`
 }
 
 func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*pageToken, error) {
