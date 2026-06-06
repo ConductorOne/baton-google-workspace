@@ -14,6 +14,8 @@ import (
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 type testUser struct {
@@ -173,12 +175,18 @@ func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *data
 	if c.serviceCache == nil {
 		c.serviceCache = map[string]any{}
 	}
+	c.client = &gwclient.GoogleWorkspaceClient{}
 	if dir != nil {
 		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = dir
 		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = dir
+		c.client.UserService = dir
+		c.client.UserProvisioningService = dir
+		c.client.GroupService = dir
+		c.client.GroupProvisioningService = dir
 	}
 	if dt != nil {
 		c.serviceCache[datatransferAdmin.AdminDatatransferScope] = dt
+		c.client.DataTransferService = dt
 	}
 }
 

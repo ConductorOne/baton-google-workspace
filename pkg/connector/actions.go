@@ -36,10 +36,13 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	isSuspended := isSuspendedField.BoolValue
 	userId := guidField.StringValue
 
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// update user.isSuspended state
-	_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
 		Suspended:       isSuspended,
 		ForceSendFields: []string{"Suspended"},
 	})
@@ -68,7 +71,10 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	}
 
 	userId := guidField.StringValue
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
@@ -108,7 +114,10 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	}
 
 	userId := guidField.StringValue
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
@@ -157,7 +166,10 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid email address: %s", newPrimary), err)
 	}
 
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// fetch current for return payload
 	u, err := client.GetUserForProvisioning(ctx, userId)
@@ -261,7 +273,10 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	newOwnerUserId string,
 	params []*datatransferAdmin.ApplicationTransferParam,
 ) (*structpb.Struct, annotations.Annotations, error) {
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	pageToken := ""
 	for {

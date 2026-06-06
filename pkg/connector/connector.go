@@ -17,6 +17,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/pagination"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -29,9 +31,10 @@ import (
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
+	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
 )
 
 func capabilityPermissions(perms ...string) *v2.CapabilityPermissions {
@@ -321,14 +324,14 @@ type GoogleWorkspace struct {
 	domain             string
 	administratorEmail string
 	credentials        []byte
-	mtx          sync.Mutex
-	serviceCache map[string]any
+	mtx                sync.Mutex
+	serviceCache       map[string]any
 
 	reportService *reportsAdmin.Service
 
 	// client is lazily initialised on first use via getClient().
-	clientOnce sync.Once
-	client     *gwclient.GoogleWorkspaceClient
+	clientMtx sync.Mutex
+	client    *gwclient.GoogleWorkspaceClient
 }
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
@@ -556,96 +559,104 @@ func isAuthorizationError(err error) bool {
 	return errors.As(err, &ae)
 }
 
-// logServiceInitError logs an error that occurred while initializing a service for resource syncers.
+// recordServiceInit records an error that occurred while initializing a service for resource syncers.
 // Authorization errors are logged at debug level as they are expected when scopes are not available.
-// Other errors (network, context cancellation, etc.) are logged at error level with more detail.
-func logServiceInitError(l *zap.Logger, err error, scope, purpose string) {
+// Other errors (network, context cancellation, etc.) are fatal so the sync cannot persist a partial c1z.
+func recordServiceInit(l *zap.Logger, err error, scope, purpose string) error {
+	if err == nil {
+		return nil
+	}
 	if isAuthorizationError(err) {
 		l.Debug("google-workspace: service not available due to missing authorization scope",
 			zap.String("scope", scope),
 			zap.Error(err))
-	} else {
-		l.Error("google-workspace: failed to initialize service for resource syncer",
-			zap.String("scope", scope),
-			zap.String("purpose", purpose),
-			zap.Error(err))
+		return nil
 	}
+
+	l.Error("google-workspace: failed to initialize service for resource syncer",
+		zap.String("scope", scope),
+		zap.String("purpose", purpose),
+		zap.Error(err))
+	return fmt.Errorf("google-workspace: failed to initialize %s (scope %s): %w", purpose, scope, err)
 }
 
-func (c *GoogleWorkspace) newClient(ctx context.Context) *gwclient.GoogleWorkspaceClient {
+func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorkspaceClient, error) {
 	l := ctxzap.Extract(ctx)
 	client := &gwclient.GoogleWorkspaceClient{}
 
 	var err error
 
 	client.DomainService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryDomainReadonlyScope, "domain service")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryDomainReadonlyScope, "domain service"); err != nil {
+		return nil, err
 	}
 
 	client.RoleService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization"); err != nil {
+		return nil, err
 	}
 	client.RoleProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning"); err != nil {
+		return nil, err
 	}
 
 	client.UserService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization"); err != nil {
+		return nil, err
 	}
 	client.UserProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning"); err != nil {
+		return nil, err
 	}
 	client.UserSecurityService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations"); err != nil {
+		return nil, err
 	}
 
 	client.GroupService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization"); err != nil {
+		return nil, err
 	}
 	client.GroupMemberService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization"); err != nil {
+		return nil, err
 	}
 	client.GroupMemberProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning"); err != nil {
+		return nil, err
 	}
 	client.GroupProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
-	if err != nil {
-		logServiceInitError(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning")
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning"); err != nil {
+		return nil, err
 	}
 	client.GroupsSettingsService, err = c.getGroupsSettingsService(ctx)
-	if err != nil {
-		logServiceInitError(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings")
+	if err := recordServiceInit(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings"); err != nil {
+		return nil, err
 	}
 
 	client.DataTransferService, err = c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
-	if err != nil {
-		logServiceInitError(l, err, datatransferAdmin.AdminDatatransferScope, "data transfer service")
+	if err := recordServiceInit(l, err, datatransferAdmin.AdminDatatransferScope, "data transfer service"); err != nil {
+		return nil, err
 	}
 
 	client.ReportService, err = c.getReportService(ctx)
-	if err != nil {
-		logServiceInitError(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "report service")
+	if err := recordServiceInit(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "report service"); err != nil {
+		return nil, err
 	}
 
 	client.CloudIdentityService, err = getService(ctx, c, cloudidentity.CloudIdentityInboundssoReadonlyScope, cloudidentity.NewService)
-	if err != nil {
-		logServiceInitError(l, err, cloudidentity.CloudIdentityInboundssoReadonlyScope, "SAML/OIDC app discovery")
+	if err := recordServiceInit(l, err, cloudidentity.CloudIdentityInboundssoReadonlyScope, "SAML/OIDC app discovery"); err != nil {
+		return nil, err
 	}
 
-	return client
+	return client, nil
 }
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return failedResourceSyncers(err)
+	}
 	rs := []connectorbuilder.ResourceSyncerV2{}
 
 	if client.RoleService != nil {
@@ -665,6 +676,36 @@ func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilde
 	}
 
 	return rs
+}
+
+type failedResourceSyncer struct {
+	resourceType *v2.ResourceType
+	err          error
+}
+
+func failedResourceSyncers(err error) []connectorbuilder.ResourceSyncerV2 {
+	return []connectorbuilder.ResourceSyncerV2{
+		&failedResourceSyncer{resourceType: resourceTypeRole, err: err},
+		&failedResourceSyncer{resourceType: resourceTypeUser, err: err},
+		&failedResourceSyncer{resourceType: resourceTypeGroup, err: err},
+		&failedResourceSyncer{resourceType: resourceTypeEnterpriseApplication, err: err},
+	}
+}
+
+func (f *failedResourceSyncer) ResourceType(_ context.Context) *v2.ResourceType {
+	return f.resourceType
+}
+
+func (f *failedResourceSyncer) List(_ context.Context, _ *v2.ResourceId, _ rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	return nil, nil, f.err
+}
+
+func (f *failedResourceSyncer) Entitlements(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, f.err
+}
+
+func (f *failedResourceSyncer) Grants(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	return nil, nil, f.err
 }
 
 func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
@@ -737,17 +778,29 @@ func upgradeScope(ctx context.Context, scope string) (string, bool) {
 	return scope, false
 }
 
-// getClient returns the shared GoogleWorkspaceClient, initialising it once.
+// getClient returns the shared GoogleWorkspaceClient, initialising it once after a successful init.
 // It is safe to call from multiple goroutines.
-func (c *GoogleWorkspace) getClient(ctx context.Context) *gwclient.GoogleWorkspaceClient {
-	c.clientOnce.Do(func() {
-		c.client = c.newClient(ctx)
-	})
-	return c.client
+func (c *GoogleWorkspace) getClient(ctx context.Context) (*gwclient.GoogleWorkspaceClient, error) {
+	c.clientMtx.Lock()
+	defer c.clientMtx.Unlock()
+
+	if c.client != nil {
+		return c.client, nil
+	}
+
+	client, err := c.newClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.client = client
+	return c.client, nil
 }
 
 func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
-	client := c.getClient(ctx)
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return failedEventFeeds(err)
+	}
 
 	feeds := []connectorbuilder.EventFeed{
 		newUsageEventFeed(client),
@@ -760,6 +813,28 @@ func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.Eve
 	}
 
 	return feeds
+}
+
+type failedEventFeed struct {
+	metadata *v2.EventFeedMetadata
+	err      error
+}
+
+func failedEventFeeds(err error) []connectorbuilder.EventFeed {
+	return []connectorbuilder.EventFeed{
+		&failedEventFeed{metadata: newUsageEventFeed(nil).EventFeedMetadata(context.Background()), err: err},
+		&failedEventFeed{metadata: newAdminEventFeed(nil).EventFeedMetadata(context.Background()), err: err},
+		&failedEventFeed{metadata: newSamlEventFeed(nil, "").EventFeedMetadata(context.Background()), err: err},
+		&failedEventFeed{metadata: newGoogleLoginEventFeed(nil).EventFeedMetadata(context.Background()), err: err},
+	}
+}
+
+func (f *failedEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFeedMetadata {
+	return f.metadata
+}
+
+func (f *failedEventFeed) ListEvents(_ context.Context, _ *timestamppb.Timestamp, _ *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	return nil, nil, nil, f.err
 }
 
 func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
