@@ -30,7 +30,7 @@ jobs:
         run: |
           ./baton-google-workspace --file /tmp/sync-test.c1z
       - name: Install baton CLI
-        uses: ConductorOne/github-workflows/actions/get-baton@v2
+        uses: ConductorOne/github-workflows/actions/get-baton@v4
       - name: Test change user org unit action
         env:
           TARGET_ORG_UNIT: ${{ vars.TARGET_ORG_UNIT }}

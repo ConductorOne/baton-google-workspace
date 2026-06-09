@@ -48,7 +48,7 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		}
 	}
 
-	apps, err := discoverOAuthApps(ctx, attrs.Session, ar.client, ar.customerID, ar.domain)
+	oauthApps, err := discoverOAuthApps(ctx, attrs.Session, ar.client, ar.customerID, ar.domain)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,29 +57,44 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace-connector: failed to load login events: %w", err)
 	}
-	for appID, name := range samlApps {
-		apps[appID] = name
-	}
-
 	if samlProfileMap != nil {
 		for appID, name := range discoverSAMLApps(samlProfileMap) {
-			if _, exists := apps[appID]; !exists {
-				apps[appID] = name
+			if _, exists := samlApps[appID]; !exists {
+				samlApps[appID] = name
 			}
 		}
 	}
 
-	// Google Workspace itself is always an app — sign-in events from googleLoginEventFeed target this resource.
-	apps[googleWorkspaceAppID] = googleWorkspaceAppDisplayName
+	resources := make([]*v2.Resource, 0, len(oauthApps)+len(samlApps)+1)
 
-	resources := make([]*v2.Resource, 0, len(apps))
-	for appID, displayName := range apps {
-		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil)
+	for appID, displayName := range oauthApps {
+		if _, isSAML := samlApps[appID]; isSAML {
+			continue
+		}
+		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil,
+			rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.oauth_app"))
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
 	}
+
+	for appID, displayName := range samlApps {
+		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil,
+			rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.saml_app"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
+		}
+		resources = append(resources, r)
+	}
+
+	// Google Workspace itself is always an app — sign-in events from googleLoginEventFeed target this resource.
+	r, err := rs.NewAppResource(googleWorkspaceAppDisplayName, resourceTypeEnterpriseApplication, googleWorkspaceAppID, nil,
+		rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.workspace"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", googleWorkspaceAppID, err)
+	}
+	resources = append(resources, r)
 
 	return resources, &rs.SyncOpResults{}, nil
 }
