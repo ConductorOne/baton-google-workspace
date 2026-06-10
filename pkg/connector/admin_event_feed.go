@@ -120,6 +120,9 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 				latestEvent = occurredAt.AsTime()
 			}
 			for _, evt := range activity.Events {
+				if evt.Name != eventName {
+					continue
+				}
 				var changeEvents []*v2.Event
 				var evtErr error
 				if adminGroupEventNames[evt.Name] {
