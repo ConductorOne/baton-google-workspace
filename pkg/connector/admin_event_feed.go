@@ -105,6 +105,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	nextTokens := make(map[string]string)
 
 	for _, eventName := range fetchNames {
+		isGroupEvent := adminGroupEventNames[eventName]
 		r, err := f.client.ListActivities(ctx, "all", "admin", eventName, cursor.StartAt, cursor.EventPageTokens[eventName], adminActivitiesPageSize)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities for %s: %w", eventName, err)
@@ -125,7 +126,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 				}
 				var changeEvents []*v2.Event
 				var evtErr error
-				if adminGroupEventNames[evt.Name] {
+				if isGroupEvent {
 					changeEvents, evtErr = f.handleGroupEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
 				} else {
 					changeEvents, evtErr = f.handleUserEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
