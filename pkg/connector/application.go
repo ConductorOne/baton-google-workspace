@@ -9,8 +9,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
@@ -36,15 +34,21 @@ func (ar *applicationResource) ResourceType(_ context.Context) *v2.ResourceType 
 }
 
 func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
-	l := ctxzap.Extract(ctx)
-
 	var samlProfileMap map[string]string
 	if ar.client.CloudIdentityService != nil {
+		// The Cloud Identity service is only non-nil when the inboundsso.readonly scope was
+		// granted and service init succeeded, so a failure here is a transient/real API error,
+		// not a missing-scope condition. Do NOT swallow it: falling back to a nil profile map
+		// drops SAML apps discovered only via Cloud Identity AND flips the IDs of SAML apps
+		// found via login events from their stable profile name to a display-name-derived ID.
+		// A previously-synced SAML app would then change resource ID and c1 would prune the old
+		// resource and all of its access grants — a silent false-revocation on a transient blip.
+		// (When the scope is NOT granted, CloudIdentityService is nil and we consistently use
+		// display-name IDs every sync, so no ID flip occurs.)
 		var err error
 		samlProfileMap, err = ar.client.BuildSAMLProfileMap(ctx, ar.customerID)
 		if err != nil {
-			l.Info("google-workspace: failed to load SAML profiles from Cloud Identity; SAML app IDs will use display names. "+
-				"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
+			return nil, nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
 		}
 	}
 
