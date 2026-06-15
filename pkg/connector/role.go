@@ -107,12 +107,12 @@ func (o *roleResourceType) Grants(ctx context.Context, resource *v2.Resource, at
 
 	roleAssignments, err := o.client.ListRoleAssignments(ctx, o.customerId, resource.Id.Resource, bag.PageToken())
 	if err != nil {
-		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			// Role not found, return empty list
-			return nil, nil, nil
-		}
-		return nil, nil, err
+		// Propagate ALL errors (including 404). Returning an empty grant list with a nil
+		// error would make c1 treat the role as having zero assignments and prune every
+		// existing role membership — a silent mass false-revocation if the 404/5xx/429 was
+		// transient or the role was deleted mid-sync. Failing the sync is the safe choice;
+		// nothing is pruned and the next sync recovers. (Mirrors groupResourceType.Grants.)
+		return nil, nil, fmt.Errorf("google-workspace: failed to list role assignments for role %s: %w", resource.Id.Resource, err)
 	}
 	var rv []*v2.Grant
 	for _, roleAssignment := range roleAssignments.Items {

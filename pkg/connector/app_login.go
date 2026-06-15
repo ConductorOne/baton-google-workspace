@@ -7,8 +7,10 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -20,6 +22,8 @@ import (
 	"golang.org/x/sync/semaphore"
 	admin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	"google.golang.org/api/googleapi"
+
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
@@ -28,15 +32,15 @@ const (
 	reportsAppLogin = "login"
 	reportsAppSAML  = "saml"
 
-	samlAppIDPrefix              = "saml:"
+	samlAppIDPrefix               = "saml:"
 	googleWorkspaceAppID          = "google_workspace"
 	googleWorkspaceAppDisplayName = "Google Workspace"
 	// appLoginLookbackDays limits how far back login events are scanned.
 	// Since events are returned newest-first, this bounds the total pages fetched.
 	appLoginLookbackDays = 180
 	// appLoginMaxPages caps pagination for SAML events (OAuth is per-app, no pagination needed).
-	appLoginMaxPages     = 20
-	appDiscoveryWorkers  = 10
+	appLoginMaxPages    = 20
+	appDiscoveryWorkers = 10
 	// appDiscoveryMaxUserPages caps user pages scanned during OAuth app discovery.
 	appDiscoveryMaxUserPages = 200
 	// oauthPresenceValue is the sentinel stored when a user has authorized an OAuth app via
@@ -295,9 +299,27 @@ func discoverOAuthApps(
 }
 
 // fetchUserTokens concurrently fetches OAuth tokens for each user using a bounded worker pool.
+//
+// A failed ListTokens call is only tolerated (the user is skipped) when it is a genuine 404 —
+// i.e. the user was deleted mid-sync. Any other failure (403/429/5xx/network/context) is
+// surfaced as an error that aborts discovery. Silently skipping a user on a transient error
+// would drop that user's OAuth-app associations: apps only that user authorized may then be
+// missed entirely, and the user's app-access grants would be under-reported — which c1 prunes
+// as a revocation. Failing loudly forces a retry instead of persisting a partial result.
 func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwclient.GoogleWorkspaceClient, users []*admin.User) ([]userAppsResult, error) {
 	results := make([]userAppsResult, len(users))
 	var wg sync.WaitGroup
+	var (
+		errMu    sync.Mutex
+		firstErr error
+	)
+	recordErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
 
 	for i, u := range users {
 		if err := sem.Acquire(ctx, 1); err != nil {
@@ -320,7 +342,16 @@ func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwcli
 
 			tokenResp, err := client.ListTokens(ctx, user.Id)
 			if err != nil {
-				ctxzap.Extract(ctx).Debug("google-workspace-connector: failed to list tokens for user, skipping", zap.String("user_id", user.Id), zap.Error(err))
+				var gerr *googleapi.Error
+				if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+					// Benign: the user was deleted between listing and token fetch. Skipping
+					// them is correct — they have no apps to associate.
+					ctxzap.Extract(ctx).Debug("google-workspace-connector: user not found during token fetch, skipping", zap.String("user_id", user.Id), zap.Error(err))
+					return
+				}
+				// Transient/auth/network error: surface it so discovery aborts rather than
+				// persisting a partial OAuth-app map that c1 would treat as a revocation.
+				recordErr(fmt.Errorf("google-workspace-connector: failed to list tokens for user %s: %w", user.Id, err))
 				return
 			}
 
@@ -341,6 +372,9 @@ func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwcli
 
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return results, nil
 }
@@ -387,7 +421,6 @@ func storeOAuthPageResults(ctx context.Context, ss sessions.SessionStore, result
 
 	return nil
 }
-
 
 func discoverSAMLApps(profileMap map[string]string) map[string]string {
 	apps := make(map[string]string, len(profileMap))
