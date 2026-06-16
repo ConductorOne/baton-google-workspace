@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	cloudidentity "google.golang.org/api/cloudidentity/v1"
+	"google.golang.org/api/googleapi"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
@@ -332,34 +334,65 @@ type GoogleWorkspace struct {
 	// client is lazily initialised on first use via getClient().
 	clientMtx sync.Mutex
 	client    *gwclient.GoogleWorkspaceClient
+
+	// serviceInitRetry tunes the bounded retry-with-backoff applied around the
+	// OAuth token fetch during service initialization. Zero values fall back to
+	// the package defaults; tests override them to keep retries fast.
+	serviceInitRetryMax       int
+	serviceInitRetryBaseDelay time.Duration
+	serviceInitRetryMaxDelay  time.Duration
 }
+
+// Defaults for the bounded retry-with-backoff applied around the OAuth token
+// fetch in newGWSAdminServiceForScopes. A transient Google 5xx/429 (or network
+// blip) on a core scope must not abort the whole sync (IR-850): without retry,
+// #115 turned such transients into a fatal init error and a partial c1z.
+const (
+	defaultServiceInitRetryMax       = 4
+	defaultServiceInitRetryBaseDelay = 1 * time.Second
+	defaultServiceInitRetryMaxDelay  = 30 * time.Second
+)
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
 
-func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, newService newService[T], scopes ...string) (*T, error) {
+func newGWSAdminServiceForScopes[T any](ctx context.Context, c *GoogleWorkspace, newService newService[T], scopes ...string) (*T, error) {
 	l := ctxzap.Extract(ctx)
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, l))
 	if err != nil {
 		return nil, uhttp.WrapErrors(codes.Internal, "failed to create HTTP client", err)
 	}
 
-	config, err := google.JWTConfigFromJSON(credentials, scopes...)
+	config, err := google.JWTConfigFromJSON(c.credentials, scopes...)
 	if err != nil {
 		return nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to parse JWT config from credentials", err)
 	}
-	config.Subject = email
+	config.Subject = c.administratorEmail
 
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	tokenSrc := config.TokenSource(ctx)
-	token, err := tokenSrc.Token()
-	if err != nil {
-		l.Debug("google-workspace: failed fetching token", zap.Error(err))
-		var oe *oauth2.RetrieveError
-		if errors.As(err, &oe) {
-			if oe.Response != nil && oe.Response.StatusCode == http.StatusUnauthorized {
-				return nil, &GoogleWorkspaceOAuthUnauthorizedError{o: oe}
+
+	// Fetch the token with bounded retry-with-backoff. Google occasionally
+	// returns a transient 5xx/429 from the token endpoint; without retry such a
+	// blip on a core scope aborts the entire sync (IR-850). A 401 is a real
+	// authorization problem and is surfaced immediately so getService can try a
+	// scope upgrade.
+	var token *oauth2.Token
+	err = c.withServiceInitRetry(ctx, func() error {
+		t, tErr := tokenSrc.Token()
+		if tErr != nil {
+			l.Debug("google-workspace: failed fetching token", zap.Error(tErr))
+			var oe *oauth2.RetrieveError
+			if errors.As(tErr, &oe) {
+				if oe.Response != nil && oe.Response.StatusCode == http.StatusUnauthorized {
+					return &GoogleWorkspaceOAuthUnauthorizedError{o: oe}
+				}
 			}
+			return tErr
 		}
+		token = t
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -377,11 +410,96 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	return srv, nil
 }
 
+// withServiceInitRetry runs op, retrying with exponential backoff while op
+// returns a transient error (see isTransientServiceInitError). Permanent errors
+// — including authorization errors and context cancellation — are returned
+// immediately so callers (e.g. getService's scope-upgrade path) see them
+// unchanged. The backoff is bounded by the connector's serviceInitRetry* config.
+func (c *GoogleWorkspace) withServiceInitRetry(ctx context.Context, op func() error) error {
+	maxRetries := c.serviceInitRetryMax
+	if maxRetries <= 0 {
+		maxRetries = defaultServiceInitRetryMax
+	}
+	delay := c.serviceInitRetryBaseDelay
+	if delay <= 0 {
+		delay = defaultServiceInitRetryBaseDelay
+	}
+	maxDelay := c.serviceInitRetryMaxDelay
+	if maxDelay <= 0 {
+		maxDelay = defaultServiceInitRetryMaxDelay
+	}
+
+	l := ctxzap.Extract(ctx)
+	for attempt := 0; ; attempt++ {
+		err := op()
+		if err == nil {
+			return nil
+		}
+		if attempt >= maxRetries || !isTransientServiceInitError(err) {
+			return err
+		}
+
+		l.Warn("google-workspace: transient error initializing service, retrying after backoff",
+			zap.Int("attempt", attempt+1),
+			zap.Int("max_retries", maxRetries),
+			zap.Duration("delay", delay),
+			zap.Error(err))
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
+// isTransientServiceInitError reports whether an error from the OAuth token
+// fetch / service construction is transient and worth retrying. Transient:
+// HTTP 429 and 5xx from the token endpoint or a Google API, and network-level
+// failures. Not transient: authorization errors (handled separately), context
+// cancellation, and any other 4xx — those indicate a permanent problem.
+func isTransientServiceInitError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Never retry a shutting-down sync.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	// Non-2xx response from the OAuth token endpoint.
+	var re *oauth2.RetrieveError
+	if errors.As(err, &re) {
+		if re.Response == nil {
+			return false
+		}
+		code := re.Response.StatusCode
+		return code == http.StatusTooManyRequests || (code >= 500 && code <= 599)
+	}
+
+	// Error surfaced from a Google API client.
+	var ge *googleapi.Error
+	if errors.As(err, &ge) {
+		return ge.Code == http.StatusTooManyRequests || (ge.Code >= 500 && ge.Code <= 599)
+	}
+
+	// Network-level failures (connection reset, DNS blips, timeouts). net.Error
+	// also covers *url.Error returned by the token round-trip.
+	var ne net.Error
+	return errors.As(err, &ne)
+}
+
 func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.Service, error) {
 	if c.reportService != nil {
 		return c.reportService, nil
 	}
-	srv, err := newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
+	srv, err := newGWSAdminServiceForScopes(ctx, c, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create report service: %w", err)
 	}
@@ -746,7 +864,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 		}
 	}
 
-	service, err = newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, newService, scope)
+	service, err = newGWSAdminServiceForScopes(ctx, c, newService, scope)
 	if err != nil {
 		var ae *GoogleWorkspaceOAuthUnauthorizedError
 		if errors.As(err, &ae) {
