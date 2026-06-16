@@ -2,13 +2,18 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/session"
 	"github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
+	"google.golang.org/api/googleapi"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
@@ -48,7 +53,27 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		var err error
 		samlProfileMap, err = ar.client.BuildSAMLProfileMap(ctx, ar.customerID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
+			// Exception to the above: when the Cloud Identity API is not enabled in the
+			// customer's GCP project, the service still initialises (the scope was granted)
+			// but every call returns a permanent 403 SERVICE_DISABLED. That is a stable
+			// feature-unavailable condition, not a transient blip — such a customer's SAML
+			// apps have ALWAYS been resolved by display name, so there is no profile-name
+			// state to flip and nothing to prune. Treat it like a missing scope: warn and
+			// fall back to display-name IDs instead of failing the whole sync. Any other
+			// failure (transient 5xx/429, network, or a 403 that is NOT "API disabled")
+			// still propagates, preserving the prune-safety guarantee above.
+			if isCloudIdentityAPIDisabledError(err) {
+				// Logged at Info (not Warn) to match the existing soft-failure log in
+				// fetchSAMLProfileMap and the Debug-level missing-scope handling: a
+				// disabled API is an expected, stable customer-config state, not an alert.
+				ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
+					"SAML app IDs will use display names. Enable the Cloud Identity API "+
+					"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
+					zap.Error(err))
+				samlProfileMap = nil
+			} else {
+				return nil, nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
+			}
 		}
 	}
 
@@ -150,4 +175,35 @@ func (ar *applicationResource) Grants(ctx context.Context, resource *v2.Resource
 	}
 
 	return grants, &rs.SyncOpResults{}, nil
+}
+
+// isCloudIdentityAPIDisabledError reports whether err is Google's permanent
+// "this API is not enabled for the project" failure: HTTP 403 with reason
+// SERVICE_DISABLED (structured google.rpc.ErrorInfo) or accessNotConfigured
+// (legacy error item). This is distinct from a transient 403/5xx or a network
+// error — it is a stable customer-configuration condition (the Cloud Identity
+// API has never been enabled), so it is safe to treat like a missing scope.
+func isCloudIdentityAPIDisabledError(err error) bool {
+	var ge *googleapi.Error
+	if !errors.As(err, &ge) {
+		return false
+	}
+	if ge.Code != http.StatusForbidden {
+		return false
+	}
+	// Legacy error items (e.g. {"reason": "accessNotConfigured"}).
+	for _, item := range ge.Errors {
+		if item.Reason == "accessNotConfigured" {
+			return true
+		}
+	}
+	// Structured details carrying google.rpc.ErrorInfo{reason: "SERVICE_DISABLED"}.
+	for _, detail := range ge.Details {
+		if m, ok := detail.(map[string]interface{}); ok {
+			if reason, _ := m["reason"].(string); reason == "SERVICE_DISABLED" {
+				return true
+			}
+		}
+	}
+	return false
 }
