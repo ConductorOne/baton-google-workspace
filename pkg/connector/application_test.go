@@ -138,3 +138,56 @@ func TestBuildSAMLProfileMapOtherErrorsNotClassified(t *testing.T) {
 		})
 	}
 }
+
+// TestFetchSAMLProfileMapSwallowsDisabledAPI confirms the SAML event-feed path treats a disabled
+// Cloud Identity API as a soft failure: nil map, nil error, so the caller falls back to
+// display-name IDs (consistent with applicationResource.List).
+func TestFetchSAMLProfileMapSwallowsDisabledAPI(t *testing.T) {
+	client := &gwclient.GoogleWorkspaceClient{
+		CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusForbidden, cloudIdentityDisabledBody),
+	}
+
+	m, err := fetchSAMLProfileMap(context.Background(), client, "customer")
+	if err != nil {
+		t.Fatalf("expected a disabled API to be a soft failure (nil error), got %v", err)
+	}
+	if m != nil {
+		t.Fatalf("expected a nil profile map on disabled API, got %v", m)
+	}
+}
+
+// TestFetchSAMLProfileMapPropagatesOtherErrors is the core of this change: every non-disabled
+// failure (a generic 403, 5xx, 429) must now propagate instead of being silently swallowed,
+// closing the second prune-risk call site that #116 left untouched.
+func TestFetchSAMLProfileMapPropagatesOtherErrors(t *testing.T) {
+	for _, status := range []int{
+		http.StatusForbidden, // generic 403 (no SERVICE_DISABLED / accessNotConfigured)
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+	} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			client := &gwclient.GoogleWorkspaceClient{
+				CloudIdentityService: newCloudIdentityServiceReturning(t, status, `{"error":{"code":`+fmt.Sprint(status)+`,"message":"injected failure"}}`),
+			}
+
+			m, err := fetchSAMLProfileMap(context.Background(), client, "customer")
+			if err == nil {
+				t.Fatalf("status %d: expected fetchSAMLProfileMap to propagate the error, got nil (prune risk)", status)
+			}
+			if m != nil {
+				t.Fatalf("status %d: expected nil map on error, got %v", status, m)
+			}
+		})
+	}
+}
+
+// TestFetchSAMLProfileMapNilServiceIsSoftFailure confirms the scope-not-granted case (nil service)
+// remains a soft failure with no error.
+func TestFetchSAMLProfileMapNilServiceIsSoftFailure(t *testing.T) {
+	m, err := fetchSAMLProfileMap(context.Background(), &gwclient.GoogleWorkspaceClient{}, "customer")
+	if err != nil || m != nil {
+		t.Fatalf("expected (nil, nil) when CloudIdentityService is nil, got (%v, %v)", m, err)
+	}
+}

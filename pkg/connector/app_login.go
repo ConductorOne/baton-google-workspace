@@ -431,18 +431,20 @@ func discoverSAMLApps(profileMap map[string]string) map[string]string {
 }
 
 // fetchSAMLProfileMap calls Cloud Identity to build a displayName → profile.Name map.
-// Returns nil without error if the service is unavailable or the call fails (soft failure).
-func fetchSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) map[string]string {
+// Returns (nil, nil) when the service is unavailable (scope not granted) or the Cloud Identity
+// API is disabled for the project (a permanent, expected soft failure — see
+// handleSAMLProfileMapError). Any other failure (transient 5xx/429, network, or a non-disabled
+// 403) is returned so the caller aborts rather than silently fall back to display-name IDs and
+// risk flipping SAML app IDs.
+func fetchSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
 	if client.CloudIdentityService == nil {
-		return nil
+		return nil, nil
 	}
 	m, err := client.BuildSAMLProfileMap(ctx, customerID)
 	if err != nil {
-		ctxzap.Extract(ctx).Info("google-workspace: failed to load SAML profiles from Cloud Identity; SAML app IDs will use display names. "+
-			"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
-		return nil
+		return nil, handleSAMLProfileMapError(ctx, err)
 	}
-	return m
+	return m, nil
 }
 
 // loadSAMLProfileMap returns the SAML profile map, using the session store as a cache
@@ -450,7 +452,7 @@ func fetchSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceCl
 func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
 	ss, _ := ctx.Value(sessions.SessionStoreKey{}).(sessions.SessionStore)
 	if ss == nil {
-		return fetchSAMLProfileMap(ctx, client, customerID), nil
+		return fetchSAMLProfileMap(ctx, client, customerID)
 	}
 
 	_, loaded, err := session.GetJSON[string](ctx, ss, "done", samlProfileMapLoadedNamespace)
@@ -465,7 +467,10 @@ func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceCli
 		return m, nil
 	}
 
-	profileMap := fetchSAMLProfileMap(ctx, client, customerID)
+	profileMap, err := fetchSAMLProfileMap(ctx, client, customerID)
+	if err != nil {
+		return nil, err
+	}
 	if len(profileMap) > 0 {
 		if err := session.SetManyJSON(ctx, ss, profileMap, samlProfileMapNamespace); err != nil {
 			return nil, fmt.Errorf("google-workspace-connector: failed to store saml profile map in session: %w", err)

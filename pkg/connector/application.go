@@ -53,26 +53,12 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		var err error
 		samlProfileMap, err = ar.client.BuildSAMLProfileMap(ctx, ar.customerID)
 		if err != nil {
-			// Exception to the above: when the Cloud Identity API is not enabled in the
-			// customer's GCP project, the service still initialises (the scope was granted)
-			// but every call returns a permanent 403 SERVICE_DISABLED. That is a stable
-			// feature-unavailable condition, not a transient blip — such a customer's SAML
-			// apps have ALWAYS been resolved by display name, so there is no profile-name
-			// state to flip and nothing to prune. Treat it like a missing scope: warn and
-			// fall back to display-name IDs instead of failing the whole sync. Any other
-			// failure (transient 5xx/429, network, or a 403 that is NOT "API disabled")
-			// still propagates, preserving the prune-safety guarantee above.
-			if isCloudIdentityAPIDisabledError(err) {
-				// Logged at Info (not Warn) to match the existing soft-failure log in
-				// fetchSAMLProfileMap and the Debug-level missing-scope handling: a
-				// disabled API is an expected, stable customer-config state, not an alert.
-				ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
-					"SAML app IDs will use display names. Enable the Cloud Identity API "+
-					"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
-					zap.Error(err))
-				samlProfileMap = nil
-			} else {
-				return nil, nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
+			// handleSAMLProfileMapError swallows only the permanent "Cloud Identity API
+			// disabled" 403 (falling back to display-name IDs); every other failure is
+			// returned so the sync aborts rather than silently flip SAML app IDs and prune
+			// the old apps + grants. samlProfileMap is already nil on error.
+			if hErr := handleSAMLProfileMapError(ctx, err); hErr != nil {
+				return nil, nil, hErr
 			}
 		}
 	}
@@ -206,4 +192,23 @@ func isCloudIdentityAPIDisabledError(err error) bool {
 		}
 	}
 	return false
+}
+
+// handleSAMLProfileMapError classifies a BuildSAMLProfileMap failure for callers that build a
+// SAML displayName → profile.Name map. A permanent "Cloud Identity API not enabled" 403 is a
+// soft failure: it is logged and nil is returned so the caller falls back to display-name SAML
+// IDs (safe — such a project has always used display-name IDs, so there is nothing to flip or
+// prune). Every other failure (transient 5xx/429, network, or a non-disabled 403) is returned
+// wrapped so the caller aborts rather than silently flip SAML app IDs and prune the old apps.
+func handleSAMLProfileMapError(ctx context.Context, err error) error {
+	if isCloudIdentityAPIDisabledError(err) {
+		// Info (not Warn) to match the Debug-level missing-scope handling: a disabled API is
+		// an expected, stable customer-config state, not an alert.
+		ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
+			"SAML app IDs will use display names. Enable the Cloud Identity API "+
+			"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
+			zap.Error(err))
+		return nil
+	}
+	return fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
 }
