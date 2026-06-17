@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -348,6 +349,10 @@ type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*
 // Both must classify as authorization errors; only matching 401 turned a missing optional
 // scope (e.g. admin.directory.rolemanagement, used only for role provisioning) into a fatal
 // sync failure once service init became non-tolerant.
+//
+// The two-legged JWT flow (golang.org/x/oauth2/jwt) builds the RetrieveError with only
+// Response and Body set — unlike the standard token exchange, it never parses the body into
+// RetrieveError.ErrorCode. So the RFC 6749 'error' code must be read from Body here.
 func isScopeUnauthorized(oe *oauth2.RetrieveError) bool {
 	if oe.Response == nil {
 		return false
@@ -356,10 +361,26 @@ func isScopeUnauthorized(oe *oauth2.RetrieveError) bool {
 	case http.StatusUnauthorized:
 		return true
 	case http.StatusForbidden:
-		return oe.ErrorCode == "access_denied"
+		return oauthErrorCode(oe) == "access_denied"
 	default:
 		return false
 	}
+}
+
+// oauthErrorCode returns the RFC 6749 'error' code for a token-fetch failure, preferring the
+// pre-parsed RetrieveError.ErrorCode and falling back to parsing the raw response Body (which is
+// the only place the JWT flow records it).
+func oauthErrorCode(oe *oauth2.RetrieveError) string {
+	if oe.ErrorCode != "" {
+		return oe.ErrorCode
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(oe.Body, &body); err != nil {
+		return ""
+	}
+	return body.Error
 }
 
 func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, newService newService[T], scopes ...string) (*T, error) {
