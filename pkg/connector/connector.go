@@ -336,6 +336,32 @@ type GoogleWorkspace struct {
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
 
+// isScopeUnauthorized reports whether an OAuth token-fetch error means the requested
+// scope is not authorized for this service account, so the dependent service should be
+// treated as unavailable rather than aborting the sync.
+//
+// Google returns two distinct shapes for an unauthorized scope:
+//   - 401 Unauthorized for a service account that is not configured for domain-wide delegation.
+//   - 403 Forbidden with error "access_denied" / "Requested client not authorized." when the
+//     client is delegated but the specific scope has not been granted in the Admin console.
+//
+// Both must classify as authorization errors; only matching 401 turned a missing optional
+// scope (e.g. admin.directory.rolemanagement, used only for role provisioning) into a fatal
+// sync failure once service init became non-tolerant.
+func isScopeUnauthorized(oe *oauth2.RetrieveError) bool {
+	if oe.Response == nil {
+		return false
+	}
+	switch oe.Response.StatusCode {
+	case http.StatusUnauthorized:
+		return true
+	case http.StatusForbidden:
+		return oe.ErrorCode == "access_denied"
+	default:
+		return false
+	}
+}
+
 func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, newService newService[T], scopes ...string) (*T, error) {
 	l := ctxzap.Extract(ctx)
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, l))
@@ -355,10 +381,8 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	if err != nil {
 		l.Debug("google-workspace: failed fetching token", zap.Error(err))
 		var oe *oauth2.RetrieveError
-		if errors.As(err, &oe) {
-			if oe.Response != nil && oe.Response.StatusCode == http.StatusUnauthorized {
-				return nil, &GoogleWorkspaceOAuthUnauthorizedError{o: oe}
-			}
+		if errors.As(err, &oe) && isScopeUnauthorized(oe) {
+			return nil, &GoogleWorkspaceOAuthUnauthorizedError{o: oe}
 		}
 		return nil, err
 	}
