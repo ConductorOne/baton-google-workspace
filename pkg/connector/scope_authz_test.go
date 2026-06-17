@@ -18,12 +18,18 @@ func TestIsScopeUnauthorized(t *testing.T) {
 		name      string
 		status    int
 		errorCode string
+		body      string
 		nilResp   bool
 		want      bool
 	}{
 		{name: "401 unauthorized (service account not delegated)", status: http.StatusUnauthorized, want: true},
-		{name: "403 access_denied (scope not granted in Admin console)", status: http.StatusForbidden, errorCode: "access_denied", want: true},
+		{name: "403 access_denied via ErrorCode", status: http.StatusForbidden, errorCode: "access_denied", want: true},
+		// JWT two-legged flow: ErrorCode is empty, the code lives only in Body. This is the real
+		// shape Google returns for an unauthorized DWD scope.
+		{name: "403 access_denied via Body (JWT flow)", status: http.StatusForbidden, body: `{"error":"access_denied","error_description":"Requested client not authorized."}`, want: true},
 		{name: "403 without access_denied (genuine permission error)", status: http.StatusForbidden, errorCode: "insufficient_scope", want: false},
+		{name: "403 with unrelated Body error", status: http.StatusForbidden, body: `{"error":"insufficient_scope"}`, want: false},
+		{name: "403 empty body", status: http.StatusForbidden, want: false},
 		{name: "500 server error", status: http.StatusInternalServerError, want: false},
 		{name: "nil response", nilResp: true, want: false},
 	}
@@ -31,7 +37,7 @@ func TestIsScopeUnauthorized(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			oe := &oauth2.RetrieveError{ErrorCode: tc.errorCode}
+			oe := &oauth2.RetrieveError{ErrorCode: tc.errorCode, Body: []byte(tc.body)}
 			if !tc.nilResp {
 				oe.Response = &http.Response{StatusCode: tc.status}
 			}
