@@ -477,7 +477,7 @@ func (f *failedResourceSyncer) Grants(_ context.Context, _ *v2.Resource, _ rs.Sy
 	return nil, nil, f.err
 }
 
-func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
+func getFromCache[T any](c *GoogleWorkspace, scope string) (*T, error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	service, ok := c.serviceCache[scope]
@@ -496,7 +496,7 @@ func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) 
 func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, newService newService[T]) (*T, error) {
 	l := ctxzap.Extract(ctx)
 
-	service, err := getFromCache[T](ctx, c, scope)
+	service, err := getFromCache[T](c, scope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service from cache: %w", err)
 	}
@@ -504,9 +504,9 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 		return service, nil
 	}
 
-	upgradedScope, upgraded := upgradeScope(ctx, scope)
+	upgradedScope, upgraded := upgradeScope(scope)
 	if upgraded {
-		service, err := getFromCache[T](ctx, c, upgradedScope)
+		service, err := getFromCache[T](c, upgradedScope)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get upgraded service from cache: %w", err)
 		}
@@ -519,7 +519,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 	if err != nil {
 		var ae *GoogleWorkspaceOAuthUnauthorizedError
 		if errors.As(err, &ae) {
-			upgradedScope, upgraded := upgradeScope(ctx, scope)
+			upgradedScope, upgraded := upgradeScope(scope)
 			if upgraded {
 				l.Debug(
 					"google-workspace: unauthorized, attempting scope upgrade",
@@ -527,7 +527,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 					zap.String("scope", scope),
 					zap.String("upgraded_scope", upgradedScope),
 				)
-				return getService[T](ctx, c, upgradedScope, newService)
+				return getService(ctx, c, upgradedScope, newService)
 			}
 		}
 		return nil, err
@@ -540,7 +540,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 }
 
 // upgradeScope strips '.readonly' from the given scope, if it exists.
-func upgradeScope(ctx context.Context, scope string) (string, bool) {
+func upgradeScope(scope string) (string, bool) {
 	if strings.HasSuffix(scope, ".readonly") {
 		return strings.TrimSuffix(scope, ".readonly"), true
 	}
