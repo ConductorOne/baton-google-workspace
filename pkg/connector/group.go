@@ -276,18 +276,9 @@ func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceI
 	err := o.client.DeleteGroup(ctx, resourceId.Resource)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusNotFound {
-				// Group already deleted, return success
-				return nil, nil
-			}
-			if gerr.Code == http.StatusForbidden {
-				return nil, fmt.Errorf(
-					"google-workspace: failed to delete group (403 Forbidden). "+
-						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions: %w",
-					admin.AdminDirectoryGroupScope, err)
-			}
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// Group already deleted, return success (idempotent).
+			return nil, nil
 		}
 		return nil, err
 	}

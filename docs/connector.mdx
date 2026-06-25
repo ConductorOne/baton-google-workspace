@@ -41,6 +41,9 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | create_group | `email` (string, required)<br/>`name` (string, required)<br/>`description` (string, optional) | Creates a new Google Workspace group |
 | modify_group_settings | `group_key` (string, required)<br/>`allow_external_members` (boolean, optional)<br/>`allow_web_posting` (boolean, optional)<br/>`who_can_post_message` (string, optional)<br/>`message_moderation_level` (string, optional) | Update settings for an existing Google Group |
 | update_user_manager | `user_id` (string, required)<br/> `manager_email` (string, required) | Updates the manager relation for a user in Google Workspace. Updates the 'manager' entry in the user's Relations field |
+| update_user_profile | `user_id` (string, required)<br/>`given_name` (string, optional)<br/>`family_name` (string, optional)<br/>`recovery_email` (string, optional)<br/>`recovery_phone` (string, optional)<br/>`custom_schemas` (JSON string, optional) | Applies a partial update to a user's profile using patch semantics (only the provided fields change). Supports name fields, recovery details, and custom-schema attribute values. Custom-schema definitions must already exist in the Workspace tenant. At least one updatable field is required. |
+| update_user | `user_id` (resource ID, required)<br/>`user_profile` (JSON string, required) | Updates a user's profile from a `user_profile` JSON object (keys: `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `custom_schemas`). Consumed by C1 push rules for automated profile sync. |
+| make_admin | `user_id` (string, required)<br/>`status` (boolean, required) | Promotes (`status=true`) or demotes (`status=false`) a user to/from super administrator |
 
 ## Gather Google Workspace credentials 
 

@@ -178,6 +178,40 @@ func (c *GoogleWorkspaceClient) UpdateUser(ctx context.Context, userId string, u
 	return resp, nil
 }
 
+// PatchUser applies a partial update to a user. Unlike UpdateUser (which calls
+// Users.Update with full-replace semantics), Patch only modifies the fields
+// present in the request, so it does not stomp server-side state for fields the
+// caller did not intend to change. Use ForceSendFields on the supplied user to
+// send zero-valued fields (e.g. clearing a value or setting a bool to false).
+// https://developers.google.com/workspace/admin/directory/reference/rest/v1/users/patch
+func (c *GoogleWorkspaceClient) PatchUser(ctx context.Context, userId string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
+	if c.UserProvisioningService == nil {
+		return nil, errServiceNotAvailable("user provisioning service")
+	}
+	resp, err := c.UserProvisioningService.Users.Patch(userId, user).Context(ctx).Do()
+	if err != nil {
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to patch user: %s", userId))
+	}
+	return resp, nil
+}
+
+// MakeAdmin promotes (status=true) or demotes (status=false) a user to/from
+// super administrator.
+// https://developers.google.com/workspace/admin/directory/reference/rest/v1/users/makeAdmin
+func (c *GoogleWorkspaceClient) MakeAdmin(ctx context.Context, userId string, status bool) error {
+	if c.UserProvisioningService == nil {
+		return errServiceNotAvailable("user provisioning service")
+	}
+	err := c.UserProvisioningService.Users.MakeAdmin(userId, &directoryAdmin.UserMakeAdmin{
+		Status:          status,
+		ForceSendFields: []string{"Status"},
+	}).Context(ctx).Do()
+	if err != nil {
+		return wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to set admin status for user: %s", userId))
+	}
+	return nil
+}
+
 func (c *GoogleWorkspaceClient) DeleteUser(ctx context.Context, userId string) error {
 	if c.UserProvisioningService == nil {
 		return errServiceNotAvailable("user provisioning service")

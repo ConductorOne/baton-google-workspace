@@ -79,7 +79,11 @@ var (
 			v2.ResourceType_TRAIT_USER,
 		},
 		Annotations: v1AnnotationsWithPermissions("user", capabilityPermissions(
-			"admin.directory.user.readonly",
+			// Write scope: the user resource supports provisioning (create/delete)
+			// and write actions (update_user_profile, update_user, make_admin), so
+			// the declared capability must request admin.directory.user, not the
+			// read-only variant. The write scope subsumes read.
+			"admin.directory.user",
 			"admin.directory.user.alias.readonly",
 			"admin.directory.domain.readonly",
 		)),
@@ -882,6 +886,8 @@ func (f *failedEventFeed) ListEvents(_ context.Context, _ *timestamppb.Timestamp
 	return nil, nil, nil, f.err
 }
 
+var _ connectorbuilder.GlobalActionProvider = (*GoogleWorkspace)(nil)
+
 func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
 	l := ctxzap.Extract(ctx)
 
@@ -908,6 +914,10 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		l.Error("failed to register action", zap.Error(err))
 		return fmt.Errorf("failed to register transfer_user_calendar action: %w", err)
+	}
+	if err := registry.Register(ctx, updateUserGlobalActionSchema, c.updateUserActionHandler); err != nil {
+		l.Error("failed to register action", zap.Error(err))
+		return fmt.Errorf("failed to register update_user action: %w", err)
 	}
 
 	return nil
