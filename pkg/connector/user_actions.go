@@ -232,7 +232,7 @@ var (
 		Arguments: []*config.Field{
 			{
 				Name:        "user_id",
-				DisplayName: "User",
+				DisplayName: displayUser,
 				Description: "The user to update.",
 				IsRequired:  true,
 				Field: &config.Field_ResourceIdField{
@@ -244,21 +244,21 @@ var (
 				},
 			},
 			{
-				Name:        "given_name",
+				Name:        argGivenName,
 				DisplayName: "Given Name",
 				Description: "New first/given name for the user.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  false,
 			},
 			{
-				Name:        "family_name",
+				Name:        argFamilyName,
 				DisplayName: "Family Name",
 				Description: "New last/family name for the user.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  false,
 			},
 			{
-				Name:        "recovery_email",
+				Name:        argRecoveryEmail,
 				DisplayName: "Recovery Email",
 				Description: "New recovery email address. Send an empty string to clear it.",
 				Field:       &config.Field_StringField{},
@@ -272,7 +272,7 @@ var (
 				IsRequired:  false,
 			},
 			{
-				Name:        "custom_schemas",
+				Name:        argCustomSchemas,
 				DisplayName: "Custom Schemas",
 				Description: "JSON object mapping schema name to its field values, e.g. " +
 					`{"MySchema":{"region":"emea"}}. Sent verbatim to the Directory API customSchemas field. ` +
@@ -305,7 +305,7 @@ var (
 		Arguments: []*config.Field{
 			{
 				Name:        "user_id",
-				DisplayName: "User",
+				DisplayName: displayUser,
 				Description: "The user whose super-admin status should be changed.",
 				IsRequired:  true,
 				Field: &config.Field_ResourceIdField{
@@ -317,7 +317,7 @@ var (
 				},
 			},
 			{
-				Name:        "status",
+				Name:        fieldStatus,
 				DisplayName: "Admin Status",
 				Description: "true to grant super-admin, false to revoke it.",
 				Field:       &config.Field_BoolField{},
@@ -820,16 +820,16 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 	}
 
 	patch := userProfilePatch{}
-	if _, ok := args.Fields["given_name"]; ok {
-		v := getStringField(args, "given_name")
+	if _, ok := args.Fields[argGivenName]; ok {
+		v := getStringField(args, argGivenName)
 		patch.givenName = &v
 	}
-	if _, ok := args.Fields["family_name"]; ok {
-		v := getStringField(args, "family_name")
+	if _, ok := args.Fields[argFamilyName]; ok {
+		v := getStringField(args, argFamilyName)
 		patch.familyName = &v
 	}
-	if _, ok := args.Fields["recovery_email"]; ok {
-		v := getStringField(args, "recovery_email")
+	if _, ok := args.Fields[argRecoveryEmail]; ok {
+		v := getStringField(args, argRecoveryEmail)
 		patch.recoveryEmail = &v
 	}
 	if _, ok := args.Fields["recovery_phone"]; ok {
@@ -840,7 +840,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 	// Custom schemas: raw JSON object mapping schemaName -> { fieldName: value },
 	// passed verbatim to the Directory API. Schema definitions are managed outside
 	// the connector (see ticket scope).
-	if raw := getStringField(args, "custom_schemas"); raw != "" {
+	if raw := getStringField(args, argCustomSchemas); raw != "" {
 		var schemas map[string]googleapi.RawMessage
 		if err := json.Unmarshal([]byte(raw), &schemas); err != nil {
 			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid custom_schemas JSON: %v", err))
@@ -885,7 +885,7 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 		return nil, nil, err
 	}
 
-	status, ok := getBoolField(args, "status")
+	status, ok := getBoolField(args, fieldStatus)
 	if !ok {
 		l.Debug("google-workspace: user action handler: missing status argument", zap.Any("args", args))
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing status argument")
@@ -898,7 +898,7 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 
 	l.Debug("google-workspace: user action handler: updated admin status",
 		zap.String("user_id", userId),
-		zap.Bool("status", status))
+		zap.Bool(fieldStatus, status))
 
 	return actions.NewReturnValues(true), nil, nil
 }
@@ -985,6 +985,12 @@ const (
 	actionUpdateUser = "update_user"
 	argUserProfile   = "user_profile"
 	argUserID        = "user_id"
+
+	argGivenName     = "given_name"
+	argFamilyName    = "family_name"
+	argRecoveryEmail = "recovery_email"
+	argCustomSchemas = "custom_schemas"
+	displayUser      = "User"
 )
 
 // updateUserGlobalActionSchema is the global (account-level) profile-update
@@ -1001,7 +1007,7 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 	Arguments: []*config.Field{
 		{
 			Name:        argUserID,
-			DisplayName: "User",
+			DisplayName: displayUser,
 			Description: "The user to update.",
 			IsRequired:  true,
 			Field: &config.Field_ResourceIdField{
@@ -1093,19 +1099,19 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 // to a userProfilePatch. Only keys present in the object are applied.
 func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 	patch := userProfilePatch{}
-	if v, ok := stringFromJSON(profile, "given_name", "givenName"); ok {
+	if v, ok := stringFromJSON(profile, argGivenName, "givenName"); ok {
 		patch.givenName = &v
 	}
-	if v, ok := stringFromJSON(profile, "family_name", "familyName"); ok {
+	if v, ok := stringFromJSON(profile, argFamilyName, "familyName"); ok {
 		patch.familyName = &v
 	}
-	if v, ok := stringFromJSON(profile, "recovery_email", "recoveryEmail"); ok {
+	if v, ok := stringFromJSON(profile, argRecoveryEmail, "recoveryEmail"); ok {
 		patch.recoveryEmail = &v
 	}
 	if v, ok := stringFromJSON(profile, "recovery_phone", "recoveryPhone"); ok {
 		patch.recoveryPhone = &v
 	}
-	if raw, ok := profile["custom_schemas"]; ok {
+	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
 		if !ok {
 			return patch, fmt.Errorf("custom_schemas must be a JSON object")

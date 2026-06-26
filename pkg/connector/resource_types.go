@@ -41,7 +41,7 @@ var (
 	}
 	resourceTypeUser = &v2.ResourceType{
 		Id:          "user",
-		DisplayName: "User",
+		DisplayName: displayUser,
 		Traits: []v2.ResourceType_Trait{
 			v2.ResourceType_TRAIT_USER,
 		},
