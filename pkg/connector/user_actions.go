@@ -906,7 +906,8 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 // userProfilePatch holds the optional profile fields to apply with patch
 // semantics. A nil pointer leaves the field untouched; a non-nil pointer
 // (including a pointer to the empty string) is sent to the API so callers can
-// clear a value.
+// clear a value. Exception: the name fields (givenName/familyName) ignore empty
+// strings — Google rejects empty names and blanking a name is never intended.
 type userProfilePatch struct {
 	givenName     *string
 	familyName    *string
@@ -929,8 +930,13 @@ func applyUserProfilePatch(
 	forceSend := make([]string, 0)
 
 	// Name fields. A patch replaces the whole "name" object, so read-modify-write
-	// to avoid clearing the sibling field the caller did not set.
-	if patch.givenName != nil || patch.familyName != nil {
+	// to avoid clearing the sibling field the caller did not set. Unlike the
+	// recovery fields (where empty means "clear"), an empty name value is treated
+	// as "not provided": Google rejects empty given/family names and blanking a
+	// name is never an intended outcome, so empty values are ignored.
+	setGiven := patch.givenName != nil && *patch.givenName != ""
+	setFamily := patch.familyName != nil && *patch.familyName != ""
+	if setGiven || setFamily {
 		current, err := client.GetUserFullForProvisioning(ctx, userId)
 		if err != nil {
 			return nil, nil, err
@@ -939,10 +945,10 @@ func applyUserProfilePatch(
 		if current.Name != nil {
 			*name = *current.Name
 		}
-		if patch.givenName != nil {
+		if setGiven {
 			name.GivenName = *patch.givenName
 		}
-		if patch.familyName != nil {
+		if setFamily {
 			name.FamilyName = *patch.familyName
 		}
 		// FullName is server-derived from given/family; clear it so it is recomputed.

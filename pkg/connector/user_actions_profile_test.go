@@ -147,6 +147,65 @@ func TestUpdateUserProfile_NameFields_MergesAndPatches(t *testing.T) {
 	}
 }
 
+func TestUpdateUserProfile_EmptyNameValue_IsIgnored(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Old", FamilyName: "Name"},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	// Empty given_name must NOT blank the name; the non-empty family_name still applies.
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":     strArg("user123"),
+		"given_name":  strArg(""),
+		"family_name": strArg("Changed"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+	if state.patchCount != 1 {
+		t.Fatalf("expected 1 PATCH, got %d", state.patchCount)
+	}
+	if got := state.lastPatchBody.Name.GivenName; got != "Old" {
+		t.Fatalf("expected GivenName preserved as 'Old', got %q", got)
+	}
+	if got := state.lastPatchBody.Name.FamilyName; got != "Changed" {
+		t.Fatalf("expected FamilyName 'Changed', got %q", got)
+	}
+}
+
+func TestUpdateUserProfile_OnlyEmptyName_NoUpdatableField(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	// Only an empty name value -> nothing to update -> validation error, no PATCH.
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":    strArg("user123"),
+		"given_name": strArg(""),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err == nil {
+		t.Fatalf("expected error when the only provided field is an empty name")
+	}
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH, got %d", state.patchCount)
+	}
+}
+
 func TestUpdateUserProfile_CustomSchemas_SentVerbatim(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
