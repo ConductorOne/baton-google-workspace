@@ -609,35 +609,26 @@ func (f *failedEventFeed) ListEvents(_ context.Context, _ *timestamppb.Timestamp
 var _ connectorbuilder.GlobalActionProvider = (*GoogleWorkspace)(nil)
 
 func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
-	l := ctxzap.Extract(ctx)
-
 	if err := registry.Register(ctx, updateUserStatusActionSchema, c.updateUserStatus); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register update_user_status action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register update_user_status action: %w", err)
 	}
 	if err := registry.Register(ctx, transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register transfer_user_drive_files action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register transfer_user_drive_files action: %w", err)
 	}
 	if err := registry.Register(ctx, changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register change_user_primary_email action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register change_user_primary_email action: %w", err)
 	}
 	if err := registry.Register(ctx, disableUserActionSchema, c.disableUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register disable_user action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register disable_user action: %w", err)
 	}
 	if err := registry.Register(ctx, enableUserActionSchema, c.enableUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register enable_user action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register enable_user action: %w", err)
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register transfer_user_calendar action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register transfer_user_calendar action: %w", err)
 	}
 	if err := registry.Register(ctx, updateUserGlobalActionSchema, c.updateUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register update_user action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register update_user action: %w", err)
 	}
 
 	return nil

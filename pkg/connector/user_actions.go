@@ -232,10 +232,16 @@ var (
 		Arguments: []*config.Field{
 			{
 				Name:        "user_id",
-				DisplayName: "User ID",
-				Description: "The resource ID of the user to update.",
-				Field:       &config.Field_StringField{},
+				DisplayName: "User",
+				Description: "The user to update.",
 				IsRequired:  true,
+				Field: &config.Field_ResourceIdField{
+					ResourceIdField: &config.ResourceIdField{
+						Rules: &config.ResourceIDRules{
+							AllowedResourceTypeIds: []string{resourceTypeUser.Id},
+						},
+					},
+				},
 			},
 			{
 				Name:        "given_name",
@@ -299,10 +305,16 @@ var (
 		Arguments: []*config.Field{
 			{
 				Name:        "user_id",
-				DisplayName: "User ID",
-				Description: "The resource ID of the user whose super-admin status should be changed.",
-				Field:       &config.Field_StringField{},
+				DisplayName: "User",
+				Description: "The user whose super-admin status should be changed.",
 				IsRequired:  true,
+				Field: &config.Field_ResourceIdField{
+					ResourceIdField: &config.ResourceIdField{
+						Rules: &config.ResourceIDRules{
+							AllowedResourceTypeIds: []string{resourceTypeUser.Id},
+						},
+					},
+				},
 			},
 			{
 				Name:        "status",
@@ -402,8 +414,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 
 		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 		if err != nil {
-			l.Error("failed to build resource return field", zap.Error(err))
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
 
 		return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -439,14 +450,12 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	// Create the user resource
 	userResource, err := o.userResource(ctx, updatedUser)
 	if err != nil {
-		l.Error("failed to create user resource", zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
 	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 	if err != nil {
-		l.Error("failed to build resource return field", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -747,8 +756,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 
 		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 		if err != nil {
-			l.Error("failed to build resource return field", zap.Error(err))
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
 
 		return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -785,14 +793,12 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	// Create the user resource
 	userResource, err := o.userResource(ctx, updatedUser)
 	if err != nil {
-		l.Error("failed to create user resource", zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
 	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 	if err != nil {
-		l.Error("failed to build resource return field", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -853,14 +859,12 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 
 	userResource, err := o.userResource(ctx, updatedUser)
 	if err != nil {
-		l.Error("failed to create user resource", zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
 	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 	if err != nil {
-		l.Error("failed to build resource return field", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
