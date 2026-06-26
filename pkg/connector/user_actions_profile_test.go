@@ -60,7 +60,13 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 		switch r.Method {
 		case http.MethodGet:
 			state.getCount++
-			_ = json.NewEncoder(w).Encode(u)
+			_ = json.NewEncoder(w).Encode(safeUserResponse{
+				Id:            u.Id,
+				PrimaryEmail:  u.PrimaryEmail,
+				Name:          u.Name,
+				RecoveryEmail: u.RecoveryEmail,
+				CustomSchemas: u.CustomSchemas,
+			})
 		case http.MethodPatch:
 			state.patchCount++
 			body := &directoryAdmin.User{}
@@ -76,7 +82,13 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			if body.CustomSchemas != nil {
 				u.CustomSchemas = body.CustomSchemas
 			}
-			_ = json.NewEncoder(w).Encode(u)
+			_ = json.NewEncoder(w).Encode(safeUserResponse{
+				Id:            u.Id,
+				PrimaryEmail:  u.PrimaryEmail,
+				Name:          u.Name,
+				RecoveryEmail: u.RecoveryEmail,
+				CustomSchemas: u.CustomSchemas,
+			})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
