@@ -32,7 +32,7 @@ func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {
 	return o.resourceType
 }
 
-func (o *userResourceType) userStatus(ctx context.Context, user *admin.User) (v2.UserTrait_Status_Status, string) {
+func (o *userResourceType) userStatus(user *admin.User) (v2.UserTrait_Status_Status, string) {
 	if user.DeletionTime != "" {
 		return v2.UserTrait_Status_STATUS_DELETED, ""
 	}
@@ -112,7 +112,7 @@ func userBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, doma
 	}
 }
 
-func userProfile(ctx context.Context, user *admin.User) map[string]interface{} {
+func userProfile(user *admin.User) map[string]interface{} {
 	profile := make(map[string]interface{})
 	if user.Name != nil {
 		profile["given_name"] = user.Name.GivenName
@@ -262,12 +262,12 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 }
 
 func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (*v2.Resource, error) {
-	profile := userProfile(ctx, user)
+	profile := userProfile(user)
 	additionalLogins := mapset.NewSet[string]()
 	employeeIDs := mapset.NewSet[string]()
 	traitOpts := []rs.UserTraitOption{
 		rs.WithEmail(user.PrimaryEmail, true),
-		rs.WithDetailedStatus(o.userStatus(ctx, user)),
+		rs.WithDetailedStatus(o.userStatus(user)),
 	}
 
 	if user.ThumbnailPhotoUrl != "" {

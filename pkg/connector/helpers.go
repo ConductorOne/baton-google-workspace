@@ -5,9 +5,12 @@ import (
 	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -71,15 +74,22 @@ func emailsEqual(email1 string, email2 string) bool {
 }
 
 // extractUserId extracts and validates the user_id argument from action args.
+//
+// It is tolerant of both argument shapes: a ResourceId reference (the resource
+// picker used by the UI and C1 push rules) is preferred, falling back to a plain
+// string so CLI and CI invocations that pass user_id as a raw string still work.
 func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (string, error) {
+	if ref, ok := actions.GetResourceIDArg(args, "user_id"); ok && ref.GetResource() != "" {
+		return ref.GetResource(), nil
+	}
 	userIdValue, ok := args.Fields["user_id"]
 	if !ok || userIdValue == nil {
 		l.Debug("google-workspace: user action handler: missing user_id argument", zap.String("action", actionName), zap.Any("args", args))
-		return "", fmt.Errorf("missing user_id argument")
+		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: missing user_id argument")
 	}
 	userIdField, ok := userIdValue.GetKind().(*structpb.Value_StringValue)
 	if !ok || userIdField.StringValue == "" {
-		return "", fmt.Errorf("invalid user_id argument")
+		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: invalid user_id argument")
 	}
 	return userIdField.StringValue, nil
 }

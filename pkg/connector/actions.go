@@ -6,10 +6,10 @@ import (
 	"net/mail"
 	"strings"
 
+	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/grpc/codes"
@@ -22,8 +22,241 @@ const (
 	appIdGoogleCalendar           = int64(435070579839)
 )
 
+// Argument, return-field, and display-name literals shared across the action
+// schemas and handlers (extracted to satisfy goconst).
+const (
+	fieldSuccess          = "success"
+	displaySuccess        = "Success"
+	fieldStatus           = "status"
+	argResourceID         = "resource_id"
+	fieldTransferID       = "transfer_id"
+	argTargetResourceID   = "target_resource_id"
+	argNewPrimaryEmail    = "new_primary_email"
+	fieldPreviousEmail    = "previous_primary_email"
+	displayUserResourceID = "User Resource ID"
+)
+
+// Global (account-level) connector action schemas. Their handlers live in this
+// same file; they are registered in GlobalActions (connector.go).
+var (
+	updateUserStatusActionSchema = &v2.BatonActionSchema{
+		Name: "update_user_status",
+		Arguments: []*config.Field{
+			{
+				Name:        argResourceID,
+				DisplayName: displayUserResourceID,
+				Description: "ID of the user resource to update the status of",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "is_suspended",
+				DisplayName: "Is Suspended",
+				Description: "Update the user status to suspended or active",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
+				Description: "Whether the user resource status was updated successfully",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	transferUserDriveFilesActionSchema = &v2.BatonActionSchema{
+		Name:        "transfer_user_drive_files",
+		DisplayName: "Transfer User Drive Files",
+		Description: "Initiate a Google Drive ownership transfer from one user to another.",
+		Arguments: []*config.Field{
+			{
+				Name:        argResourceID,
+				DisplayName: "Source User Resource ID",
+				Description: "ID of the user resource to transfer Drive ownership from.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        argTargetResourceID,
+				DisplayName: "Target User Resource ID",
+				Description: "ID of the user resource to receive Drive ownership.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "privacy_levels",
+				DisplayName: "Drive Privacy Levels",
+				Description: "One or more of private, shared. Defaults to both.",
+				Field:       &config.Field_StringSliceField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
+				Description: "Whether the transfer request was created successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        fieldTransferID,
+				DisplayName: "Transfer ID",
+				Description: "ID of the Data Transfer request.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        fieldStatus,
+				DisplayName: "Transfer Status",
+				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	transferUserCalendarActionSchema = &v2.BatonActionSchema{
+		Name:        "transfer_user_calendar",
+		DisplayName: "Transfer User Calendar",
+		Description: "Initiate a Google Calendar transfer from one user to another.",
+		Arguments: []*config.Field{
+			{
+				Name:        argResourceID,
+				DisplayName: "Source User Resource ID",
+				Description: "ID of the user resource to transfer calendar data from.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        argTargetResourceID,
+				DisplayName: "Target User Resource ID",
+				Description: "ID of the user resource to receive calendar data.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "release_resources",
+				DisplayName: "Release Resources",
+				Description: "If true, sets RELEASE_RESOURCES=TRUE (release resources for future events).",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
+				Description: "Whether the transfer request was created successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        fieldTransferID,
+				DisplayName: "Transfer ID",
+				Description: "ID of the Data Transfer request.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        fieldStatus,
+				DisplayName: "Transfer Status",
+				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	changeUserPrimaryEmailActionSchema = &v2.BatonActionSchema{
+		Name:        "change_user_primary_email",
+		DisplayName: "Change User Primary Email",
+		Description: "Update a user's primary email address.",
+		Arguments: []*config.Field{
+			{
+				Name:        argResourceID,
+				DisplayName: displayUserResourceID,
+				Description: "ID of the user resource to update.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        argNewPrimaryEmail,
+				DisplayName: "New Primary Email",
+				Description: "New primary email address (must be within a verified domain).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
+				Description: "Whether the primary email was updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        fieldPreviousEmail,
+				DisplayName: "Previous Primary Email",
+				Description: "User's previous primary email address.",
+				Field:       &config.Field_StringField{},
+			},
+			{
+				Name:        argNewPrimaryEmail,
+				DisplayName: "New Primary Email",
+				Description: "User's updated primary email address.",
+				Field:       &config.Field_StringField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	disableUserActionSchema = &v2.BatonActionSchema{
+		Name:        "disable_user",
+		DisplayName: "Disable User",
+		Description: "Suspend a user account.",
+		Arguments: []*config.Field{
+			{
+				Name:        argUserID,
+				DisplayName: displayUserResourceID,
+				Description: "ID of the user resource to disable (suspend).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
+				Description: "Whether the user was disabled (suspended) successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_DISABLE},
+	}
+	enableUserActionSchema = &v2.BatonActionSchema{
+		Name:        "enable_user",
+		DisplayName: "Enable User",
+		Description: "Unsuspend a user account.",
+		Arguments: []*config.Field{
+			{
+				Name:        argUserID,
+				DisplayName: displayUserResourceID,
+				Description: "ID of the user resource to enable (unsuspend).",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
+				Description: "Whether the user was enabled (unsuspended) successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
+	}
+)
+
 func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	guidField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
+	guidField, ok := args.Fields[argResourceID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource ID")
 	}
@@ -52,7 +285,7 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 
 	response := structpb.Struct{
 		Fields: map[string]*structpb.Value{
-			"success": {
+			fieldSuccess: {
 				Kind: &structpb.Value_BoolValue{BoolValue: true},
 			},
 		},
@@ -63,10 +296,8 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 
 // disableUserActionHandler suspends a user (idempotent: if already suspended, returns success).
 func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
+	guidField, ok := args.Fields[argUserID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		l.Error("google-workspace: disableUserActionHandler: missing user ID")
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
@@ -79,12 +310,11 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		l.Error("google-workspace: disableUserActionHandler: failed to get user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for disableUser: %w", userId, err)
 	}
 	if u.Suspended { // already suspended
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
-			"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			fieldSuccess: {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		}}
 		return &response, nil, nil
 	}
@@ -94,22 +324,19 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		ForceSendFields: []string{"Suspended"},
 	})
 	if err != nil {
-		l.Error("google-workspace: disableUserActionHandler: failed to suspend user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldSuccess: {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 	}}
 	return &response, nil, nil
 }
 
 // enableUserActionHandler unsuspends a user (idempotent: if already active, returns success).
 func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-	guidField, ok := args.Fields["user_id"].GetKind().(*structpb.Value_StringValue)
+	guidField, ok := args.Fields[argUserID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
-		l.Error("google-workspace: enableUserActionHandler: missing user ID")
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing user ID")
 	}
 
@@ -122,12 +349,11 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	// fetch current to ensure idempotency
 	u, err := client.GetUserForProvisioning(ctx, userId)
 	if err != nil {
-		l.Error("google-workspace: enableUserActionHandler: failed to get user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for enableUser: %w", userId, err)
 	}
 	if !u.Suspended { // already active
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
-			"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			fieldSuccess: {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		}}
 		return &response, nil, nil
 	}
@@ -137,23 +363,22 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		ForceSendFields: []string{"Suspended"}, // This is needed because the SDK would omit any field that has the field type default value (false).
 	})
 	if err != nil {
-		l.Error("google-workspace: enableUserActionHandler: failed to unsuspend user", zap.String("user_id", userId), zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldSuccess: {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 	}}
 	return &response, nil, nil
 }
 
 // changeUserPrimaryEmail updates a user's primary email.
 func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	guidField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
+	guidField, ok := args.Fields[argResourceID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource ID")
 	}
-	newEmailField, ok := args.Fields["new_primary_email"].GetKind().(*structpb.Value_StringValue)
+	newEmailField, ok := args.Fields[argNewPrimaryEmail].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing new_primary_email")
 	}
@@ -179,9 +404,9 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	prev := u.PrimaryEmail
 	if emailsEqual(prev, newPrimary) { // Already primary email
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
-			"success":                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-			"previous_primary_email": {Kind: &structpb.Value_StringValue{StringValue: prev}},
-			"new_primary_email":      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
+			fieldSuccess:                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			fieldPreviousEmail: {Kind: &structpb.Value_StringValue{StringValue: prev}},
+			argNewPrimaryEmail:      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
 		}}
 		return &response, nil, nil
 	}
@@ -195,20 +420,20 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		"success":                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-		"previous_primary_email": {Kind: &structpb.Value_StringValue{StringValue: prev}},
-		"new_primary_email":      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
+		fieldSuccess:                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldPreviousEmail: {Kind: &structpb.Value_StringValue{StringValue: prev}},
+		argNewPrimaryEmail:      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
 	}}
 	return &response, nil, nil
 }
 
 // transferUserDriveFiles initiates a Drive ownership transfer using Data Transfer API.
 func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	sourceField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
+	sourceField, ok := args.Fields[argResourceID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource_id")
 	}
-	targetField, ok := args.Fields["target_resource_id"].GetKind().(*structpb.Value_StringValue)
+	targetField, ok := args.Fields[argTargetResourceID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing target_resource_id")
 	}
@@ -236,11 +461,11 @@ func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *stru
 
 // transferUserCalendar initiates a Calendar transfer using Data Transfer API.
 func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	sourceField, ok := args.Fields["resource_id"].GetKind().(*structpb.Value_StringValue)
+	sourceField, ok := args.Fields[argResourceID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource_id")
 	}
-	targetField, ok := args.Fields["target_resource_id"].GetKind().(*structpb.Value_StringValue)
+	targetField, ok := args.Fields[argTargetResourceID].GetKind().(*structpb.Value_StringValue)
 	if !ok {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing target_resource_id")
 	}
@@ -294,9 +519,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 				for _, adt := range t.ApplicationDataTransfers {
 					if adt.ApplicationId == appID {
 						resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-							"success":     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-							"transfer_id": {Kind: &structpb.Value_StringValue{StringValue: t.Id}},
-							"status":      {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
+							fieldSuccess:     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+							fieldTransferID: {Kind: &structpb.Value_StringValue{StringValue: t.Id}},
+							fieldStatus:      {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
 						}}
 						return resp, nil, nil
 					}
@@ -327,9 +552,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	}
 
 	resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"success":     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-		"transfer_id": {Kind: &structpb.Value_StringValue{StringValue: created.Id}},
-		"status":      {Kind: &structpb.Value_StringValue{StringValue: created.OverallTransferStatusCode}},
+		fieldSuccess:     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldTransferID: {Kind: &structpb.Value_StringValue{StringValue: created.Id}},
+		fieldStatus:      {Kind: &structpb.Value_StringValue{StringValue: created.OverallTransferStatusCode}},
 	}}
 	return resp, nil, nil
 }

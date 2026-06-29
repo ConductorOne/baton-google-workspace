@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -36,281 +35,6 @@ import (
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
-)
-
-func capabilityPermissions(perms ...string) *v2.CapabilityPermissions {
-	cp := &v2.CapabilityPermissions{}
-	for _, p := range perms {
-		cp.Permissions = append(cp.Permissions, &v2.CapabilityPermission{Permission: p})
-	}
-	return cp
-}
-
-func v1AnnotationsWithPermissions(resourceTypeID string, perms *v2.CapabilityPermissions) annotations.Annotations {
-	annos := v1AnnotationsForResourceType(resourceTypeID)
-	annos.Update(perms)
-	return annos
-}
-
-var (
-	resourceTypeRole = &v2.ResourceType{
-		Id:          "role",
-		DisplayName: "role",
-		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
-		Annotations: v1AnnotationsWithPermissions("role", capabilityPermissions(
-			"admin.directory.rolemanagement",
-			"admin.directory.domain.readonly",
-		)),
-	}
-	resourceTypeGroup = &v2.ResourceType{
-		Id:          "group",
-		DisplayName: "Group",
-		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_GROUP},
-		Annotations: v1AnnotationsWithPermissions("group", capabilityPermissions(
-			"admin.directory.group",
-			"admin.directory.group.member",
-			"admin.directory.domain.readonly",
-		)),
-	}
-	resourceTypeUser = &v2.ResourceType{
-		Id:          "user",
-		DisplayName: "User",
-		Traits: []v2.ResourceType_Trait{
-			v2.ResourceType_TRAIT_USER,
-		},
-		Annotations: v1AnnotationsWithPermissions("user", capabilityPermissions(
-			"admin.directory.user.readonly",
-			"admin.directory.user.alias.readonly",
-			"admin.directory.domain.readonly",
-		)),
-	}
-	resourceTypeEnterpriseApplication = &v2.ResourceType{
-		Id:          "enterprise_application",
-		DisplayName: "Enterprise Application",
-		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
-		Annotations: annotations.New(
-			capabilityPermissions(
-				"admin.directory.user.readonly",
-				"admin.directory.user.security",
-				"admin.reports.audit.readonly",
-				"cloud-identity.inboundsso.readonly",
-			),
-		),
-	}
-	updateUserStatusActionSchema = &v2.BatonActionSchema{
-		Name: "update_user_status",
-		Arguments: []*config.Field{
-			{
-				Name:        "resource_id",
-				DisplayName: "User Resource ID",
-				Description: "ID of the user resource to update the status of",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "is_suspended",
-				DisplayName: "Is Suspended",
-				Description: "Update the user status to suspended or active",
-				Field:       &config.Field_BoolField{},
-				IsRequired:  true,
-			},
-		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        "success",
-				DisplayName: "Success",
-				Description: "Whether the user resource status was updated successfully",
-				Field:       &config.Field_BoolField{},
-			},
-		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
-	}
-	transferUserDriveFilesActionSchema = &v2.BatonActionSchema{
-		Name:        "transfer_user_drive_files",
-		DisplayName: "Transfer User Drive Files",
-		Description: "Initiate a Google Drive ownership transfer from one user to another.",
-		Arguments: []*config.Field{
-			{
-				Name:        "resource_id",
-				DisplayName: "Source User Resource ID",
-				Description: "ID of the user resource to transfer Drive ownership from.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "target_resource_id",
-				DisplayName: "Target User Resource ID",
-				Description: "ID of the user resource to receive Drive ownership.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "privacy_levels",
-				DisplayName: "Drive Privacy Levels",
-				Description: "One or more of private, shared. Defaults to both.",
-				Field:       &config.Field_StringSliceField{},
-				IsRequired:  false,
-			},
-		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        "success",
-				DisplayName: "Success",
-				Description: "Whether the transfer request was created successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        "transfer_id",
-				DisplayName: "Transfer ID",
-				Description: "ID of the Data Transfer request.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "status",
-				DisplayName: "Transfer Status",
-				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
-				Field:       &config.Field_StringField{},
-			},
-		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
-	}
-	transferUserCalendarActionSchema = &v2.BatonActionSchema{
-		Name:        "transfer_user_calendar",
-		DisplayName: "Transfer User Calendar",
-		Description: "Initiate a Google Calendar transfer from one user to another.",
-		Arguments: []*config.Field{
-			{
-				Name:        "resource_id",
-				DisplayName: "Source User Resource ID",
-				Description: "ID of the user resource to transfer calendar data from.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "target_resource_id",
-				DisplayName: "Target User Resource ID",
-				Description: "ID of the user resource to receive calendar data.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "release_resources",
-				DisplayName: "Release Resources",
-				Description: "If true, sets RELEASE_RESOURCES=TRUE (release resources for future events).",
-				Field:       &config.Field_BoolField{},
-				IsRequired:  false,
-			},
-		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        "success",
-				DisplayName: "Success",
-				Description: "Whether the transfer request was created successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        "transfer_id",
-				DisplayName: "Transfer ID",
-				Description: "ID of the Data Transfer request.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "status",
-				DisplayName: "Transfer Status",
-				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
-				Field:       &config.Field_StringField{},
-			},
-		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
-	}
-	changeUserPrimaryEmailActionSchema = &v2.BatonActionSchema{
-		Name:        "change_user_primary_email",
-		DisplayName: "Change User Primary Email",
-		Description: "Update a user's primary email address.",
-		Arguments: []*config.Field{
-			{
-				Name:        "resource_id",
-				DisplayName: "User Resource ID",
-				Description: "ID of the user resource to update.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "new_primary_email",
-				DisplayName: "New Primary Email",
-				Description: "New primary email address (must be within a verified domain).",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        "success",
-				DisplayName: "Success",
-				Description: "Whether the primary email was updated successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        "previous_primary_email",
-				DisplayName: "Previous Primary Email",
-				Description: "User's previous primary email address.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "new_primary_email",
-				DisplayName: "New Primary Email",
-				Description: "User's updated primary email address.",
-				Field:       &config.Field_StringField{},
-			},
-		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
-	}
-	disableUserActionSchema = &v2.BatonActionSchema{
-		Name:        "disable_user",
-		DisplayName: "Disable User",
-		Description: "Suspend a user account.",
-		Arguments: []*config.Field{
-			{
-				Name:        "user_id",
-				DisplayName: "User Resource ID",
-				Description: "ID of the user resource to disable (suspend).",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        "success",
-				DisplayName: "Success",
-				Description: "Whether the user was disabled (suspended) successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_DISABLE},
-	}
-	enableUserActionSchema = &v2.BatonActionSchema{
-		Name:        "enable_user",
-		DisplayName: "Enable User",
-		Description: "Unsuspend a user account.",
-		Arguments: []*config.Field{
-			{
-				Name:        "user_id",
-				DisplayName: "User Resource ID",
-				Description: "ID of the user resource to enable (unsuspend).",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        "success",
-				DisplayName: "Success",
-				Description: "Whether the user was enabled (unsuspended) successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
-	}
 )
 
 type Config struct {
@@ -753,7 +477,7 @@ func (f *failedResourceSyncer) Grants(_ context.Context, _ *v2.Resource, _ rs.Sy
 	return nil, nil, f.err
 }
 
-func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) (*T, error) {
+func getFromCache[T any](c *GoogleWorkspace, scope string) (*T, error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	service, ok := c.serviceCache[scope]
@@ -772,7 +496,7 @@ func getFromCache[T any](ctx context.Context, c *GoogleWorkspace, scope string) 
 func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, newService newService[T]) (*T, error) {
 	l := ctxzap.Extract(ctx)
 
-	service, err := getFromCache[T](ctx, c, scope)
+	service, err := getFromCache[T](c, scope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service from cache: %w", err)
 	}
@@ -780,9 +504,9 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 		return service, nil
 	}
 
-	upgradedScope, upgraded := upgradeScope(ctx, scope)
+	upgradedScope, upgraded := upgradeScope(scope)
 	if upgraded {
-		service, err := getFromCache[T](ctx, c, upgradedScope)
+		service, err := getFromCache[T](c, upgradedScope)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get upgraded service from cache: %w", err)
 		}
@@ -795,7 +519,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 	if err != nil {
 		var ae *GoogleWorkspaceOAuthUnauthorizedError
 		if errors.As(err, &ae) {
-			upgradedScope, upgraded := upgradeScope(ctx, scope)
+			upgradedScope, upgraded := upgradeScope(scope)
 			if upgraded {
 				l.Debug(
 					"google-workspace: unauthorized, attempting scope upgrade",
@@ -803,7 +527,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 					zap.String("scope", scope),
 					zap.String("upgraded_scope", upgradedScope),
 				)
-				return getService[T](ctx, c, upgradedScope, newService)
+				return getService(ctx, c, upgradedScope, newService)
 			}
 		}
 		return nil, err
@@ -816,7 +540,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 }
 
 // upgradeScope strips '.readonly' from the given scope, if it exists.
-func upgradeScope(ctx context.Context, scope string) (string, bool) {
+func upgradeScope(scope string) (string, bool) {
 	if strings.HasSuffix(scope, ".readonly") {
 		return strings.TrimSuffix(scope, ".readonly"), true
 	}
@@ -882,32 +606,29 @@ func (f *failedEventFeed) ListEvents(_ context.Context, _ *timestamppb.Timestamp
 	return nil, nil, nil, f.err
 }
 
-func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
-	l := ctxzap.Extract(ctx)
+var _ connectorbuilder.GlobalActionProvider = (*GoogleWorkspace)(nil)
 
+func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
 	if err := registry.Register(ctx, updateUserStatusActionSchema, c.updateUserStatus); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register update_user_status action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register update_user_status action: %w", err)
 	}
 	if err := registry.Register(ctx, transferUserDriveFilesActionSchema, c.transferUserDriveFiles); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register transfer_user_drive_files action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register transfer_user_drive_files action: %w", err)
 	}
 	if err := registry.Register(ctx, changeUserPrimaryEmailActionSchema, c.changeUserPrimaryEmail); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register change_user_primary_email action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register change_user_primary_email action: %w", err)
 	}
 	if err := registry.Register(ctx, disableUserActionSchema, c.disableUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register disable_user action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register disable_user action: %w", err)
 	}
 	if err := registry.Register(ctx, enableUserActionSchema, c.enableUserActionHandler); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register enable_user action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register enable_user action: %w", err)
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
-		l.Error("failed to register action", zap.Error(err))
-		return fmt.Errorf("failed to register transfer_user_calendar action: %w", err)
+		return fmt.Errorf("google-workspace: failed to register transfer_user_calendar action: %w", err)
+	}
+	if err := registry.Register(ctx, updateUserGlobalActionSchema, c.updateUserActionHandler); err != nil {
+		return fmt.Errorf("google-workspace: failed to register update_user action: %w", err)
 	}
 
 	return nil
