@@ -265,7 +265,7 @@ var (
 				IsRequired:  false,
 			},
 			{
-				Name:        "recovery_phone",
+				Name:        argRecoveryPhone,
 				DisplayName: "Recovery Phone",
 				Description: "New recovery phone (E.164, e.g. +14155550100). Send an empty string to clear it.",
 				Field:       &config.Field_StringField{},
@@ -833,8 +833,8 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		v := getStringField(args, argRecoveryEmail)
 		patch.recoveryEmail = &v
 	}
-	if _, ok := args.Fields["recovery_phone"]; ok {
-		v := getStringField(args, "recovery_phone")
+	if _, ok := args.Fields[argRecoveryPhone]; ok {
+		v := getStringField(args, argRecoveryPhone)
 		patch.recoveryPhone = &v
 	}
 
@@ -844,7 +844,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 	if raw := getStringField(args, argCustomSchemas); raw != "" {
 		var schemas map[string]googleapi.RawMessage
 		if err := json.Unmarshal([]byte(raw), &schemas); err != nil {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid custom_schemas JSON: %v", err))
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("google-workspace: update_user_profile: invalid custom_schemas JSON: %v", err))
 		}
 		patch.customSchemas = schemas
 	}
@@ -896,7 +896,7 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 	status, ok := getBoolField(args, fieldStatus)
 	if !ok {
 		l.Debug("google-workspace: user action handler: missing status argument", zap.Any("args", args))
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing status argument")
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: make_admin: missing status argument")
 	}
 
 	err = o.client.MakeAdmin(ctx, userId, status)
@@ -945,13 +945,19 @@ func applyUserProfilePatch(
 	setGiven := patch.givenName != nil && *patch.givenName != ""
 	setFamily := patch.familyName != nil && *patch.familyName != ""
 	if setGiven || setFamily {
-		current, err := client.GetUserFullForProvisioning(ctx, userId)
-		if err != nil {
-			return nil, nil, err
-		}
 		name := &admin.UserName{}
-		if current.Name != nil {
-			*name = *current.Name
+		// Read-modify-write only when exactly one name field is provided, to
+		// preserve the sibling field the caller did not set. When both are
+		// supplied the whole name object is overwritten, so the GET would be a
+		// wasted API call (doubling per-user quota on bulk push rules).
+		if setGiven != setFamily {
+			current, err := client.GetUserFullForProvisioning(ctx, userId)
+			if err != nil {
+				return nil, nil, err
+			}
+			if current.Name != nil {
+				*name = *current.Name
+			}
 		}
 		if setGiven {
 			name.GivenName = *patch.givenName
@@ -1014,6 +1020,7 @@ const (
 	argGivenName     = "given_name"
 	argFamilyName    = "family_name"
 	argRecoveryEmail = "recovery_email"
+	argRecoveryPhone = "recovery_phone"
 	argCustomSchemas = "custom_schemas"
 	displayUser      = "User"
 )
@@ -1099,6 +1106,10 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 	if err != nil {
 		return nil, nil, err
 	}
+	if client.UserProvisioningService == nil {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			fmt.Sprintf("google-workspace: update_user: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
+	}
 
 	_, updatedFields, err := applyUserProfilePatch(ctx, client, userId, patch)
 	if err != nil {
@@ -1133,7 +1144,7 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 	if v, ok := stringFromJSON(profile, argRecoveryEmail, "recoveryEmail"); ok {
 		patch.recoveryEmail = &v
 	}
-	if v, ok := stringFromJSON(profile, "recovery_phone", "recoveryPhone"); ok {
+	if v, ok := stringFromJSON(profile, argRecoveryPhone, "recoveryPhone"); ok {
 		patch.recoveryPhone = &v
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {

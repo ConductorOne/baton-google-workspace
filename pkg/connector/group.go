@@ -276,9 +276,18 @@ func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceI
 	err := o.client.DeleteGroup(ctx, resourceId.Resource)
 	if err != nil {
 		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			// Group already deleted, return success (idempotent).
-			return nil, nil
+		if errors.As(err, &gerr) {
+			if gerr.Code == http.StatusNotFound {
+				// Group already deleted, return success (idempotent).
+				return nil, nil
+			}
+			if gerr.Code == http.StatusForbidden {
+				// Keep the gRPC PermissionDenied code from the wrapped error but
+				// add the actionable scope hint operators need to troubleshoot.
+				return nil, uhttp.WrapErrors(codes.PermissionDenied,
+					fmt.Sprintf("google-workspace: failed to delete group (403 Forbidden) - check the %s scope and admin permissions", admin.AdminDirectoryGroupScope),
+					err)
+			}
 		}
 		return nil, err
 	}
