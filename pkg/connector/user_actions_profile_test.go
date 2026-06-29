@@ -292,6 +292,59 @@ func TestUpdateUserProfile_InvalidCustomSchemasJSON(t *testing.T) {
 	}
 }
 
+func TestUpdateUserProfile_InvalidRecoveryEmail(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":        strArg("user123"),
+		"recovery_email": strArg("not-an-email"),
+	}}
+
+	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error on malformed recovery_email")
+	}
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH on invalid recovery_email, got %d", state.patchCount)
+	}
+}
+
+func TestUpdateUserProfile_EmptyRecoveryEmail_Clears(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:            "user123",
+				PrimaryEmail:  "test@example.com",
+				RecoveryEmail: "old@example.com",
+				Name:          &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	// Empty string is a legitimate "clear" request and must still patch.
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"user_id":        strArg("user123"),
+		"recovery_email": strArg(""),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+	if state.patchCount != 1 {
+		t.Fatalf("expected 1 PATCH for recovery_email clear, got %d", state.patchCount)
+	}
+}
+
 func TestUpdateUserProfile_MissingUserId(t *testing.T) {
 	state := &testProfileServerState{users: map[string]*directoryAdmin.User{}}
 	server := newTestProfileServer(state)

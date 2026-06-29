@@ -7,8 +7,10 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -83,11 +85,11 @@ func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (str
 	userIdValue, ok := args.Fields["user_id"]
 	if !ok || userIdValue == nil {
 		l.Debug("google-workspace: user action handler: missing user_id argument", zap.String("action", actionName), zap.Any("args", args))
-		return "", fmt.Errorf("missing user_id argument")
+		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: missing user_id argument")
 	}
 	userIdField, ok := userIdValue.GetKind().(*structpb.Value_StringValue)
 	if !ok || userIdField.StringValue == "" {
-		return "", fmt.Errorf("invalid user_id argument")
+		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: invalid user_id argument")
 	}
 	return userIdField.StringValue, nil
 }

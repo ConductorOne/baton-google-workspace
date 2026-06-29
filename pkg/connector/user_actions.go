@@ -811,7 +811,8 @@ func (o *userResourceType) registerUpdateUserProfileAction(ctx context.Context, 
 func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	if o.client.UserProvisioningService == nil {
-		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			fmt.Sprintf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
 	}
 
 	userId, err := extractUserId(args, l, "update_user_profile")
@@ -874,10 +875,17 @@ func (o *userResourceType) registerMakeAdminAction(ctx context.Context, registry
 	return registry.Register(ctx, makeUserAdminActionSchema, o.makeAdminActionHandler)
 }
 
+// makeAdminActionHandler promotes (status=true) or demotes (status=false) a user
+// to/from super admin. It is idempotent without a pre-read: Google's
+// users.makeAdmin is a state-set (not a toggle) and returns 2xx when the user is
+// already in the target admin state (verified against a live tenant). Skipping
+// the GET that enable_user/disable_user perform avoids an extra API call and a
+// TOCTOU window on every invocation.
 func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	if o.client.UserProvisioningService == nil {
-		return nil, nil, fmt.Errorf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope)
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			fmt.Sprintf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
 	}
 
 	userId, err := extractUserId(args, l, "make_admin")
@@ -958,6 +966,13 @@ func applyUserProfilePatch(
 	}
 
 	if patch.recoveryEmail != nil {
+		// Empty string is a legitimate "clear" request; only validate non-empty values.
+		if *patch.recoveryEmail != "" {
+			if _, err := mail.ParseAddress(*patch.recoveryEmail); err != nil {
+				return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+					fmt.Sprintf("google-workspace: invalid recovery_email: %s", *patch.recoveryEmail), err)
+			}
+		}
 		update.RecoveryEmail = *patch.recoveryEmail
 		forceSend = append(forceSend, "RecoveryEmail")
 	}
@@ -965,7 +980,11 @@ func applyUserProfilePatch(
 		update.RecoveryPhone = *patch.recoveryPhone
 		forceSend = append(forceSend, "RecoveryPhone")
 	}
-	if patch.customSchemas != nil {
+	// Only treat custom schemas as a real update when non-empty. An empty object
+	// ("{}") unmarshals to a non-nil empty map; assigning it would pass the
+	// "at least one updatable field" guard and issue a no-op patch that falsely
+	// reports CustomSchemas as changed.
+	if len(patch.customSchemas) > 0 {
 		update.CustomSchemas = patch.customSchemas
 	}
 
