@@ -2,15 +2,18 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
+	"strings"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -18,10 +21,12 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// Ensure googleapi import is used.
-var _ = googleapi.Error{}
+// Compile-time assertion: user actions are registered as resource-scoped actions.
+var _ connectorbuilder.ResourceActionProvider = (*userResourceType)(nil)
 
 var (
 	changeUserOrgUnitActionSchema = &v2.BatonActionSchema{
@@ -58,7 +63,7 @@ var (
 				Field:       &config.Field_ResourceField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
 	offboardingProfileUpdateActionSchema = &v2.BatonActionSchema{
@@ -91,7 +96,7 @@ var (
 				Field:       &config.Field_BoolField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
 	signOutUserActionSchema = &v2.BatonActionSchema{
@@ -115,7 +120,7 @@ var (
 				Field:       &config.Field_BoolField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
 	deleteAllOAuthTokensActionSchema = &v2.BatonActionSchema{
@@ -145,7 +150,7 @@ var (
 				Field:       &config.Field_IntField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
 	updateUserManagerActionSchema = &v2.BatonActionSchema{
@@ -182,7 +187,7 @@ var (
 				Field:       &config.Field_ResourceField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
 	deleteAllApplicationPasswordsActionSchema = &v2.BatonActionSchema{
@@ -214,7 +219,120 @@ var (
 				Field:       &config.Field_IntField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
+	}
+
+	updateUserProfileActionSchema = &v2.BatonActionSchema{
+		Name:        "update_user_profile",
+		DisplayName: "Update User Profile",
+		Description: "Applies a partial update to a user's profile using patch semantics " +
+			"(only the provided fields are modified, so unrelated server-side state is preserved). " +
+			"Supports name fields, recovery details, and custom-schema attribute values. " +
+			"At least one updatable field must be provided.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: displayUser,
+				Description: "The user to update.",
+				IsRequired:  true,
+				Field: &config.Field_ResourceIdField{
+					ResourceIdField: &config.ResourceIdField{
+						Rules: &config.ResourceIDRules{
+							AllowedResourceTypeIds: []string{resourceTypeUser.Id},
+						},
+					},
+				},
+			},
+			{
+				Name:        argGivenName,
+				DisplayName: "Given Name",
+				Description: "New first/given name for the user.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argFamilyName,
+				DisplayName: "Family Name",
+				Description: "New last/family name for the user.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argRecoveryEmail,
+				DisplayName: "Recovery Email",
+				Description: "New recovery email address. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argRecoveryPhone,
+				DisplayName: "Recovery Phone",
+				Description: "New recovery phone (E.164, e.g. +14155550100). Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argCustomSchemas,
+				DisplayName: "Custom Schemas",
+				Description: "JSON object mapping schema name to its field values, e.g. " +
+					`{"MySchema":{"region":"emea"}}. Sent verbatim to the Directory API customSchemas field. ` +
+					"Schema definitions must already exist (managed outside the connector).",
+				Field:      &config.Field_StringField{},
+				IsRequired: false,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user's profile was updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+			{
+				Name:        "resource",
+				DisplayName: "Updated User",
+				Description: "The updated user resource.",
+				Field:       &config.Field_ResourceField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_UPDATE_PROFILE},
+	}
+
+	makeUserAdminActionSchema = &v2.BatonActionSchema{
+		Name:        "make_admin",
+		DisplayName: "Make User Super Admin",
+		Description: "Promotes (status=true) or demotes (status=false) a user to/from super administrator in Google Workspace.",
+		Arguments: []*config.Field{
+			{
+				Name:        "user_id",
+				DisplayName: displayUser,
+				Description: "The user whose super-admin status should be changed.",
+				IsRequired:  true,
+				Field: &config.Field_ResourceIdField{
+					ResourceIdField: &config.ResourceIdField{
+						Rules: &config.ResourceIDRules{
+							AllowedResourceTypeIds: []string{resourceTypeUser.Id},
+						},
+					},
+				},
+			},
+			{
+				Name:        fieldStatus,
+				DisplayName: "Admin Status",
+				Description: "true to grant super-admin, false to revoke it.",
+				Field:       &config.Field_BoolField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "success",
+				DisplayName: "Success",
+				Description: "Whether the user's super-admin status was updated successfully.",
+				Field:       &config.Field_BoolField{},
+			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 )
 
@@ -236,6 +354,12 @@ func (o *userResourceType) ResourceActions(ctx context.Context, registry actions
 		return err
 	}
 	if err := o.registerUpdateUserManagerAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerUpdateUserProfileAction(ctx, registry); err != nil {
+		return err
+	}
+	if err := o.registerMakeAdminAction(ctx, registry); err != nil {
 		return err
 	}
 	return nil
@@ -290,8 +414,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 
 		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 		if err != nil {
-			l.Error("failed to build resource return field", zap.Error(err))
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
 
 		return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -327,14 +450,12 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	// Create the user resource
 	userResource, err := o.userResource(ctx, updatedUser)
 	if err != nil {
-		l.Error("failed to create user resource", zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
 	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 	if err != nil {
-		l.Error("failed to build resource return field", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -385,23 +506,15 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 	// 3. Delete addresses, phone numbers, and additional email addresses (using NullFields)
 	//    Note: The primary email cannot be removed and will remain
 	// 4. Optionally archive the account
+	// The client wraps the Google API error (gRPC code + context + rate-limit
+	// info) via wrapGoogleApiErrorWithContext, so pass it through unchanged.
 	_, err = o.client.UpdateUser(ctx, userId, updateUser)
 	if err != nil {
-		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusForbidden {
-				return nil, nil, fmt.Errorf(
-					"google-workspace: failed to update offboarding profile (403 Forbidden). "+
-						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions: %w", admin.AdminDirectoryUserScope, err)
-			}
-			if gerr.Code == http.StatusPreconditionFailed {
-				return nil, nil, fmt.Errorf(
-					"google-workspace: failed to archive user account (412 Precondition Failed). "+
-						"Insufficient archived user licenses. "+
-						"Archiving a user requires an archived user license. "+
-						"Please ensure you have available archived user licenses in your Google Workspace subscription: %w", err)
-			}
+		// Non-obvious cause worth surfacing: archiving requires an available
+		// archived-user license, which Google reports as a bare 412.
+		var gerr *googleapi.Error
+		if archiveAccount && errors.As(err, &gerr) && gerr.Code == http.StatusPreconditionFailed {
+			return nil, nil, fmt.Errorf("google-workspace: archiving user %s requires an available archived user license: %w", userId, err)
 		}
 		return nil, nil, err
 	}
@@ -445,16 +558,6 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 	// Sign out the user
 	err = o.client.SignOutUser(ctx, userId)
 	if err != nil {
-		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) {
-			if gerr.Code == http.StatusForbidden {
-				return nil, nil, fmt.Errorf(
-					"google-workspace: failed to sign out user (403 Forbidden). "+
-						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions: %w",
-					admin.AdminDirectoryUserSecurityScope, err)
-			}
-		}
 		return nil, nil, err
 	}
 
@@ -479,14 +582,6 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	// List all tokens for the user
 	tokens, err := o.client.ListTokens(ctx, userId)
 	if err != nil {
-		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
-			return nil, nil, fmt.Errorf(
-				"google-workspace: failed to list OAuth tokens (403 Forbidden). "+
-					"This may be due to: 1) missing OAuth scope %s, "+
-					"2) insufficient admin permissions: %w",
-				admin.AdminDirectoryUserSecurityScope, err)
-		}
 		return nil, nil, err
 	}
 
@@ -501,7 +596,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	var lastErr error
 	for _, token := range tokens.Items {
 		if token.ClientId == "" {
-			l.Warn("google-workspace: skipping token with empty client ID",
+			l.Debug("google-workspace: skipping token with empty client ID",
 				zap.String("user_id", userId),
 				zap.String("display_text", token.DisplayText))
 			continue
@@ -560,14 +655,6 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	// List all application-specific passwords (ASPs) for the user
 	asps, err := o.client.ListAsps(ctx, userId)
 	if err != nil {
-		gerr := &googleapi.Error{}
-		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
-			return nil, nil, fmt.Errorf(
-				"google-workspace: failed to list application passwords (403 Forbidden). "+
-					"This may be due to: 1) missing OAuth scope %s, "+
-					"2) insufficient admin permissions: %w",
-				admin.AdminDirectoryUserSecurityScope, err)
-		}
 		return nil, nil, err
 	}
 
@@ -669,8 +756,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 
 		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 		if err != nil {
-			l.Error("failed to build resource return field", zap.Error(err))
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
 
 		return actions.NewReturnValues(true, resourceRv), nil, nil
@@ -707,15 +793,381 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	// Create the user resource
 	userResource, err := o.userResource(ctx, updatedUser)
 	if err != nil {
-		l.Error("failed to create user resource", zap.Error(err))
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
 	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
 	if err != nil {
-		l.Error("failed to build resource return field", zap.Error(err))
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
 
 	return actions.NewReturnValues(true, resourceRv), nil, nil
+}
+
+func (o *userResourceType) registerUpdateUserProfileAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, updateUserProfileActionSchema, o.updateUserProfileActionHandler)
+}
+
+func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.client.UserProvisioningService == nil {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			fmt.Sprintf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
+	}
+
+	userId, err := extractUserId(args, l, "update_user_profile")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	patch := userProfilePatch{
+		givenName:     optionalStringField(args, argGivenName),
+		familyName:    optionalStringField(args, argFamilyName),
+		recoveryEmail: optionalStringField(args, argRecoveryEmail),
+		recoveryPhone: optionalStringField(args, argRecoveryPhone),
+	}
+
+	// Custom schemas: raw JSON object mapping schemaName -> { fieldName: value },
+	// passed verbatim to the Directory API. Schema definitions are managed outside
+	// the connector (see ticket scope).
+	if raw := getStringField(args, argCustomSchemas); raw != "" {
+		var schemas map[string]googleapi.RawMessage
+		if err := json.Unmarshal([]byte(raw), &schemas); err != nil {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user_profile: invalid custom_schemas JSON", err)
+		}
+		patch.customSchemas = schemas
+	}
+
+	updatedUser, updatedFields, err := applyUserProfilePatch(ctx, o.client, userId, patch)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	l.Debug("google-workspace: user action handler: updated user profile",
+		zap.String("user_id", userId),
+		zap.Strings("fields", updatedFields))
+
+	userResource, err := o.userResource(ctx, updatedUser)
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
+	}
+
+	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
+	}
+
+	return actions.NewReturnValues(true, resourceRv), nil, nil
+}
+
+func (o *userResourceType) registerMakeAdminAction(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, makeUserAdminActionSchema, o.makeAdminActionHandler)
+}
+
+// makeAdminActionHandler promotes (status=true) or demotes (status=false) a user
+// to/from super admin. It is idempotent without a pre-read: Google's
+// users.makeAdmin is a state-set (not a toggle) and returns 2xx when the user is
+// already in the target admin state (verified against a live tenant). Skipping
+// the GET that enable_user/disable_user perform avoids an extra API call and a
+// TOCTOU window on every invocation.
+func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	if o.client.UserProvisioningService == nil {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			fmt.Sprintf("google-workspace: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
+	}
+
+	userId, err := extractUserId(args, l, "make_admin")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	status, ok := getBoolField(args, fieldStatus)
+	if !ok {
+		l.Debug("google-workspace: user action handler: missing status argument", zap.Any("args", args))
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: make_admin: missing status argument")
+	}
+
+	err = o.client.MakeAdmin(ctx, userId, status)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	l.Debug("google-workspace: user action handler: updated admin status",
+		zap.String("user_id", userId),
+		zap.Bool(fieldStatus, status))
+
+	return actions.NewReturnValues(true), nil, nil
+}
+
+// userProfilePatch holds the optional profile fields to apply with patch
+// semantics. A nil pointer leaves the field untouched; a non-nil pointer
+// (including a pointer to the empty string) is sent to the API so callers can
+// clear a value. Exception: the name fields (givenName/familyName) ignore empty
+// strings — Google rejects empty names and blanking a name is never intended.
+type userProfilePatch struct {
+	givenName     *string
+	familyName    *string
+	recoveryEmail *string
+	recoveryPhone *string
+	customSchemas map[string]googleapi.RawMessage
+}
+
+// applyUserProfilePatch applies a partial profile update with patch semantics and
+// returns the updated user plus the list of changed fields. Shared by the
+// resource-scoped update_user_profile action and the global update_user action
+// consumed by ConductorOne push rules.
+func applyUserProfilePatch(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	userId string,
+	patch userProfilePatch,
+) (*admin.User, []string, error) {
+	update := &admin.User{}
+	forceSend := make([]string, 0)
+
+	// Name fields. A patch replaces the whole "name" object, so read-modify-write
+	// to avoid clearing the sibling field the caller did not set. Unlike the
+	// recovery fields (where empty means "clear"), an empty name value is treated
+	// as "not provided": Google rejects empty given/family names and blanking a
+	// name is never an intended outcome, so empty values are ignored.
+	setGiven := patch.givenName != nil && *patch.givenName != ""
+	setFamily := patch.familyName != nil && *patch.familyName != ""
+	if setGiven || setFamily {
+		name := &admin.UserName{}
+		// Read-modify-write only when exactly one name field is provided, to
+		// preserve the sibling field the caller did not set. When both are
+		// supplied the whole name object is overwritten, so the GET would be a
+		// wasted API call (doubling per-user quota on bulk push rules).
+		if setGiven != setFamily {
+			current, err := client.GetUserFullForProvisioning(ctx, userId)
+			if err != nil {
+				return nil, nil, err
+			}
+			if current.Name != nil {
+				*name = *current.Name
+			}
+		}
+		if setGiven {
+			name.GivenName = *patch.givenName
+		}
+		if setFamily {
+			name.FamilyName = *patch.familyName
+		}
+		// FullName is server-derived from given/family; clear it so it is recomputed.
+		name.FullName = ""
+		update.Name = name
+		forceSend = append(forceSend, "Name")
+	}
+
+	if patch.recoveryEmail != nil {
+		// Empty string is a legitimate "clear" request; only validate non-empty values.
+		if *patch.recoveryEmail != "" {
+			if _, err := mail.ParseAddress(*patch.recoveryEmail); err != nil {
+				return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+					fmt.Sprintf("google-workspace: invalid recovery_email: %s", *patch.recoveryEmail), err)
+			}
+		}
+		update.RecoveryEmail = *patch.recoveryEmail
+		forceSend = append(forceSend, "RecoveryEmail")
+	}
+	if patch.recoveryPhone != nil {
+		update.RecoveryPhone = *patch.recoveryPhone
+		forceSend = append(forceSend, "RecoveryPhone")
+	}
+	// Only treat custom schemas as a real update when non-empty. An empty object
+	// ("{}") unmarshals to a non-nil empty map; assigning it would pass the
+	// "at least one updatable field" guard and issue a no-op patch that falsely
+	// reports CustomSchemas as changed.
+	if len(patch.customSchemas) > 0 {
+		update.CustomSchemas = patch.customSchemas
+	}
+
+	if len(forceSend) == 0 && update.CustomSchemas == nil {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
+	}
+
+	update.ForceSendFields = forceSend
+
+	updatedUser, err := client.PatchUser(ctx, userId, update)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	updatedFields := append([]string{}, forceSend...)
+	if update.CustomSchemas != nil {
+		updatedFields = append(updatedFields, "CustomSchemas")
+	}
+	return updatedUser, updatedFields, nil
+}
+
+const (
+	actionUpdateUser = "update_user"
+	argUserProfile   = "user_profile"
+	argUserID        = "user_id"
+
+	argGivenName     = "given_name"
+	argFamilyName    = "family_name"
+	argRecoveryEmail = "recovery_email"
+	argRecoveryPhone = "recovery_phone"
+	argCustomSchemas = "custom_schemas"
+	displayUser      = "User"
+)
+
+// updateUserGlobalActionSchema is the global (account-level) profile-update
+// action consumed by ConductorOne push rules. The push-rule system discovers it
+// by ActionType ACCOUNT_UPDATE_PROFILE plus the user_profile argument; the
+// resource-scoped update_user_profile (typed fields) does not satisfy that
+// lookup, so this global shape must exist for automated profile sync.
+var updateUserGlobalActionSchema = &v2.BatonActionSchema{
+	Name:        actionUpdateUser,
+	DisplayName: "Update User",
+	Description: "Updates a user's profile from a user_profile JSON object. " +
+		"Consumed by ConductorOne push rules for automated profile sync. " +
+		"Supported keys: given_name, family_name, recovery_email, recovery_phone, custom_schemas.",
+	Arguments: []*config.Field{
+		{
+			Name:        argUserID,
+			DisplayName: displayUser,
+			Description: "The user to update.",
+			IsRequired:  true,
+			Field: &config.Field_ResourceIdField{
+				ResourceIdField: &config.ResourceIdField{
+					Rules: &config.ResourceIDRules{
+						AllowedResourceTypeIds: []string{resourceTypeUser.Id},
+					},
+				},
+			},
+		},
+		{
+			Name:        argUserProfile,
+			DisplayName: "User Profile Data",
+			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, custom_schemas.",
+			IsRequired:  true,
+			Field:       &config.Field_StringField{},
+		},
+	},
+	ReturnTypes: []*config.Field{
+		{
+			Name:        "success",
+			DisplayName: "Success",
+			Description: "Whether the user's profile was updated successfully.",
+			Field:       &config.Field_BoolField{},
+		},
+		{
+			Name:        "updated_fields",
+			DisplayName: "Updated Fields",
+			Description: "Comma-separated list of profile fields that were changed.",
+			Field:       &config.Field_StringField{},
+		},
+	},
+	ActionType: []v2.ActionType{
+		v2.ActionType_ACTION_TYPE_ACCOUNT,
+		v2.ActionType_ACTION_TYPE_ACCOUNT_UPDATE_PROFILE,
+	},
+}
+
+// updateUserActionHandler backs the global update_user action. It lives here,
+// next to the resource-scoped update_user_profile handler, rather than in
+// actions.go: both share the unexported applyUserProfilePatch/profileFromJSON
+// helpers, and colocating them avoids exporting those helpers just for placement.
+func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	userRef, ok := actions.GetResourceIDArg(args, argUserID)
+	if !ok || userRef.GetResource() == "" {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: user_id is required")
+	}
+	userId := userRef.GetResource()
+
+	profileJSON, err := actions.RequireStringArg(args, argUserProfile)
+	if err != nil {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: user_profile is required", err)
+	}
+
+	var profile map[string]any
+	if err := json.Unmarshal([]byte(profileJSON), &profile); err != nil {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: invalid user_profile JSON", err)
+	}
+
+	patch, err := profileFromJSON(profile)
+	if err != nil {
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: invalid user_profile", err)
+	}
+
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if client.UserProvisioningService == nil {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			fmt.Sprintf("google-workspace: update_user: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
+	}
+
+	_, updatedFields, err := applyUserProfilePatch(ctx, client, userId, patch)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	l.Debug("google-workspace: update_user: updated user profile",
+		zap.String("user_id", userId),
+		zap.Strings("fields", updatedFields))
+
+	result, err := structpb.NewStruct(map[string]any{
+		"success":        true,
+		"updated_fields": strings.Join(updatedFields, ", "),
+	})
+	if err != nil {
+		return nil, nil, uhttp.WrapErrors(codes.Internal, "google-workspace: update_user: failed to build result")
+	}
+
+	return result, nil, nil
+}
+
+// profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)
+// to a userProfilePatch. Only keys present in the object are applied.
+func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
+	patch := userProfilePatch{}
+	if v, ok := stringFromJSON(profile, argGivenName, "givenName"); ok {
+		patch.givenName = &v
+	}
+	if v, ok := stringFromJSON(profile, argFamilyName, "familyName"); ok {
+		patch.familyName = &v
+	}
+	if v, ok := stringFromJSON(profile, argRecoveryEmail, "recoveryEmail"); ok {
+		patch.recoveryEmail = &v
+	}
+	if v, ok := stringFromJSON(profile, argRecoveryPhone, "recoveryPhone"); ok {
+		patch.recoveryPhone = &v
+	}
+	if raw, ok := profile[argCustomSchemas]; ok {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return patch, fmt.Errorf("custom_schemas must be a JSON object")
+		}
+		schemas := make(map[string]googleapi.RawMessage, len(m))
+		for k, val := range m {
+			b, err := json.Marshal(val)
+			if err != nil {
+				return patch, fmt.Errorf("invalid custom_schemas value for %q: %w", k, err)
+			}
+			schemas[k] = b
+		}
+		if len(schemas) > 0 {
+			patch.customSchemas = schemas
+		}
+	}
+	return patch, nil
+}
+
+// stringFromJSON returns the first key present in profile whose value is a string.
+func stringFromJSON(profile map[string]any, keys ...string) (string, bool) {
+	for _, k := range keys {
+		if v, ok := profile[k]; ok {
+			if s, ok := v.(string); ok {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }

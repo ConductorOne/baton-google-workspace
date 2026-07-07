@@ -12,6 +12,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -20,9 +21,11 @@ import (
 
 // safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
 type safeUserResponse struct {
-	Id           string                      `json:"id,omitempty"`
-	PrimaryEmail string                      `json:"primaryEmail,omitempty"`
-	Name         *directoryAdmin.UserName    `json:"name,omitempty"`
+	Id            string                          `json:"id,omitempty"`
+	PrimaryEmail  string                          `json:"primaryEmail,omitempty"`
+	Name          *directoryAdmin.UserName        `json:"name,omitempty"`
+	RecoveryEmail string                          `json:"recoveryEmail,omitempty"`
+	CustomSchemas map[string]googleapi.RawMessage `json:"customSchemas,omitempty"`
 }
 
 // Minimal fake for Reports Activities.List + Directory lookups used by admin_event_feed.

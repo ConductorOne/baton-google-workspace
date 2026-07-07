@@ -169,7 +169,7 @@ func groupBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, dom
 	}
 }
 
-func groupProfile(ctx context.Context, group *admin.Group) map[string]interface{} {
+func groupProfile(group *admin.Group) map[string]interface{} {
 	profile := make(map[string]interface{})
 	profile["group_id"] = group.Id
 	profile["group_name"] = group.Name
@@ -184,7 +184,7 @@ func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, err
 		l.Error("google-workspace: group has no id", zap.String("name", group.Name))
 		return nil, fmt.Errorf("google-workspace: group has no id")
 	}
-	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(ctx, group))}
+	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(group))}
 	resourceOpts := []rs.ResourceOption{
 		rs.WithAnnotation(&v2.V1Identifier{
 			Id: group.Id,
@@ -278,15 +278,15 @@ func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceI
 		gerr := &googleapi.Error{}
 		if errors.As(err, &gerr) {
 			if gerr.Code == http.StatusNotFound {
-				// Group already deleted, return success
+				// Group already deleted, return success (idempotent).
 				return nil, nil
 			}
 			if gerr.Code == http.StatusForbidden {
-				return nil, fmt.Errorf(
-					"google-workspace: failed to delete group (403 Forbidden). "+
-						"This may be due to: 1) missing OAuth scope %s, "+
-						"2) insufficient admin permissions: %w",
-					admin.AdminDirectoryGroupScope, err)
+				// Keep the gRPC PermissionDenied code from the wrapped error but
+				// add the actionable scope hint operators need to troubleshoot.
+				return nil, uhttp.WrapErrors(codes.PermissionDenied,
+					fmt.Sprintf("google-workspace: failed to delete group (403 Forbidden) - check the %s scope and admin permissions", admin.AdminDirectoryGroupScope),
+					err)
 			}
 		}
 		return nil, err

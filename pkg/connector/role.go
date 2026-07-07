@@ -65,7 +65,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 		annos := &v2.V1Identifier{
 			Id: tempRoleId,
 		}
-		traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(ctx, r))}
+		traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(r))}
 		roleResource, err := rs.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create role resource in List: %w", err)
@@ -162,7 +162,7 @@ func roleBuilder(client *gwclient.GoogleWorkspaceClient, customerId string) *rol
 	}
 }
 
-func roleProfile(ctx context.Context, role *admin.Role) map[string]interface{} {
+func roleProfile(role *admin.Role) map[string]interface{} {
 	profile := make(map[string]interface{})
 	profile["role_id"] = role.RoleId
 	profile["role_name"] = role.RoleName
@@ -242,7 +242,7 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 	annos := &v2.V1Identifier{
 		Id: tempRoleId,
 	}
-	traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(ctx, role))}
+	traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(role))}
 	roleResource, err := rs.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create role resource in Get: %w", err)

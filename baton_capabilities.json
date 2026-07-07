@@ -156,7 +156,7 @@
             "@type": "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
             "permissions": [
               {
-                "permission": "admin.directory.user.readonly"
+                "permission": "admin.directory.user"
               },
               {
                 "permission": "admin.directory.user.alias.readonly"
@@ -177,7 +177,7 @@
       "permissions": {
         "permissions": [
           {
-            "permission": "admin.directory.user.readonly"
+            "permission": "admin.directory.user"
           },
           {
             "permission": "admin.directory.user.alias.readonly"

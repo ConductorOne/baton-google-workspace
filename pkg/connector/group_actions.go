@@ -11,6 +11,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+var _ connectorbuilder.ResourceActionProvider = (*groupResourceType)(nil)
 
 var (
 	createGroupActionSchema = &v2.BatonActionSchema{
@@ -200,7 +202,7 @@ var (
 				Field:       &config.Field_StringField{},
 			},
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_UNSPECIFIED},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 )
 
@@ -270,16 +272,11 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 	l.Debug("google-workspace: group action handler: create group input", zap.Any("group", group))
 	createdGroup, err := o.client.InsertGroup(ctx, group)
 	if err != nil {
-		// Check if it's a 403 Forbidden error and enhance the message
-		gerr := &googleapi.Error{}
+		// Non-obvious cause worth surfacing: a 403 on group creation is commonly
+		// an unverified email domain (not only a missing scope/permission).
+		var gerr *googleapi.Error
 		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
-			l.Debug("google-workspace: group action handler: 403 Forbidden error", zap.Any("error", err))
-			return nil, nil, fmt.Errorf(
-				"google-workspace: failed to create group (403 Forbidden). "+
-					"This may be due to: 1) missing OAuth scope %s, "+
-					"2) insufficient admin permissions, or "+
-					"3) invalid email domain '%s' (domain must be verified in Google Workspace): %w",
-				admin.AdminDirectoryGroupScope, email, err)
+			return nil, nil, fmt.Errorf("google-workspace: create group %q failed (403); a common cause is an unverified email domain: %w", email, err)
 		}
 		return nil, nil, fmt.Errorf("google-workspace: failed to create group: %w", err)
 	}
