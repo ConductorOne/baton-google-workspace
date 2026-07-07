@@ -820,22 +820,11 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		return nil, nil, err
 	}
 
-	patch := userProfilePatch{}
-	if _, ok := args.Fields[argGivenName]; ok {
-		v := getStringField(args, argGivenName)
-		patch.givenName = &v
-	}
-	if _, ok := args.Fields[argFamilyName]; ok {
-		v := getStringField(args, argFamilyName)
-		patch.familyName = &v
-	}
-	if _, ok := args.Fields[argRecoveryEmail]; ok {
-		v := getStringField(args, argRecoveryEmail)
-		patch.recoveryEmail = &v
-	}
-	if _, ok := args.Fields[argRecoveryPhone]; ok {
-		v := getStringField(args, argRecoveryPhone)
-		patch.recoveryPhone = &v
+	patch := userProfilePatch{
+		givenName:     optionalStringField(args, argGivenName),
+		familyName:    optionalStringField(args, argFamilyName),
+		recoveryEmail: optionalStringField(args, argRecoveryEmail),
+		recoveryPhone: optionalStringField(args, argRecoveryPhone),
 	}
 
 	// Custom schemas: raw JSON object mapping schemaName -> { fieldName: value },
@@ -844,7 +833,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 	if raw := getStringField(args, argCustomSchemas); raw != "" {
 		var schemas map[string]googleapi.RawMessage
 		if err := json.Unmarshal([]byte(raw), &schemas); err != nil {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("google-workspace: update_user_profile: invalid custom_schemas JSON: %v", err))
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user_profile: invalid custom_schemas JSON", err)
 		}
 		patch.customSchemas = schemas
 	}
@@ -1078,6 +1067,10 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 	},
 }
 
+// updateUserActionHandler backs the global update_user action. It lives here,
+// next to the resource-scoped update_user_profile handler, rather than in
+// actions.go: both share the unexported applyUserProfilePatch/profileFromJSON
+// helpers, and colocating them avoids exporting those helpers just for placement.
 func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
@@ -1089,17 +1082,17 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 
 	profileJSON, err := actions.RequireStringArg(args, argUserProfile)
 	if err != nil {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("google-workspace: update_user: %v", err))
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: user_profile is required", err)
 	}
 
 	var profile map[string]any
 	if err := json.Unmarshal([]byte(profileJSON), &profile); err != nil {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("google-workspace: update_user: invalid user_profile JSON: %v", err))
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: invalid user_profile JSON", err)
 	}
 
 	patch, err := profileFromJSON(profile)
 	if err != nil {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("google-workspace: update_user: %v", err))
+		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: invalid user_profile", err)
 	}
 
 	client, err := c.getClient(ctx)

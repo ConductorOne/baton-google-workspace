@@ -278,7 +278,7 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
 			return nil, nil, fmt.Errorf("google-workspace: create group %q failed (403); a common cause is an unverified email domain: %w", email, err)
 		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("google-workspace: failed to create group: %w", err)
 	}
 	l.Debug("google-workspace: group action handler: created group", zap.Any("createdGroup", createdGroup))
 	// Create the group resource

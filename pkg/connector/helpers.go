@@ -96,6 +96,9 @@ func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (str
 
 // Helper to get optional string field from args.
 func getStringField(args *structpb.Struct, fieldName string) string {
+	if args == nil || args.Fields == nil {
+		return ""
+	}
 	if field, ok := args.Fields[fieldName]; ok {
 		if strVal, ok := field.GetKind().(*structpb.Value_StringValue); ok {
 			return strings.TrimSpace(strVal.StringValue)
@@ -106,12 +109,30 @@ func getStringField(args *structpb.Struct, fieldName string) string {
 
 // Helper to get optional boolean field from args.
 func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
+	if args == nil || args.Fields == nil {
+		return false, false
+	}
 	if field, ok := args.Fields[fieldName]; ok {
 		if boolVal, ok := field.GetKind().(*structpb.Value_BoolValue); ok {
 			return boolVal.BoolValue, true
 		}
 	}
 	return false, false
+}
+
+// optionalStringField returns a pointer to the trimmed value of an optional
+// string arg, or nil when the arg is absent. Presence (not emptiness) decides:
+// a present empty string yields a pointer to "" so callers can distinguish
+// "clear this field" from "leave untouched".
+func optionalStringField(args *structpb.Struct, fieldName string) *string {
+	if args == nil || args.Fields == nil {
+		return nil
+	}
+	if _, ok := args.Fields[fieldName]; !ok {
+		return nil
+	}
+	v := getStringField(args, fieldName)
+	return &v
 }
 
 // applyBooleanGroupSetting applies a boolean group setting and returns the update result.
