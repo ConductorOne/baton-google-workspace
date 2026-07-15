@@ -95,7 +95,7 @@ func loadGoogleLogins(ctx context.Context, ss sessions.SessionStore, client *gwc
 	var pageToken string
 	var lastResp *reportsAdmin.Activities
 	for range appLoginMaxPages {
-		resp, err := client.ListActivities(ctx, reportsUserAll, reportsAppLogin, "login_success", startTime, pageToken, 1000)
+		resp, err := client.ListActivities(ctx, reportsUserAll, reportsAppLogin, "login_success", startTime, "", pageToken, 1000)
 		if err != nil {
 			return fmt.Errorf("google-workspace-connector: failed to fetch google login activity: %w", err)
 		}
@@ -143,7 +143,7 @@ func loadSAMLLogins(ctx context.Context, ss sessions.SessionStore, client *gwcli
 	l := ctxzap.Extract(ctx)
 	var pageToken string
 	for range appLoginMaxPages {
-		resp, err := client.ListActivities(ctx, reportsUserAll, reportsAppSAML, "login_success", startTime, pageToken, 1000)
+		resp, err := client.ListActivities(ctx, reportsUserAll, reportsAppSAML, "login_success", startTime, "", pageToken, 1000)
 		if err != nil {
 			return fmt.Errorf("google-workspace-connector: failed to fetch saml activity: %w", err)
 		}

@@ -107,7 +107,16 @@ func oauthErrorCode(oe *oauth2.RetrieveError) string {
 	return body.Error
 }
 
-func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, newService newService[T], scopes ...string) (*T, error) {
+const (
+	// defaultAPIHTTPTimeout is used for all Google API services.
+	defaultAPIHTTPTimeout = 30 * time.Second
+	// reportAPIHTTPTimeout is longer because the Reports API can be slow for large tenants.
+	// Time-windowed chunking (endTime) keeps per-request scope small, but the extra headroom
+	// protects against transient server latency spikes.
+	reportAPIHTTPTimeout = 120 * time.Second
+)
+
+func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, httpTimeout time.Duration, newService newService[T], scopes ...string) (*T, error) {
 	l := ctxzap.Extract(ctx)
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, l))
 	if err != nil {
@@ -133,7 +142,7 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	}
 
 	httpClient = &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: httpTimeout,
 		Transport: &oauth2.Transport{
 			Base:   httpClient.Transport,
 			Source: oauth2.ReuseTokenSource(token, tokenSrc),
@@ -150,7 +159,7 @@ func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.S
 	if c.reportService != nil {
 		return c.reportService, nil
 	}
-	srv, err := newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
+	srv, err := newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, reportAPIHTTPTimeout, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create report service: %w", err)
 	}
@@ -515,7 +524,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 		}
 	}
 
-	service, err = newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, newService, scope)
+	service, err = newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, defaultAPIHTTPTimeout, newService, scope)
 	if err != nil {
 		var ae *GoogleWorkspaceOAuthUnauthorizedError
 		if errors.As(err, &ae) {

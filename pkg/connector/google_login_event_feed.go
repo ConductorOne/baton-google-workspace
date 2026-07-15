@@ -40,7 +40,7 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to unmarshal page token in google login event feed: %w", err)
 	}
 
-	r, err := f.client.ListActivities(ctx, reportsUserAll, reportsAppLogin, "login_success", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
+	r, err := f.client.ListActivities(ctx, reportsUserAll, reportsAppLogin, "login_success", cursor.StartAt, cursor.EndAt, cursor.NextPageToken, int64(pToken.Size))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to list google login activities: %w", err)
 	}
@@ -99,9 +99,33 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 	}
 
 	cursor.NextPageToken = r.NextPageToken
-	if r.NextPageToken == "" {
-		cursor.StartAt = cursor.LatestEventSeen
-		cursor.LatestEventSeen = ""
+
+	hasMore := r.NextPageToken != ""
+	if !hasMore {
+		if cursor.EndAt != "" {
+			chunkEnd, parseErr := time.Parse(time.RFC3339, cursor.EndAt)
+			if parseErr != nil {
+				chunkEnd = time.Now()
+			}
+			now := time.Now()
+			if chunkEnd.Before(now.Add(-eventFeedCatchUpBuffer)) {
+				cursor.StartAt = cursor.EndAt
+				nextEnd := chunkEnd.Add(eventFeedChunkDuration)
+				if nextEnd.After(now) {
+					nextEnd = now
+				}
+				cursor.EndAt = nextEnd.Format(time.RFC3339)
+				cursor.LatestEventSeen = ""
+				hasMore = true
+			} else {
+				cursor.StartAt = cursor.EndAt
+				cursor.EndAt = ""
+				cursor.LatestEventSeen = ""
+			}
+		} else {
+			cursor.StartAt = cursor.LatestEventSeen
+			cursor.LatestEventSeen = ""
+		}
 	}
 
 	cursorToken, err := cursor.marshal()
@@ -111,6 +135,6 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 
 	return events, &pagination.StreamState{
 		Cursor:  cursorToken,
-		HasMore: r.NextPageToken != "",
+		HasMore: hasMore,
 	}, nil, nil
 }

@@ -106,7 +106,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	for _, eventName := range fetchNames {
 		isGroupEvent := adminGroupEventNames[eventName]
-		r, err := f.client.ListActivities(ctx, "all", "admin", eventName, cursor.StartAt, cursor.EventPageTokens[eventName], adminActivitiesPageSize)
+		r, err := f.client.ListActivities(ctx, "all", "admin", eventName, cursor.StartAt, cursor.EndAt, cursor.EventPageTokens[eventName], adminActivitiesPageSize)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities for %s: %w", eventName, err)
 		}
@@ -153,8 +153,33 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	hasMore := len(nextTokens) > 0
 	cursor.EventPageTokens = nextTokens
 	if !hasMore {
-		cursor.StartAt = cursor.LatestEventSeen
-		cursor.LatestEventSeen = ""
+		// All event names exhausted for this chunk — advance to the next chunk or
+		// signal caught-up, same logic as usageEventFeed.
+		if cursor.EndAt != "" {
+			chunkEnd, parseErr := time.Parse(time.RFC3339, cursor.EndAt)
+			if parseErr != nil {
+				chunkEnd = time.Now()
+			}
+			now := time.Now()
+			if chunkEnd.Before(now.Add(-eventFeedCatchUpBuffer)) {
+				cursor.StartAt = cursor.EndAt
+				nextEnd := chunkEnd.Add(eventFeedChunkDuration)
+				if nextEnd.After(now) {
+					nextEnd = now
+				}
+				cursor.EndAt = nextEnd.Format(time.RFC3339)
+				cursor.LatestEventSeen = ""
+				hasMore = true
+			} else {
+				cursor.StartAt = cursor.EndAt
+				cursor.EndAt = ""
+				cursor.LatestEventSeen = ""
+			}
+		} else {
+			// Legacy path (no EndAt): preserve existing behavior.
+			cursor.StartAt = cursor.LatestEventSeen
+			cursor.LatestEventSeen = ""
+		}
 	}
 
 	cursorToken, err := cursor.marshal()

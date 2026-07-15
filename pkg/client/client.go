@@ -546,7 +546,7 @@ func (c *GoogleWorkspaceClient) ListUserIDsPage(ctx context.Context, customerID,
 // Reports
 // ---------------------------------------------------------------------------
 
-func (c *GoogleWorkspaceClient) ListActivities(ctx context.Context, userKey, applicationName, eventName, startTime, pageToken string, maxResults int64) (*reportsAdmin.Activities, error) {
+func (c *GoogleWorkspaceClient) ListActivities(ctx context.Context, userKey, applicationName, eventName, startTime, endTime, pageToken string, maxResults int64) (*reportsAdmin.Activities, error) {
 	if c.ReportService == nil {
 		return nil, errServiceNotAvailable("report service")
 	}
@@ -556,6 +556,9 @@ func (c *GoogleWorkspaceClient) ListActivities(ctx context.Context, userKey, app
 	}
 	if startTime != "" {
 		r = r.StartTime(startTime)
+	}
+	if endTime != "" {
+		r = r.EndTime(endTime)
 	}
 	if pageToken != "" {
 		r = r.PageToken(pageToken)

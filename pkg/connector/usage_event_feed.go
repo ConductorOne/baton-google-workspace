@@ -35,6 +35,21 @@ const usageActivitiesPageSize = 1000
 // Reports data for 6 months so there is headroom if the window needs to grow.
 const maxEventFeedLookback = 90 * 24 * time.Hour
 
+// eventFeedChunkDuration is the time window per ListActivities call.
+// Splitting the lookback into small windows bounds how much data Google must scan per
+// request: a 90-day open-ended query on a large tenant (e.g. DoorDash with 10k+ users)
+// can have millions of events that exhaust the HTTP timeout before the first response
+// header arrives. 7-day chunks keep the per-request dataset manageable (~13 chunks for
+// a full 90-day backfill) while still providing broad historical coverage.
+const eventFeedChunkDuration = 7 * 24 * time.Hour
+
+// eventFeedCatchUpBuffer is the minimum age an EndAt must have before we consider the
+// chunk "not yet at now". Google's Reports API has event ingestion lag (typically minutes
+// to hours); events produced in the last few minutes may not yet appear in the API.
+// Using a small buffer avoids an infinite catch-up loop where the final chunk always
+// appears to have more data.
+const eventFeedCatchUpBuffer = 5 * time.Minute
+
 type usageEventFeed struct {
 	c *gwclient.GoogleWorkspaceClient
 }
@@ -88,7 +103,11 @@ type pageToken struct {
 	LatestEventSeen string            `json:"latest_event_seen,omitempty"`
 	NextPageToken   string            `json:"next_page_token,omitempty"`
 	StartAt         string            `json:"start_at,omitempty"`
-	PageSize        int               `json:"page_size,omitempty"`
+	// EndAt is the upper bound of the current time-window chunk sent to the API as endTime.
+	// When empty the feed has no upper bound (backward-compat with pre-chunking cursors that
+	// are still mid-pagination via NextPageToken or EventPageTokens).
+	EndAt    string `json:"end_at,omitempty"`
+	PageSize int    `json:"page_size,omitempty"`
 	// EventPageTokens holds per-event-name pagination cursors for feeds that
 	// issue one ListActivities request per event name (e.g. adminEventFeed).
 	EventPageTokens map[string]string `json:"event_page_tokens,omitempty"`
@@ -134,6 +153,20 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 		pt.LatestEventSeen = pt.StartAt
 	}
 
+	// Initialize the chunk end time (EndAt) when starting a new chunk.
+	// Guard: only set when not already mid-pagination (no active page tokens) so we
+	// never clobber an in-progress chunk's EndAt on backward-compat cursors.
+	if pt.EndAt == "" && pt.NextPageToken == "" && len(pt.EventPageTokens) == 0 {
+		chunkEnd := time.Now()
+		if startAt, parseErr := time.Parse(time.RFC3339, pt.StartAt); parseErr == nil {
+			candidate := startAt.Add(eventFeedChunkDuration)
+			if candidate.Before(chunkEnd) {
+				chunkEnd = candidate
+			}
+		}
+		pt.EndAt = chunkEnd.Format(time.RFC3339)
+	}
+
 	return pt, nil
 }
 
@@ -151,14 +184,15 @@ func (pt *pageToken) marshal() (string, error) {
 func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	var streamState *pagination.StreamState
-
 	cursor, err := unmarshalPageToken(pToken, startAt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token in usage event feed: %w", err)
 	}
 
-	r, err := f.c.ListActivities(ctx, "all", "token", "authorize", cursor.StartAt, cursor.NextPageToken, usageActivitiesPageSize)
+	// Pass endTime (cursor.EndAt) to bound the Google-side scan to the current chunk window.
+	// For backward-compat cursors still mid-pagination (NextPageToken set, no EndAt), EndAt
+	// is empty and the call falls through to the open-ended legacy behaviour.
+	r, err := f.c.ListActivities(ctx, "all", "token", "authorize", cursor.StartAt, cursor.EndAt, cursor.NextPageToken, usageActivitiesPageSize)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list token activities: %w", err)
 	}
@@ -203,20 +237,56 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	}
 
 	cursor.NextPageToken = r.NextPageToken
-	if r.NextPageToken == "" {
-		cursor.StartAt = cursor.LatestEventSeen
-		cursor.LatestEventSeen = ""
+
+	hasMore := r.NextPageToken != ""
+	if !hasMore {
+		// Current chunk is exhausted — decide whether to advance to the next chunk or
+		// signal that we're caught up to the present.
+		if cursor.EndAt != "" {
+			chunkEnd, parseErr := time.Parse(time.RFC3339, cursor.EndAt)
+			if parseErr != nil {
+				chunkEnd = time.Now()
+			}
+			now := time.Now()
+			if chunkEnd.Before(now.Add(-eventFeedCatchUpBuffer)) {
+				// More time remains between chunkEnd and now: advance the window forward.
+				cursor.StartAt = cursor.EndAt
+				nextEnd := chunkEnd.Add(eventFeedChunkDuration)
+				if nextEnd.After(now) {
+					nextEnd = now
+				}
+				cursor.EndAt = nextEnd.Format(time.RFC3339)
+				cursor.LatestEventSeen = ""
+				hasMore = true
+			} else {
+				// Caught up: store the chunk boundary as StartAt so the next scheduled
+				// run picks up from here rather than rescanning this window.
+				cursor.StartAt = cursor.EndAt
+				cursor.EndAt = ""
+				cursor.LatestEventSeen = ""
+			}
+		} else {
+			// Legacy path (no EndAt): preserve existing behavior.
+			cursor.StartAt = cursor.LatestEventSeen
+			cursor.LatestEventSeen = ""
+		}
 	}
+
+	l.Debug("google-workspace-event-feed: listed usage events",
+		zap.Int("events_produced", len(events)),
+		zap.String("chunk_start", cursor.StartAt),
+		zap.String("chunk_end", cursor.EndAt),
+		zap.Bool("has_more", hasMore),
+	)
 
 	cursorToken, err := cursor.marshal()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to marshal cursor token in usage event feed: %w", err)
 	}
-	streamState = &pagination.StreamState{
+	return events, &pagination.StreamState{
 		Cursor:  cursorToken,
-		HasMore: r.NextPageToken != "",
-	}
-	return events, streamState, nil, nil
+		HasMore: hasMore,
+	}, nil, nil
 }
 
 func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait) (*v2.Event, error) {

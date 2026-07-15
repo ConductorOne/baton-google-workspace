@@ -75,6 +75,86 @@ func newReportsService(t *testing.T, baseURL string, hc *http.Client) *reportsAd
 	return srv
 }
 
+// newAdminFeedTestServerCapture is like newAdminFeedTestServer but also records the
+// endTime query parameter seen by the Reports handler.
+func newAdminFeedTestServerCapture(users map[string]*directoryAdmin.User, groups map[string]*directoryAdmin.Group, activitiesByEvent map[string]*reportsAdmin.Activities, capturedEndTime *string) *httptest.Server {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/admin/reports/v1/activity/users/all/applications/admin", func(w http.ResponseWriter, r *http.Request) {
+		if et := r.URL.Query().Get("endTime"); et != "" {
+			*capturedEndTime = et
+		}
+		eventName := r.URL.Query().Get("eventName")
+		resp, ok := activitiesByEvent[eventName]
+		if !ok {
+			resp = &reportsAdmin.Activities{}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/users/")
+		u := users[key]
+		if u == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(safeUserResponse{Id: u.Id, PrimaryEmail: u.PrimaryEmail, Name: u.Name})
+	})
+
+	mux.HandleFunc("/admin/directory/v1/groups/", func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/admin/directory/v1/groups/")
+		g := groups[key]
+		if g == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(g)
+	})
+
+	return httptest.NewServer(mux)
+}
+
+func TestAdminEventFeed_EndTimeSentInRequest(t *testing.T) {
+	users := map[string]*directoryAdmin.User{}
+	groups := map[string]*directoryAdmin.Group{}
+	actsByEvent := map[string]*reportsAdmin.Activities{}
+
+	var capturedEndTime string
+	server := newAdminFeedTestServerCapture(users, groups, actsByEvent, &capturedEndTime)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsService(t, server.URL, server.Client())
+
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir, GroupService: dir, ReportService: rep}
+	feed := newAdminEventFeed(client)
+
+	// Use a start time 30 days ago so the chunk EndAt will be 7 days later (not "now").
+	startAt := timestamppb.New(time.Now().Add(-30 * 24 * time.Hour))
+	st := &pagination.StreamToken{Size: 100}
+
+	_, state, _, err := feed.ListEvents(context.Background(), startAt, st)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if capturedEndTime == "" {
+		t.Fatal("expected endTime query parameter to be set in ListActivities request, got none")
+	}
+	endTime, parseErr := time.Parse(time.RFC3339, capturedEndTime)
+	if parseErr != nil {
+		t.Fatalf("endTime is not valid RFC3339: %v", capturedEndTime)
+	}
+	// EndAt should be startAt + 7 days, well in the past — so HasMore should be true (more chunks).
+	if !state.HasMore {
+		t.Fatal("expected HasMore=true after first chunk (30-day lookback, 7-day chunk)")
+	}
+	// Sanity: endTime should be before now.
+	if !endTime.Before(time.Now()) {
+		t.Fatalf("endTime %v should be before now", endTime)
+	}
+}
+
 func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	// Create one group and one user resolvable by email
 	users := map[string]*directoryAdmin.User{
