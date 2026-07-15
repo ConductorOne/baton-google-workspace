@@ -82,9 +82,17 @@ func hasParameter(name string, parameters []*reportsAdmin.ActivityEventsParamete
 
 type pageToken struct {
 	LatestEventSeen string `json:"latest_event_seen,omitempty"`
-	NextPageToken   string `json:"next_page_token,omitempty"`
-	StartAt         string `json:"start_at,omitempty"`
-	PageSize        int    `json:"page_size,omitempty"`
+	// EarliestEventSeen is the minimum OccurredAt observed within the current
+	// pagination run. Because Google's Reports API returns activities in reverse
+	// chronological order, this value decreases as pagination proceeds backward
+	// through history. When EarliestEventSeen reaches StartAt we know the historical
+	// window has been drained even if NextPageToken is unexpectedly non-empty.
+	// Cursors written before this field existed will unmarshal it as the zero
+	// value, and the first batch processed by the new code populates it.
+	EarliestEventSeen string `json:"earliest_event_seen,omitempty"`
+	NextPageToken     string `json:"next_page_token,omitempty"`
+	StartAt           string `json:"start_at,omitempty"`
+	PageSize          int    `json:"page_size,omitempty"`
 }
 
 func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*pageToken, error) {
@@ -120,6 +128,7 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 			pt.StartAt = cutoff.Format(time.RFC3339)
 			pt.NextPageToken = ""
 			pt.LatestEventSeen = ""
+			pt.EarliestEventSeen = ""
 		}
 	}
 
@@ -156,9 +165,20 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list token activities: %w", err)
 	}
 
+	cursorStart, err := time.Parse(time.RFC3339, cursor.StartAt)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to parse start_at in usage event feed: %w", err)
+	}
 	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to parse latest event time in usage event feed: %w", err)
+	}
+	var earliestEvent time.Time
+	if cursor.EarliestEventSeen != "" {
+		earliestEvent, err = time.Parse(time.RFC3339, cursor.EarliestEventSeen)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to parse earliest event time in usage event feed: %w", err)
+		}
 	}
 	events := []*v2.Event{}
 	for _, activity := range r.Items {
@@ -171,6 +191,10 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		if occurredAt.AsTime().After(latestEvent) {
 			cursor.LatestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
 			latestEvent = occurredAt.AsTime()
+		}
+		if earliestEvent.IsZero() || occurredAt.AsTime().Before(earliestEvent) {
+			cursor.EarliestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
+			earliestEvent = occurredAt.AsTime()
 		}
 		// There can be multiple events, have not found an example of this yet
 		for _, e := range activity.Events {
@@ -196,9 +220,31 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	}
 
 	cursor.NextPageToken = r.NextPageToken
-	if r.NextPageToken == "" {
+
+	// Decide whether to commit the cursor (advance StartAt to LatestEventSeen and
+	// clear pagination state) or keep paginating the current historical window:
+	//
+	//   1. NextPageToken == "" — the normal end-of-pagination signal from Google.
+	//   2. !earliestEvent.After(cursorStart) — pagination has reached events at
+	//      or before our requested StartAt, which means we've drained the
+	//      historical backlog. Because Google's Reports API returns activities in
+	//      reverse chronological order, earliestEvent decreases monotonically as
+	//      pagination proceeds; reaching StartAt is the natural completion signal
+	//      and is mathematically guaranteed to fire even if NextPageToken never
+	//      empties on its own.
+	//
+	// LatestEventSeen is set on the first (newest) page of a reverse-chronological
+	// run, so committing StartAt = LatestEventSeen safely jumps the cursor forward
+	// to the most recent event observed; no events are skipped because the next
+	// invocation will pick up anything that occurred after that timestamp.
+	drained := r.NextPageToken == ""
+	backDrained := !earliestEvent.IsZero() && !earliestEvent.After(cursorStart)
+
+	if drained || backDrained {
 		cursor.StartAt = cursor.LatestEventSeen
 		cursor.LatestEventSeen = ""
+		cursor.EarliestEventSeen = ""
+		cursor.NextPageToken = ""
 	}
 
 	cursorToken, err := cursor.marshal()
@@ -207,7 +253,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 	}
 	streamState = &pagination.StreamState{
 		Cursor:  cursorToken,
-		HasMore: r.NextPageToken != "",
+		HasMore: cursor.NextPageToken != "",
 	}
 	return events, streamState, nil, nil
 }
