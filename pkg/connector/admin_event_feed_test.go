@@ -145,7 +145,7 @@ func TestAdminEventFeed_EndTimeSentInRequest(t *testing.T) {
 	if parseErr != nil {
 		t.Fatalf("endTime is not valid RFC3339: %v", capturedEndTime)
 	}
-	// EndAt should be startAt + 7 days, well in the past — so HasMore should be true (more chunks).
+	// EndAt should be startAt + 1 day, well in the past — so HasMore should be true (more chunks).
 	if !state.HasMore {
 		t.Fatal("expected HasMore=true after first chunk (30-day lookback, 7-day chunk)")
 	}

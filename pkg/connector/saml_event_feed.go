@@ -93,16 +93,16 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Tim
 		if cursor.EndAt != "" {
 			chunkEnd, parseErr := time.Parse(time.RFC3339, cursor.EndAt)
 			if parseErr != nil {
-				chunkEnd = time.Now()
+				chunkEnd = time.Now().UTC()
 			}
-			now := time.Now()
+			now := time.Now().UTC()
 			if chunkEnd.Before(now.Add(-eventFeedCatchUpBuffer)) {
 				cursor.StartAt = cursor.EndAt
-				nextEnd := chunkEnd.Add(eventFeedChunkDuration)
+				nextEnd := chunkEnd.UTC().Add(eventFeedChunkDuration)
 				if nextEnd.After(now) {
 					nextEnd = now
 				}
-				cursor.EndAt = nextEnd.Format(time.RFC3339)
+				cursor.EndAt = nextEnd.UTC().Format(time.RFC3339)
 				cursor.LatestEventSeen = ""
 				hasMore = true
 			} else {

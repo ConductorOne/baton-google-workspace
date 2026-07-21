@@ -209,7 +209,7 @@ func TestUsageEventFeed_NewCursorInitializesChunk(t *testing.T) {
 	client := newUsageFeedClient(t, server)
 	feed := newUsageEventFeed(client)
 
-	// Start 30 days ago; expect EndAt = 30 days ago + 7 days = 23 days ago.
+	// Start 30 days ago; expect EndAt = 30 days ago + 1 day = 29 days ago.
 	startAt := timestamppb.New(time.Now().Add(-30 * 24 * time.Hour))
 	st := &pagination.StreamToken{Size: 100}
 

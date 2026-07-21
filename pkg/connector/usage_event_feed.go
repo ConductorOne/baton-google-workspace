@@ -39,9 +39,11 @@ const maxEventFeedLookback = 90 * 24 * time.Hour
 // Splitting the lookback into small windows bounds how much data Google must scan per
 // request: a 90-day open-ended query on a large tenant (e.g. DoorDash with 10k+ users)
 // can have millions of events that exhaust the HTTP timeout before the first response
-// header arrives. 7-day chunks keep the per-request dataset manageable (~13 chunks for
-// a full 90-day backfill) while still providing broad historical coverage.
-const eventFeedChunkDuration = 7 * 24 * time.Hour
+// header arrives. The baton SDK runner imposes a 60-second gRPC deadline on each
+// ListEvents call; Google's server-side scan must complete within that budget.
+// 1-day chunks keep per-request scan time well under that limit (~90 chunks for a
+// full 90-day backfill, each covering at most ~1/90th of the historical data).
+const eventFeedChunkDuration = 24 * time.Hour
 
 // eventFeedCatchUpBuffer is the minimum age an EndAt must have before we consider the
 // chunk "not yet at now". Google's Reports API has event ingestion lag (typically minutes
@@ -143,7 +145,7 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 	} else {
 		cursorStart, err := time.Parse(time.RFC3339, pt.StartAt)
 		if err != nil || cursorStart.Before(cutoff) {
-			pt.StartAt = cutoff.Format(time.RFC3339)
+			pt.StartAt = cutoff.UTC().Format(time.RFC3339)
 			pt.NextPageToken = ""
 			pt.LatestEventSeen = ""
 		}
@@ -157,9 +159,9 @@ func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb
 	// Guard: only set when not already mid-pagination (no active page tokens) so we
 	// never clobber an in-progress chunk's EndAt on backward-compat cursors.
 	if pt.EndAt == "" && pt.NextPageToken == "" && len(pt.EventPageTokens) == 0 {
-		chunkEnd := time.Now()
+		chunkEnd := time.Now().UTC()
 		if startAt, parseErr := time.Parse(time.RFC3339, pt.StartAt); parseErr == nil {
-			candidate := startAt.Add(eventFeedChunkDuration)
+			candidate := startAt.UTC().Add(eventFeedChunkDuration)
 			if candidate.Before(chunkEnd) {
 				chunkEnd = candidate
 			}
@@ -245,17 +247,17 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		if cursor.EndAt != "" {
 			chunkEnd, parseErr := time.Parse(time.RFC3339, cursor.EndAt)
 			if parseErr != nil {
-				chunkEnd = time.Now()
+				chunkEnd = time.Now().UTC()
 			}
-			now := time.Now()
+			now := time.Now().UTC()
 			if chunkEnd.Before(now.Add(-eventFeedCatchUpBuffer)) {
 				// More time remains between chunkEnd and now: advance the window forward.
 				cursor.StartAt = cursor.EndAt
-				nextEnd := chunkEnd.Add(eventFeedChunkDuration)
+				nextEnd := chunkEnd.UTC().Add(eventFeedChunkDuration)
 				if nextEnd.After(now) {
 					nextEnd = now
 				}
-				cursor.EndAt = nextEnd.Format(time.RFC3339)
+				cursor.EndAt = nextEnd.UTC().Format(time.RFC3339)
 				cursor.LatestEventSeen = ""
 				hasMore = true
 			} else {
