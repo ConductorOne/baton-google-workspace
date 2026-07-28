@@ -105,8 +105,12 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 	}}, nil
 }
 
-func (f *googleLoginEventFeed) ListEvents(ctx context.Context, _ *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, pToken, f.lookupUser)
+func (f *googleLoginEventFeed) ListEvents(
+	ctx context.Context,
+	earliestEvent *timestamppb.Timestamp,
+	pToken *pagination.StreamToken,
+) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken, f.lookupUser)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -156,8 +156,8 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 	return events, nil
 }
 
-func (f *usageEventFeed) ListEvents(ctx context.Context, _ *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	events, streamState, err := scanUsersForEvents(ctx, f.c, f.customerID, f.domain, pToken, f.lookupUser)
+func (f *usageEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	events, streamState, err := scanUsersForEvents(ctx, f.c, f.customerID, f.domain, earliestEvent, pToken, f.lookupUser)
 	if err != nil {
 		return nil, nil, nil, err
 	}

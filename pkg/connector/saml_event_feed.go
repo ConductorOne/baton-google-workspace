@@ -126,7 +126,7 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 	return events, nil
 }
 
-func (f *samlEventFeed) ListEvents(ctx context.Context, _ *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+func (f *samlEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	// Resolved once per call (not once per user): it lists every SAML profile for the whole
 	// customer, so looking it up per-user in the batch would multiply Cloud Identity calls
 	// unnecessarily.
@@ -135,7 +135,7 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, _ *timestamppb.Timestamp
 		return nil, nil, nil, err
 	}
 
-	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, pToken,
+	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken,
 		func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
 			return f.lookupUser(ctx, client, samlProfileMap, user)
 		})

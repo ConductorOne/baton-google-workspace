@@ -22,6 +22,7 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
@@ -86,10 +87,17 @@ type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceC
 
 // scanUsersForEvents drives one bounded step of the rolling user-directory walk shared by all
 // three "last login" event feeds.
+//
+// earliestEvent is the caller-supplied floor (event-feed-start-at / the SDK's earliestEvent
+// param): since each lookup only ever returns a user's *current* most recent login — which may
+// be older than earliestEvent, or unchanged since the last pass — any event whose OccurredAt
+// falls before earliestEvent is dropped here rather than emitted. A nil earliestEvent applies no
+// floor.
 func scanUsersForEvents(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
 	customerID, domain string,
+	earliestEvent *timestamppb.Timestamp,
 	pToken *pagination.StreamToken,
 	lookup userEventLookup,
 ) ([]*v2.Event, *pagination.StreamState, error) {
@@ -130,7 +138,12 @@ func scanUsersForEvents(
 		if err != nil {
 			return nil, nil, err
 		}
-		events = append(events, userEvents...)
+		for _, e := range userEvents {
+			if earliestEvent != nil && e.GetOccurredAt() != nil && e.GetOccurredAt().AsTime().Before(earliestEvent.AsTime()) {
+				continue
+			}
+			events = append(events, e)
+		}
 	}
 
 	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""

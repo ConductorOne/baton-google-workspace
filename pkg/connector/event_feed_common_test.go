@@ -126,7 +126,7 @@ func TestScanUsersForEvents_PaginatesAcrossMultipleCallsWithoutLoss(t *testing.T
 			t.Fatalf("scanUsersForEvents did not terminate after %d iterations (possible infinite loop)", maxIterations)
 		}
 
-		_, state, err := scanUsersForEvents(context.Background(), client, "customer", "", &pagination.StreamToken{Cursor: cursor},
+		_, state, err := scanUsersForEvents(context.Background(), client, "customer", "", nil, &pagination.StreamToken{Cursor: cursor},
 			func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser) ([]*v2.Event, error) {
 				visited[u.Email+":lookup"]++
 				return nil, nil
