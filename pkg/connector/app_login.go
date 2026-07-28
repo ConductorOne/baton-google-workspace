@@ -1,48 +1,44 @@
 // app_login.go discovers which OAuth and Google Workspace apps users have accessed.
 // It uses two data sources: the Directory API's token list (OAuth apps a user has granted access to)
-// and the Admin Reports audit log (actual login events for OAuth and Google Workspace apps).
+// and the Admin Reports audit log (actual login events for OAuth, SAML, and Google Workspace apps).
 // Results are stored in the session so applicationResource.List() and Grants() can read them
 // without re-fetching across sync phases.
+//
+// All three data sources are looked up per user, in one bounded batch per applicationResource.List()
+// call, using the same rolling user-directory walk as the usage/login event feeds
+// (see event_feed_common.go). There is no internal loop across directory pages or Reports pages
+// inside a single List() call — pagination is driven entirely by resource.SyncOpAttrs.PageToken /
+// resource.SyncOpResults.NextPageToken, so the SDK checkpoints progress between calls.
 package connector
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
-	"slices"
-	"sync"
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/session"
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
-	"golang.org/x/sync/semaphore"
-	admin "google.golang.org/api/admin/directory/v1"
-	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
 const (
-	reportsUserAll  = "all"
 	reportsAppLogin = "login"
 	reportsAppSAML  = "saml"
 
 	samlAppIDPrefix               = "saml:"
 	googleWorkspaceAppID          = "google_workspace"
 	googleWorkspaceAppDisplayName = "Google Workspace"
-	// appLoginLookbackDays limits how far back login events are scanned.
-	// Since events are returned newest-first, this bounds the total pages fetched.
-	appLoginLookbackDays = 180
-	// appLoginMaxPages caps pagination for SAML events (OAuth is per-app, no pagination needed).
-	appLoginMaxPages    = 20
-	appDiscoveryWorkers = 10
-	// appDiscoveryMaxUserPages caps user pages scanned during OAuth app discovery.
-	appDiscoveryMaxUserPages = 200
+	// appLoginUsersPerPage bounds how many users applicationResource.List() processes per call,
+	// mirroring usersPerEventFeedCall's rationale: each user costs one Directory Tokens.list call
+	// plus up to two rate-limited Reports API filter-queries, so a call must stay small to return
+	// quickly instead of blocking on the shared quota for an entire directory page.
+	appLoginUsersPerPage = 25
 	// oauthPresenceValue is the sentinel stored when a user has authorized an OAuth app via
 	// Tokens.List() but no Reports timestamp is available. Epoch ensures any real timestamp
 	// from the Reports API takes precedence.
@@ -50,11 +46,9 @@ const (
 )
 
 var (
-	appLoginAppNamespace           = sessions.WithPrefix("app_login_app")
 	appLoginOAuthAppsNamespace     = sessions.WithPrefix("app_login_oauth_apps")
-	appDiscoveryLoadedNamespace    = sessions.WithPrefix("app_login_tokens_loaded")
-	appLoginDataLoadedNamespace    = sessions.WithPrefix("app_login_data_loaded")
 	appLoginDirectoryUserNamespace = sessions.WithPrefix("app_login_directory_user")
+	appLoginEmittedAppNamespace    = sessions.WithPrefix("app_login_emitted_app")
 	samlProfileMapNamespace        = sessions.WithPrefix("saml_profile_map")
 	samlProfileMapLoadedNamespace  = sessions.WithPrefix("saml_profile_map_loaded")
 )
@@ -63,362 +57,242 @@ func appLoginLoginsNamespace(appID string) sessions.SessionStoreOption {
 	return sessions.WithPrefix("app_login_logins:" + appID)
 }
 
-// loadLoginEvents fetches Google sign-in and SAML login events from the Reports API,
-// stores per-user last-login timestamps in session for use by Grants(), and returns
-// the discovered SAML apps (appID → displayName). Runs only once per sync.
-func loadLoginEvents(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string) (map[string]string, error) {
-	_, loaded, err := session.GetJSON[string](ctx, ss, "done", appLoginDataLoadedNamespace)
+// oauthAppEntry describes one OAuth app a user has authorized, as discovered via Tokens.list.
+type oauthAppEntry struct {
+	clientID    string
+	displayText string
+}
+
+// scanAppLoginsPage advances one bounded step of the rolling user-directory walk, discovering
+// OAuth/SAML apps and recording each user's latest login timestamp per app in the session.
+// It returns any apps discovered on this page that have not been returned by a prior call
+// (appID -> displayName, oauthApp or samlApp), plus the next page token (empty when the walk
+// has completed a full pass).
+func scanAppLoginsPage(
+	ctx context.Context,
+	ss sessions.SessionStore,
+	client *gwclient.GoogleWorkspaceClient,
+	customerID, domain string,
+	pageToken string,
+	samlProfileMap map[string]string,
+) (map[string]string, map[string]string, string, error) {
+	cursor, err := unmarshalUserScanCursorFromString(pageToken)
 	if err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to check app login data loaded flag: %w", err)
-	}
-	if loaded {
-		return session.GetAllJSON[string](ctx, ss, appLoginAppNamespace)
+		return nil, nil, "", err
 	}
 
-	startTime := time.Now().UTC().AddDate(0, 0, -appLoginLookbackDays).Format(time.RFC3339)
+	if len(cursor.PendingUsers) == 0 {
+		usersResp, err := client.ListUserIDsPage(ctx, customerID, domain, cursor.DirectoryPageToken)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("google-workspace-connector: failed to list users for applications: %w", err)
+		}
+		cursor.DirectoryPageToken = usersResp.NextPageToken
 
-	if err := loadGoogleLogins(ctx, ss, client, startTime); err != nil {
-		return nil, err
-	}
-	if err := loadSAMLLogins(ctx, ss, client, startTime, samlProfileMap); err != nil {
-		return nil, err
+		dirUserBatch := make(map[string]string, len(usersResp.Users))
+		for _, u := range usersResp.Users {
+			if u.Id == "" || u.PrimaryEmail == "" {
+				continue
+			}
+			cursor.PendingUsers = append(cursor.PendingUsers, pendingUser{Email: u.PrimaryEmail, ID: u.Id})
+			dirUserBatch[u.Id] = "1"
+		}
+		if len(dirUserBatch) > 0 {
+			if err := session.SetManyJSON(ctx, ss, dirUserBatch, appLoginDirectoryUserNamespace); err != nil {
+				return nil, nil, "", fmt.Errorf("google-workspace-connector: failed to store directory user IDs in session: %w", err)
+			}
+		}
+
+		if len(cursor.PendingUsers) == 0 && cursor.DirectoryPageToken == "" {
+			return nil, nil, "", nil
+		}
 	}
 
-	if err := session.SetJSON(ctx, ss, "done", "true", appLoginDataLoadedNamespace); err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to mark app login data as loaded: %w", err)
+	batch := cursor.PendingUsers
+	if len(batch) > appLoginUsersPerPage {
+		batch = batch[:appLoginUsersPerPage]
 	}
-	return session.GetAllJSON[string](ctx, ss, appLoginAppNamespace)
+	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
+
+	newOAuthApps := map[string]string{}
+	newSAMLApps := map[string]string{}
+	for _, u := range batch {
+		oauthApps, err := fetchUserOAuthApps(ctx, client, u)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		if err := storeOAuthLogins(ctx, ss, u.ID, oauthApps, newOAuthApps); err != nil {
+			return nil, nil, "", err
+		}
+
+		if client.ReportService != nil {
+			if err := recordLatestGoogleLogin(ctx, ss, client, u); err != nil {
+				return nil, nil, "", err
+			}
+
+			if err := recordLatestSAMLLogins(ctx, ss, client, u, samlProfileMap, newSAMLApps); err != nil {
+				return nil, nil, "", err
+			}
+		}
+	}
+
+	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""
+	if !hasMore {
+		cursor = &userScanCursor{}
+	}
+	nextPageToken, err := cursor.marshal()
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("failed to marshal cursor token in app login scan: %w", err)
+	}
+	if !hasMore {
+		nextPageToken = ""
+	}
+
+	return newOAuthApps, newSAMLApps, nextPageToken, nil
 }
 
-func loadGoogleLogins(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, startTime string) error {
-	l := ctxzap.Extract(ctx)
-	var pageToken string
-	var lastResp *reportsAdmin.Activities
-	for range appLoginMaxPages {
-		resp, err := client.ListActivities(ctx, reportsUserAll, reportsAppLogin, "login_success", startTime, pageToken, 1000)
-		if err != nil {
-			return fmt.Errorf("google-workspace-connector: failed to fetch google login activity: %w", err)
+// fetchUserOAuthApps lists OAuth tokens for a single user.
+//
+// A failed ListTokens call is only tolerated (the user is skipped) when it is a genuine 404 —
+// i.e. the user was deleted mid-sync. Any other failure (403/429/5xx/network/context) is
+// surfaced as an error that aborts the sync. Silently skipping a user on a transient error
+// would drop that user's OAuth-app associations: apps only that user authorized may then be
+// missed entirely, and the user's app-access grants would be under-reported — which c1 prunes
+// as a revocation. Failing loudly forces a retry instead of persisting a partial result.
+func fetchUserOAuthApps(ctx context.Context, client *gwclient.GoogleWorkspaceClient, u pendingUser) ([]oauthAppEntry, error) {
+	tokenResp, err := client.ListTokens(ctx, u.ID)
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: user not found during token fetch, skipping", zap.String("user_id", u.ID))
+			return nil, nil
 		}
-		lastResp = resp
-
-		for _, activity := range resp.Items {
-			ts := convertIdTimeToTimestamp(activity.Id.Time)
-			if ts == nil || activity.Actor.ProfileId == "" {
-				continue
-			}
-			profileID := activity.Actor.ProfileId
-			_, isDir, err := session.GetJSON[string](ctx, ss, profileID, appLoginDirectoryUserNamespace)
-			if err != nil {
-				return fmt.Errorf("google-workspace-connector: failed to check directory user %s: %w", profileID, err)
-			}
-			if !isDir {
-				l.Debug("google-workspace: skipping non-directory user in google login events", zap.String("profile_id", profileID))
-				continue
-			}
-			loginTime := ts.AsTime().UTC().Format(time.RFC3339)
-			existing, found, err := session.GetJSON[string](ctx, ss, profileID, appLoginLoginsNamespace(googleWorkspaceAppID))
-			if err != nil {
-				return fmt.Errorf("google-workspace-connector: failed to read google login from session for %s: %w", profileID, err)
-			}
-			if found && existing >= loginTime {
-				continue
-			}
-			if err := session.SetJSON(ctx, ss, profileID, loginTime, appLoginLoginsNamespace(googleWorkspaceAppID)); err != nil {
-				return fmt.Errorf("google-workspace-connector: failed to store google login in session for %s: %w", profileID, err)
-			}
-		}
-
-		if resp.NextPageToken == "" {
-			break
-		}
-		pageToken = resp.NextPageToken
+		return nil, fmt.Errorf("google-workspace-connector: failed to list tokens for user %s: %w", u.ID, err)
 	}
-	if lastResp != nil && lastResp.NextPageToken != "" {
-		l.Debug("google-workspace: google login pagination cap reached, data may be incomplete", zap.Int("max_pages", appLoginMaxPages))
+
+	var filtered []oauthAppEntry
+	for _, t := range tokenResp.Items {
+		if t.ClientId == "" || t.DisplayText == "" {
+			continue
+		}
+		if t.ClientId == t.DisplayText && privateAppIDRegex.MatchString(t.ClientId) {
+			continue
+		}
+		filtered = append(filtered, oauthAppEntry{clientID: t.ClientId, displayText: t.DisplayText})
 	}
-	return nil
+	return filtered, nil
 }
 
-func loadSAMLLogins(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, startTime string, profileMap map[string]string) error {
-	l := ctxzap.Extract(ctx)
-	var pageToken string
-	for range appLoginMaxPages {
-		resp, err := client.ListActivities(ctx, reportsUserAll, reportsAppSAML, "login_success", startTime, pageToken, 1000)
-		if err != nil {
-			return fmt.Errorf("google-workspace-connector: failed to fetch saml activity: %w", err)
-		}
+func storeOAuthLogins(ctx context.Context, ss sessions.SessionStore, userID string, apps []oauthAppEntry, newApps map[string]string) error {
+	if len(apps) == 0 {
+		return nil
+	}
+	appsBatch := make(map[string]string, len(apps))
+	for _, a := range apps {
+		appsBatch[a.clientID] = a.displayText
+		newApps[a.clientID] = a.displayText
+	}
+	if err := session.SetManyJSON(ctx, ss, appsBatch, appLoginOAuthAppsNamespace); err != nil {
+		return fmt.Errorf("google-workspace-connector: failed to store oauth apps in session: %w", err)
+	}
 
-		newApps, newPairs, err := processSAMLPage(ctx, ss, resp.Items, profileMap)
-		if err != nil {
+	for _, a := range apps {
+		if err := storeLoginIfNewer(ctx, ss, a.clientID, userID, oauthPresenceValue); err != nil {
 			return err
 		}
-
-		if len(newApps) > 0 {
-			if err := session.SetManyJSON(ctx, ss, newApps, appLoginAppNamespace); err != nil {
-				return fmt.Errorf("google-workspace-connector: failed to store saml apps in session: %w", err)
-			}
-		}
-
-		if resp.NextPageToken == "" {
-			break
-		}
-		// Stop early: events are newest-first, so if this page had no new data, subsequent pages won't either.
-		if newPairs == 0 && len(newApps) == 0 {
-			l.Debug("google-workspace: no new saml apps or login pairs on page, stopping early")
-			break
-		}
-		pageToken = resp.NextPageToken
 	}
 	return nil
 }
 
-// processSAMLPage processes a page of SAML activities, writes per-(app,user) login timestamps to
-// session, and returns newly discovered apps and the count of new (app, user) pairs written.
-func processSAMLPage(ctx context.Context, ss sessions.SessionStore, activities []*reportsAdmin.Activity, profileMap map[string]string) (map[string]string, int, error) {
-	newApps := map[string]string{}
-	newPairs := 0
-	for _, activity := range activities {
+// storeLoginIfNewer writes loginTime for (appID, userID) only if it is newer than what is
+// already stored, so a later page's stale/earlier timestamp never clobbers a fresher one.
+func storeLoginIfNewer(ctx context.Context, ss sessions.SessionStore, appID, userID, loginTime string) error {
+	ns := appLoginLoginsNamespace(appID)
+	existing, found, err := session.GetJSON[string](ctx, ss, userID, ns)
+	if err != nil {
+		return fmt.Errorf("google-workspace-connector: failed to read login from session for app %s user %s: %w", appID, userID, err)
+	}
+	if found && existing >= loginTime {
+		return nil
+	}
+	if err := session.SetJSON(ctx, ss, userID, loginTime, ns); err != nil {
+		return fmt.Errorf("google-workspace-connector: failed to store login data for app %s user %s: %w", appID, userID, err)
+	}
+	return nil
+}
+
+// recordLatestGoogleLogin looks up a single user's most recent Google Workspace sign-in, which
+// has exactly one target app, so no per-app grouping is needed (unlike SAML/OAuth apps).
+func recordLatestGoogleLogin(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, u pendingUser) error {
+	r, err := listActivitiesRateLimited(ctx, client, u.Email, reportsAppLogin, "login_success", "", "", googleLoginLookupMaxResults)
+	if err != nil {
+		return fmt.Errorf("google-workspace-connector: failed to fetch google login activity for %s: %w", u.Email, err)
+	}
+
+	var latest time.Time
+	found := false
+	for _, activity := range r.Items {
 		ts := convertIdTimeToTimestamp(activity.Id.Time)
 		if ts == nil || activity.Actor.ProfileId == "" {
 			continue
 		}
-		profileID := activity.Actor.ProfileId
-		loginTime := ts.AsTime().UTC().Format(time.RFC3339)
+		if !found || ts.AsTime().After(latest) {
+			latest = ts.AsTime()
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
 
+	return storeLoginIfNewer(ctx, ss, googleWorkspaceAppID, u.ID, latest.UTC().Format(time.RFC3339))
+}
+
+// recordLatestSAMLLogins looks up a single user's recent SAML logins, grouped by app (since a
+// user can have distinct, independently-timestamped logins to multiple SAML apps), and records
+// the newest login per app plus any newly-discovered app names.
+func recordLatestSAMLLogins(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, u pendingUser, samlProfileMap map[string]string, newApps map[string]string) error {
+	r, err := listActivitiesRateLimited(ctx, client, u.Email, reportsAppSAML, "login_success", "", "", samlAppLookupMaxResults)
+	if err != nil {
+		return fmt.Errorf("google-workspace-connector: failed to fetch saml activity for %s: %w", u.Email, err)
+	}
+
+	type best struct {
+		appID string
+		name  string
+		at    time.Time
+	}
+	bestByApp := map[string]best{}
+	for _, activity := range r.Items {
+		ts := convertIdTimeToTimestamp(activity.Id.Time)
+		if ts == nil || activity.Actor.ProfileId == "" {
+			continue
+		}
 		for _, ev := range activity.Events {
 			appName := getValueFromParameters("application_name", ev.Parameters)
 			if appName == "" {
 				continue
 			}
 			stableID := appName
-			if profileName, ok := profileMap[appName]; ok {
+			if profileName, ok := samlProfileMap[appName]; ok {
 				stableID = profileName
 			}
 			appID := samlAppIDPrefix + stableID
-			if _, seen := newApps[appID]; !seen {
-				newApps[appID] = appName
-			}
-
-			existing, found, err := session.GetJSON[string](ctx, ss, profileID, appLoginLoginsNamespace(appID))
-			if err != nil {
-				return nil, 0, fmt.Errorf("google-workspace-connector: failed to read login from session for app %s user %s: %w", appID, profileID, err)
-			}
-			if found && existing >= loginTime {
+			existing, ok := bestByApp[appID]
+			if ok && !ts.AsTime().After(existing.at) {
 				continue
 			}
-			newPairs++
-			if err := session.SetJSON(ctx, ss, profileID, loginTime, appLoginLoginsNamespace(appID)); err != nil {
-				return nil, 0, fmt.Errorf("google-workspace-connector: failed to store login data for app %s user %s: %w", appID, profileID, err)
-			}
-		}
-	}
-	return newApps, newPairs, nil
-}
-
-type oauthAppEntry struct {
-	clientID    string
-	displayText string
-}
-
-type userAppsResult struct {
-	userID string
-	apps   []oauthAppEntry
-}
-
-// discoverOAuthApps lists OAuth tokens for all users and stores user+app associations in session.
-// Token fetching is parallelized with a bounded worker pool. Uses a run-once session flag.
-func discoverOAuthApps(
-	ctx context.Context,
-	ss sessions.SessionStore,
-	client *gwclient.GoogleWorkspaceClient,
-	customerID string,
-	domain string,
-) (map[string]string, error) {
-	_, loaded, err := session.GetJSON[string](ctx, ss, "done", appDiscoveryLoadedNamespace)
-	if err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to check oauth app discovery loaded flag: %w", err)
-	}
-	if loaded {
-		apps, err := session.GetAllJSON[string](ctx, ss, appLoginOAuthAppsNamespace)
-		if err != nil {
-			return nil, fmt.Errorf("google-workspace-connector: failed to read oauth apps from session: %w", err)
-		}
-		return apps, nil
-	}
-
-	l := ctxzap.Extract(ctx)
-	sem := semaphore.NewWeighted(appDiscoveryWorkers)
-	var nextPageToken string
-
-	for range appDiscoveryMaxUserPages {
-		userResp, err := client.ListUserIDsPage(ctx, customerID, domain, nextPageToken)
-		if err != nil {
-			return nil, fmt.Errorf("google-workspace-connector: failed to list users for applications: %w", err)
-		}
-
-		dirUserBatch := make(map[string]string, len(userResp.Users))
-		for _, u := range userResp.Users {
-			if u.Id != "" {
-				dirUserBatch[u.Id] = "1"
-			}
-		}
-		if len(dirUserBatch) > 0 {
-			if err := session.SetManyJSON(ctx, ss, dirUserBatch, appLoginDirectoryUserNamespace); err != nil {
-				return nil, fmt.Errorf("google-workspace-connector: failed to store directory user IDs in session: %w", err)
-			}
-		}
-
-		results, err := fetchUserTokens(ctx, sem, client, userResp.Users)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := storeOAuthPageResults(ctx, ss, results); err != nil {
-			return nil, err
-		}
-
-		if userResp.NextPageToken == "" {
-			break
-		}
-		nextPageToken = userResp.NextPageToken
-	}
-	if nextPageToken != "" {
-		l.Debug("google-workspace: user pagination cap reached during OAuth app discovery, data may be incomplete",
-			zap.Int("max_pages", appDiscoveryMaxUserPages))
-	}
-
-	if err := session.SetJSON(ctx, ss, "done", "true", appDiscoveryLoadedNamespace); err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to mark app discovery as loaded: %w", err)
-	}
-
-	apps, err := session.GetAllJSON[string](ctx, ss, appLoginOAuthAppsNamespace)
-	if err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to read oauth apps from session: %w", err)
-	}
-	return apps, nil
-}
-
-// fetchUserTokens concurrently fetches OAuth tokens for each user using a bounded worker pool.
-//
-// A failed ListTokens call is only tolerated (the user is skipped) when it is a genuine 404 —
-// i.e. the user was deleted mid-sync. Any other failure (403/429/5xx/network/context) is
-// surfaced as an error that aborts discovery. Silently skipping a user on a transient error
-// would drop that user's OAuth-app associations: apps only that user authorized may then be
-// missed entirely, and the user's app-access grants would be under-reported — which c1 prunes
-// as a revocation. Failing loudly forces a retry instead of persisting a partial result.
-func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwclient.GoogleWorkspaceClient, users []*admin.User) ([]userAppsResult, error) {
-	results := make([]userAppsResult, len(users))
-	var wg sync.WaitGroup
-	var (
-		errMu    sync.Mutex
-		firstErr error
-	)
-	recordErr := func(err error) {
-		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
-		}
-		errMu.Unlock()
-	}
-
-	for i, u := range users {
-		if err := sem.Acquire(ctx, 1); err != nil {
-			wg.Wait()
-			return nil, fmt.Errorf("google-workspace-connector: context cancelled during token fetch: %w", err)
-		}
-		wg.Add(1)
-		go func(idx int, user *admin.User) {
-			defer wg.Done()
-			defer sem.Release(1)
-			defer func() {
-				if r := recover(); r != nil {
-					ctxzap.Extract(ctx).Error("google-workspace-connector: fetchUserTokens goroutine recovered from panic",
-						zap.String("user_id", user.Id),
-						zap.Any("panic", r),
-						zap.Stack("stack"),
-					)
-				}
-			}()
-
-			tokenResp, err := client.ListTokens(ctx, user.Id)
-			if err != nil {
-				var gerr *googleapi.Error
-				if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-					// Benign: the user was deleted between listing and token fetch. Skipping
-					// them is correct — they have no apps to associate.
-					ctxzap.Extract(ctx).Debug("google-workspace-connector: user not found during token fetch, skipping", zap.String("user_id", user.Id), zap.Error(err))
-					return
-				}
-				// Transient/auth/network error: surface it so discovery aborts rather than
-				// persisting a partial OAuth-app map that c1 would treat as a revocation.
-				recordErr(fmt.Errorf("google-workspace-connector: failed to list tokens for user %s: %w", user.Id, err))
-				return
-			}
-
-			var filtered []oauthAppEntry
-			for _, t := range tokenResp.Items {
-				if t.ClientId == "" || t.DisplayText == "" {
-					continue
-				}
-				if t.ClientId == t.DisplayText && privateAppIDRegex.MatchString(t.ClientId) {
-					continue
-				}
-				filtered = append(filtered, oauthAppEntry{clientID: t.ClientId, displayText: t.DisplayText})
-			}
-			results[idx] = userAppsResult{userID: user.Id, apps: filtered}
-		}(i, u)
-	}
-	wg.Wait()
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	return results, nil
-}
-
-func storeOAuthPageResults(ctx context.Context, ss sessions.SessionStore, results []userAppsResult) error {
-	appsBatch := map[string]string{}
-	loginBatches := map[string]map[string]string{}
-
-	for _, r := range results {
-		for _, t := range r.apps {
-			appsBatch[t.clientID] = t.displayText
-			if loginBatches[t.clientID] == nil {
-				loginBatches[t.clientID] = map[string]string{}
-			}
-			loginBatches[t.clientID][r.userID] = oauthPresenceValue
+			bestByApp[appID] = best{appID: appID, name: appName, at: ts.AsTime()}
 		}
 	}
 
-	if len(appsBatch) > 0 {
-		if err := session.SetManyJSON(ctx, ss, appsBatch, appLoginOAuthAppsNamespace); err != nil {
-			return fmt.Errorf("google-workspace-connector: failed to store oauth apps in session: %w", err)
+	for appID, b := range bestByApp {
+		if _, seen := newApps[appID]; !seen {
+			newApps[appID] = b.name
+		}
+		if err := storeLoginIfNewer(ctx, ss, appID, u.ID, b.at.UTC().Format(time.RFC3339)); err != nil {
+			return err
 		}
 	}
-
-	for appID, logins := range loginBatches {
-		ns := appLoginLoginsNamespace(appID)
-		existing, err := session.GetManyJSON[string](ctx, ss, slices.Collect(maps.Keys(logins)), ns)
-		if err != nil {
-			return fmt.Errorf("google-workspace-connector: failed to read existing logins from session for app %s: %w", appID, err)
-		}
-		newLogins := map[string]string{}
-		for profileID, val := range logins {
-			if existingVal, found := existing[profileID]; found && existingVal >= val {
-				continue
-			}
-			newLogins[profileID] = val
-		}
-		if len(newLogins) > 0 {
-			if err := session.SetManyJSON(ctx, ss, newLogins, ns); err != nil {
-				return fmt.Errorf("google-workspace-connector: failed to store login data for app %s: %w", appID, err)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -445,6 +319,51 @@ func fetchSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceCl
 	return m
 }
 
+// loadCloudIdentitySAMLProfileMap resolves the Cloud Identity SAML profile map on the first
+// applicationResource.List() page of a sync, applying the isCloudIdentityAPIDisabledError
+// fallback, and caches the result in session so later pages of the same sync reuse it without
+// re-calling Cloud Identity or re-running the fallback logic.
+func loadCloudIdentitySAMLProfileMap(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, customerID string, isFirstPage bool) (map[string]string, error) {
+	if !isFirstPage {
+		m, err := session.GetAllJSON[string](ctx, ss, samlProfileMapNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: failed to read saml profile map from session: %w", err)
+		}
+		return m, nil
+	}
+
+	profileMap, err := client.BuildSAMLProfileMap(ctx, customerID)
+	if err != nil {
+		// Exception: when the Cloud Identity API is not enabled in the customer's GCP project,
+		// the service still initialises (the scope was granted) but every call returns a
+		// permanent 403 SERVICE_DISABLED. That is a stable feature-unavailable condition, not a
+		// transient blip — such a customer's SAML apps have ALWAYS been resolved by display
+		// name, so there is no profile-name state to flip and nothing to prune. Treat it like a
+		// missing scope: warn and fall back to display-name IDs instead of failing the whole
+		// sync. Any other failure (transient 5xx/429, network, or a 403 that is NOT "API
+		// disabled") still propagates: falling back to a nil profile map would drop SAML apps
+		// discovered only via Cloud Identity AND flip the IDs of SAML apps found via login
+		// events from their stable profile name to a display-name-derived ID, causing c1 to
+		// prune the old resource and all of its access grants on a transient blip.
+		if isCloudIdentityAPIDisabledError(err) {
+			ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
+				"SAML app IDs will use display names. Enable the Cloud Identity API "+
+				"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
+				zap.Error(err))
+			profileMap = nil
+		} else {
+			return nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
+		}
+	}
+
+	if len(profileMap) > 0 {
+		if err := session.SetManyJSON(ctx, ss, profileMap, samlProfileMapNamespace); err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: failed to store saml profile map in session: %w", err)
+		}
+	}
+	return profileMap, nil
+}
+
 // loadSAMLProfileMap returns the SAML profile map, using the session store as a cache
 // so Cloud Identity is queried at most once per sync.
 func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
@@ -452,7 +371,10 @@ func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceCli
 	if ss == nil {
 		return fetchSAMLProfileMap(ctx, client, customerID), nil
 	}
+	return loadSAMLProfileMapFromSession(ctx, ss, client, customerID)
+}
 
+func loadSAMLProfileMapFromSession(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
 	_, loaded, err := session.GetJSON[string](ctx, ss, "done", samlProfileMapLoadedNamespace)
 	if err != nil {
 		return nil, fmt.Errorf("google-workspace-connector: failed to check saml profile map loaded flag: %w", err)
@@ -475,4 +397,21 @@ func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceCli
 		return nil, fmt.Errorf("google-workspace-connector: failed to mark saml profile map as loaded: %w", err)
 	}
 	return profileMap, nil
+}
+
+// markAppEmitted reports whether appID has already been returned as a resource by a prior
+// applicationResource.List() page, recording it as emitted if not. This prevents the same app
+// resource from being returned multiple times across pages as different users reference it.
+func markAppEmitted(ctx context.Context, ss sessions.SessionStore, appID string) (bool, error) {
+	_, found, err := session.GetJSON[string](ctx, ss, appID, appLoginEmittedAppNamespace)
+	if err != nil {
+		return false, fmt.Errorf("google-workspace-connector: failed to check emitted-app marker for %s: %w", appID, err)
+	}
+	if found {
+		return true, nil
+	}
+	if err := session.SetJSON(ctx, ss, appID, "1", appLoginEmittedAppNamespace); err != nil {
+		return false, fmt.Errorf("google-workspace-connector: failed to store emitted-app marker for %s: %w", appID, err)
+	}
+	return false, nil
 }
