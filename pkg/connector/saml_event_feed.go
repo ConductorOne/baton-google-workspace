@@ -19,7 +19,7 @@ import (
 // user can have logged into multiple distinct SAML apps, and activities.list cannot filter by a
 // specific app within applicationName="saml", so a small recent window is fetched and grouped
 // by resolved app ID, keeping only the newest event per app.
-const samlAppLookupMaxResults = 25
+const samlAppLookupMaxResults = 50
 
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
 type samlEventFeed struct {

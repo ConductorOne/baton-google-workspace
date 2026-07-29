@@ -101,13 +101,25 @@ func listActivitiesRateLimited(
 	userKey, applicationName, eventName, startTime, pageToken string,
 	maxResults int64,
 ) (*reportsAdmin.Activities, error) {
+	return listActivitiesFilteredRateLimited(ctx, client, userKey, applicationName, eventName, startTime, pageToken, "", maxResults)
+}
+
+// listActivitiesFilteredRateLimited is listActivitiesRateLimited plus an optional Reports API
+// `filters` expression (e.g. "client_id==<id>"), for callers that need to scope a lookup to one
+// specific app rather than an entire app-type.
+func listActivitiesFilteredRateLimited(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	userKey, applicationName, eventName, startTime, pageToken, filters string,
+	maxResults int64,
+) (*reportsAdmin.Activities, error) {
 	backoff := reportsInitialBackoff
 	for attempt := 0; ; attempt++ {
 		if err := sharedReportsRateLimiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("google-workspace-connector: context cancelled waiting for reports api quota: %w", err)
 		}
 
-		resp, err := client.ListActivities(ctx, userKey, applicationName, eventName, startTime, pageToken, maxResults)
+		resp, err := client.ListActivities(ctx, userKey, applicationName, eventName, startTime, pageToken, filters, maxResults)
 		if err == nil {
 			return resp, nil
 		}

@@ -15,6 +15,7 @@ import (
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/option"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
@@ -146,41 +147,103 @@ func TestScanUsersForEvents_PaginatesAcrossMultipleCallsWithoutLoss(t *testing.T
 	}
 }
 
-// TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps verifies the OAuth ("token") feed's
-// per-user lookup: given a bounded window containing older and newer logins to the same app,
-// it keeps only the newest per app; and it excludes private apps (client_id == app_name and
-// numeric), matching the pre-refactor filtering behavior.
-func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
-	const userEmail = "alice@example.com"
-	server := newDirectoryUsersOnlyServer(t,
-		[]*directoryAdmin.User{{Id: "profile-alice", PrimaryEmail: userEmail}},
-		10,
-		func(userKey string) *reportsAdmin.Activities {
-			if userKey != userEmail {
-				return &reportsAdmin.Activities{}
-			}
-			return &reportsAdmin.Activities{
-				Items: []*reportsAdmin.Activity{
-					activityItem(1, 2*time.Hour, userEmail, "profile-alice",
-						&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: "client-a"},
-						&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: "App A (old)"},
-					),
-					activityItem(2, 1*time.Minute, userEmail, "profile-alice",
-						&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: "client-a"},
-						&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: "App A (new)"},
-					),
-					activityItem(3, 30*time.Second, userEmail, "profile-alice",
-						&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: "111111111111111111111"},
-						&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: "111111111111111111111"},
-					),
-				},
-			}
-		})
+// TestScanUsersForEvents_FiltersEventsBeforeEarliestEvent verifies the event-feed-start-at floor:
+// scanUsersForEvents drops any event whose OccurredAt is before earliestEvent, while keeping
+// events at or after it, and a nil earliestEvent applies no floor at all.
+func TestScanUsersForEvents_FiltersEventsBeforeEarliestEvent(t *testing.T) {
+	users := []*directoryAdmin.User{{Id: "user-1", PrimaryEmail: "user-1@example.com"}}
+	server := newDirectoryUsersOnlyServer(t, users, 10, func(string) *reportsAdmin.Activities {
+		return &reportsAdmin.Activities{}
+	})
 	defer server.Close()
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}, "customer", "")
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}
+
+	now := time.Now().UTC()
+	floor := timestamppb.New(now.Add(-1 * time.Hour))
+	oldEvent := &v2.Event{Id: "old", OccurredAt: timestamppb.New(now.Add(-2 * time.Hour))}  // before floor
+	newEvent := &v2.Event{Id: "new", OccurredAt: timestamppb.New(now.Add(-30 * time.Minute))} // after floor
+
+	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser) ([]*v2.Event, error) {
+		return []*v2.Event{oldEvent, newEvent}, nil
+	}
+
+	events, _, err := scanUsersForEvents(context.Background(), client, "customer", "", floor, &pagination.StreamToken{}, lookup)
+	if err != nil {
+		t.Fatalf("scanUsersForEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].GetId() != "new" {
+		t.Fatalf("expected only the event at/after earliestEvent to survive, got %v", events)
+	}
+
+	// A nil earliestEvent applies no floor: both events should come back.
+	events, _, err = scanUsersForEvents(context.Background(), client, "customer", "", nil, &pagination.StreamToken{}, lookup)
+	if err != nil {
+		t.Fatalf("scanUsersForEvents (nil floor): %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected no filtering with a nil earliestEvent, got %d events", len(events))
+	}
+}
+
+// TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps verifies the OAuth ("token") feed's
+// per-user, per-app lookup: apps are enumerated via Tokens.list, private apps (client_id ==
+// display_text and numeric) are excluded before ever issuing a Reports call for them, and for a
+// real app, the query is scoped with filters=client_id==<id> and the newest of several returned
+// activities wins (covering the "does maxResults=1 return newest-first?" ordering assumption).
+func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
+	const userEmail = "alice@example.com"
+	const privateClientID = "111111111111111111111"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/directory/v1/users", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pageToken") != "" {
+			_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{
+			Users: []*directoryAdmin.User{{Id: "profile-alice", PrimaryEmail: userEmail}},
+		})
+	})
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		// Tokens.list (GET .../users/{userKey}/tokens): alice authorized one real app and one
+		// private (numeric client_id == display_text) app.
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Tokens{
+			Items: []*directoryAdmin.Token{
+				{ClientId: "client-a", DisplayText: "App A"},
+				{ClientId: privateClientID, DisplayText: privateClientID},
+			},
+		})
+	})
+	mux.HandleFunc("/admin/reports/v1/activity/users/", func(w http.ResponseWriter, r *http.Request) {
+		filters := r.URL.Query().Get("filters")
+		if filters == "client_id=="+privateClientID {
+			t.Fatalf("private app must be filtered out before ever issuing a Reports API call, got filters=%q", filters)
+		}
+		if filters != "client_id==client-a" {
+			t.Fatalf("expected a client_id filter for the known app, got %q", filters)
+		}
+		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{
+			Items: []*reportsAdmin.Activity{
+				activityItem(1, 2*time.Hour, userEmail, "profile-alice",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: "client-a"},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: "App A (old)"},
+				),
+				activityItem(2, 1*time.Minute, userEmail, "profile-alice",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: "client-a"},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: "App A (new)"},
+				),
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
 
 	events, state, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{})
 	if err != nil {
@@ -202,5 +265,63 @@ func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
 	}
 	if ue.GetActorResource().GetId().GetResource() != "profile-alice" {
 		t.Fatalf("expected actor resource id profile-alice, got %q", ue.GetActorResource().GetId().GetResource())
+	}
+}
+
+// TestUsageEventFeed_DedupesRepeatedClientIDsInTokens verifies that when Tokens.list returns
+// multiple Token entries for the same client_id (e.g. separate grants for different scope
+// sets), the feed issues exactly one Reports API lookup for that app and emits exactly one
+// event — never one per repeated Token entry.
+func TestUsageEventFeed_DedupesRepeatedClientIDsInTokens(t *testing.T) {
+	const userEmail = "bob@example.com"
+	var reportsCalls int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/directory/v1/users", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pageToken") != "" {
+			_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{
+			Users: []*directoryAdmin.User{{Id: "profile-bob", PrimaryEmail: userEmail}},
+		})
+	})
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		// Bob granted "client-a" two different scope sets at different times: Tokens.list
+		// returns two separate Token entries sharing the same client_id.
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Tokens{
+			Items: []*directoryAdmin.Token{
+				{ClientId: "client-a", DisplayText: "App A"},
+				{ClientId: "client-a", DisplayText: "App A"},
+			},
+		})
+	})
+	mux.HandleFunc("/admin/reports/v1/activity/users/", func(w http.ResponseWriter, r *http.Request) {
+		reportsCalls++
+		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{
+			Items: []*reportsAdmin.Activity{
+				activityItem(1, 1*time.Minute, userEmail, "profile-bob",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: "client-a"},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: "App A"},
+				),
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+
+	events, _, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if reportsCalls != 1 {
+		t.Fatalf("expected exactly 1 Reports API call for the deduped app, got %d", reportsCalls)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 event for the deduped app, got %d", len(events))
 	}
 }

@@ -125,7 +125,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token: %w", err)
 	}
 
-	r, err := f.client.ListActivities(ctx, "all", "admin", "", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
+	r, err := f.client.ListActivities(ctx, "all", "admin", "", cursor.StartAt, cursor.NextPageToken, "", int64(pToken.Size))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities: %w", err)
 	}
