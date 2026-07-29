@@ -113,10 +113,8 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 							Resource:     b.activity.Actor.ProfileId,
 						},
 						DisplayName: b.activity.Actor.Email,
+						Status:      &v2.Status{Status: v2.Status_RESOURCE_STATUS_ENABLED},
 						Annotations: annotations.New(userTrait),
-						Status: v2.Status_builder{
-							Status: v2.Status_RESOURCE_STATUS_ENABLED,
-						}.Build(),
 					},
 				},
 			},

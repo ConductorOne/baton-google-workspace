@@ -95,10 +95,8 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 						Resource:     best.activity.Actor.ProfileId,
 					},
 					DisplayName: best.activity.Actor.Email,
+					Status:      &v2.Status{Status: v2.Status_RESOURCE_STATUS_ENABLED},
 					Annotations: annotations.New(userTrait),
-					Status: v2.Status_builder{
-						Status: v2.Status_RESOURCE_STATUS_ENABLED,
-					}.Build(),
 				},
 			},
 		},
