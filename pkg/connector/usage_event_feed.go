@@ -176,7 +176,6 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		for _, e := range activity.Events {
 			userTrait, err := resource.NewUserTrait(
 				resource.WithEmail(activity.Actor.Email, true),
-				resource.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
 			)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("failed to create user trait: %w", err)
@@ -247,6 +246,9 @@ func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timesta
 					},
 					DisplayName: activity.Actor.Email,
 					Annotations: annotations.New(userTrait),
+					Status: v2.Status_builder{
+						Status: v2.Status_RESOURCE_STATUS_ENABLED,
+					}.Build(),
 				},
 			},
 		},

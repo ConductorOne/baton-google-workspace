@@ -267,16 +267,19 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	employeeIDs := mapset.NewSet[string]()
 	traitOpts := []rs.UserTraitOption{
 		rs.WithEmail(user.PrimaryEmail, true),
-		rs.WithDetailedStatus(o.userStatus(user)),
+	}
+	initialStatus, initialStatusDetails := o.userStatus(user)
+	resourceOpts := []rs.ResourceOption{
+		rs.WithResourceStatus(v2.Status_ResourceStatus(initialStatus), initialStatusDetails),
 	}
 
 	if user.ThumbnailPhotoUrl != "" {
-		traitOpts = append(traitOpts, rs.WithUserIcon(&v2.AssetRef{
+		resourceOpts = append(resourceOpts, rs.WithResourceIcon(&v2.AssetRef{
 			Id: user.ThumbnailPhotoUrl,
 		}))
 	}
 	if user.Archived || user.Suspended {
-		traitOpts = append(traitOpts, rs.WithStatus(v2.UserTrait_Status_STATUS_DISABLED))
+		resourceOpts = append(resourceOpts, rs.WithResourceStatus(v2.Status_RESOURCE_STATUS_DISABLED, ""))
 	}
 	if user.IsEnrolledIn2Sv {
 		traitOpts = append(traitOpts, rs.WithMFAStatus(
@@ -334,11 +337,11 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		}
 	}
 	if user.DeletionTime != "" {
-		traitOpts = append(traitOpts, rs.WithStatus(v2.UserTrait_Status_STATUS_DELETED))
+		resourceOpts = append(resourceOpts, rs.WithResourceStatus(v2.Status_RESOURCE_STATUS_DELETED, ""))
 	}
 	if user.CreationTime != "" {
 		if t, err := time.Parse(time.RFC3339, user.CreationTime); err == nil {
-			traitOpts = append(traitOpts, rs.WithCreatedAt(t))
+			resourceOpts = append(resourceOpts, rs.WithResourceCreatedAt(t))
 		}
 	}
 	if user.LastLoginTime != "" {
@@ -354,8 +357,16 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	}
 
 	traitOpts = append(traitOpts,
-		rs.WithUserProfile(profile),
 		rs.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
+	)
+	resourceOpts = append(resourceOpts, rs.WithResourceProfile(profile))
+
+	resourceOpts = append(resourceOpts,
+		rs.WithAnnotation(
+			&v2.V1Identifier{
+				Id: user.Id,
+			},
+		),
 	)
 
 	userResource, err := rs.NewUserResource(
@@ -363,11 +374,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		resourceTypeUser,
 		user.Id,
 		traitOpts,
-		rs.WithAnnotation(
-			&v2.V1Identifier{
-				Id: user.Id,
-			},
-		),
+		resourceOpts...,
 	)
 	return userResource, err
 }
