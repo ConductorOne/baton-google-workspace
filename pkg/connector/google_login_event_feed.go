@@ -67,7 +67,6 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 
 		userTrait, err := resource.NewUserTrait(
 			resource.WithEmail(activity.Actor.Email, true),
-			resource.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
 		)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to create user trait in google login event feed: %w", err)
@@ -92,6 +91,9 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 						},
 						DisplayName: activity.Actor.Email,
 						Annotations: annotations.New(userTrait),
+						Status: v2.Status_builder{
+							Status: v2.Status_RESOURCE_STATUS_ENABLED,
+						}.Build(),
 					},
 				},
 			},

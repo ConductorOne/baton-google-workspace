@@ -65,8 +65,7 @@ func (o *roleResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 		annos := &v2.V1Identifier{
 			Id: tempRoleId,
 		}
-		traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(r))}
-		roleResource, err := rs.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
+		roleResource, err := rs.NewRoleResource(r.RoleName, resourceTypeRole, tempRoleId, nil, rs.WithAnnotation(annos), rs.WithResourceProfile(roleProfile(r)))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create role resource in List: %w", err)
 		}
@@ -242,8 +241,7 @@ func (o *roleResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 	annos := &v2.V1Identifier{
 		Id: tempRoleId,
 	}
-	traitOpts := []rs.RoleTraitOption{rs.WithRoleProfile(roleProfile(role))}
-	roleResource, err := rs.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, traitOpts, rs.WithAnnotation(annos))
+	roleResource, err := rs.NewRoleResource(role.RoleName, resourceTypeRole, tempRoleId, nil, rs.WithAnnotation(annos), rs.WithResourceProfile(roleProfile(role)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create role resource in Get: %w", err)
 	}

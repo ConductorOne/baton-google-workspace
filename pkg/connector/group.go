@@ -184,8 +184,9 @@ func groupToResource(ctx context.Context, group *admin.Group) (*v2.Resource, err
 		l.Error("google-workspace: group has no id", zap.String("name", group.Name))
 		return nil, fmt.Errorf("google-workspace: group has no id")
 	}
-	traitOpts := []rs.GroupTraitOption{rs.WithGroupProfile(groupProfile(group))}
+	var traitOpts []rs.GroupTraitOption
 	resourceOpts := []rs.ResourceOption{
+		rs.WithResourceProfile(groupProfile(group)),
 		rs.WithAnnotation(&v2.V1Identifier{
 			Id: group.Id,
 		}),

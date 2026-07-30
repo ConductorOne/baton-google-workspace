@@ -74,7 +74,6 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Tim
 		for _, e := range activity.Events {
 			userTrait, err := resource.NewUserTrait(
 				resource.WithEmail(activity.Actor.Email, true),
-				resource.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
 			)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to create user trait in saml event feed: %w", err)
@@ -140,6 +139,9 @@ func newSamlV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Tim
 					},
 					DisplayName: activity.Actor.Email,
 					Annotations: annotations.New(userTrait),
+					Status: v2.Status_builder{
+						Status: v2.Status_RESOURCE_STATUS_ENABLED,
+					}.Build(),
 				},
 			},
 		},
