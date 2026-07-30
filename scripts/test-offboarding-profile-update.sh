@@ -148,7 +148,7 @@ echo -e "${YELLOW}Step 4: Syncing to verify offboarding changes...${NC}"
 echo "Verifying user was removed from GAL..."
 INCLUDE_IN_GAL=$(baton resources -f "${SYNC_FILE}" -t user -o json 2>/dev/null | \
     jq -r --arg user_id "${CREATED_USER_ID}" \
-    '.resources[] | select(.resource.id.resource == $user_id) | .resource.annotations[] | select(.["@type"] == "type.googleapis.com/c1.connector.v2.UserTrait") | .profile.include_in_global_address_list' | \
+    '.resources[] | select(.resource.id.resource == $user_id) | .resource.profile.include_in_global_address_list' | \
     head -1)
 
 # Debug output

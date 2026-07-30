@@ -69,7 +69,7 @@ echo "✓ Found created user ID: $CREATED_USER_ID"
 
 # Verify initial org unit (should be default "/")
 echo "Verifying initial org unit..."
-INITIAL_ORG_UNIT=$(baton resources -f "$C1Z_FILE" -t user -o json | jq -r --arg user_id "$CREATED_USER_ID" '.resources[] | select(.resource.id.resource == $user_id) | .resource.annotations[] | select(.["@type"] | contains("UserTrait")) | .profile.org_unit_path // ""' | head -1)
+INITIAL_ORG_UNIT=$(baton resources -f "$C1Z_FILE" -t user -o json | jq -r --arg user_id "$CREATED_USER_ID" '.resources[] | select(.resource.id.resource == $user_id) | .resource.profile.org_unit_path // ""' | head -1)
 echo "Initial org unit: $INITIAL_ORG_UNIT"
 
 # Invoke action to change org unit
@@ -90,7 +90,7 @@ echo "Syncing to verify org unit change..."
 
 # Verify the change took place
 echo "Verifying org unit change..."
-CHANGED_ORG_UNIT=$(baton resources -f "$C1Z_FILE" -t user -o json | jq -r --arg user_id "$CREATED_USER_ID" '.resources[] | select(.resource.id.resource == $user_id) | .resource.annotations[] | select(.["@type"] | contains("UserTrait")) | .profile.org_unit_path // ""' | head -1)
+CHANGED_ORG_UNIT=$(baton resources -f "$C1Z_FILE" -t user -o json | jq -r --arg user_id "$CREATED_USER_ID" '.resources[] | select(.resource.id.resource == $user_id) | .resource.profile.org_unit_path // ""' | head -1)
 if [ -z "$CHANGED_ORG_UNIT" ]; then
   echo "ERROR: Could not find org_unit_path for user $CREATED_USER_ID after change"
   baton resources -f "$C1Z_FILE" -t user -o json | jq --arg user_id "$CREATED_USER_ID" '.resources[] | select(.resource.id.resource == $user_id)'
