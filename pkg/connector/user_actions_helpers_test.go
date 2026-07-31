@@ -58,6 +58,26 @@ func TestBuildUpdatedOrganizations(t *testing.T) {
 		require.Equal(t, "", updated[0].Description)
 		require.Contains(t, updated[0].ForceSendFields, "Description")
 	})
+
+	t.Run("no organizations and only empty-string clears: does not create a phantom org", func(t *testing.T) {
+		updated := buildUpdatedOrganizations(nil, userProfilePatch{
+			department:   strPtr(""),
+			employeeType: strPtr(""),
+		})
+
+		require.Len(t, updated, 0, "must not fabricate an empty primary organization when there is nothing to persist")
+	})
+
+	t.Run("no organizations, one empty clear and one real value: still creates the org", func(t *testing.T) {
+		updated := buildUpdatedOrganizations(nil, userProfilePatch{
+			department: strPtr(""),
+			jobTitle:   strPtr("Engineer"),
+		})
+
+		require.Len(t, updated, 1)
+		require.True(t, updated[0].Primary)
+		require.Equal(t, "Engineer", updated[0].Title)
+	})
 }
 
 func TestBuildUpdatedExternalIDs(t *testing.T) {

@@ -1133,6 +1133,17 @@ func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfile
 	if primaryIdx < 0 && len(orgs) > 0 {
 		primaryIdx = 0
 	}
+	if primaryIdx < 0 && !hasNonEmptyOrgField(patch) {
+		// No existing organization to update, and every provided field is an
+		// empty-string "clear" request: there is nothing to persist. Skip
+		// creating a spurious empty primary organization, which would read
+		// back as a phantom organization on the next sync.
+		updatedOrgs := make([]admin.UserOrganization, 0, len(orgs))
+		for _, org := range orgs {
+			updatedOrgs = append(updatedOrgs, *org)
+		}
+		return updatedOrgs
+	}
 	primary := &admin.UserOrganization{}
 	if primaryIdx >= 0 {
 		*primary = *orgs[primaryIdx]
@@ -1166,6 +1177,16 @@ func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfile
 		updatedOrgs = append(updatedOrgs, *primary)
 	}
 	return updatedOrgs
+}
+
+// hasNonEmptyOrgField reports whether the patch sets at least one Employee
+// Information field to a genuine (non-empty) value, as opposed to only
+// requesting empty-string clears.
+func hasNonEmptyOrgField(patch userProfilePatch) bool {
+	return (patch.department != nil && *patch.department != "") ||
+		(patch.jobTitle != nil && *patch.jobTitle != "") ||
+		(patch.costCenter != nil && *patch.costCenter != "") ||
+		(patch.employeeType != nil && *patch.employeeType != "")
 }
 
 // buildUpdatedExternalIDs sets the ExternalIds entry with Type "organization"
