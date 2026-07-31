@@ -961,17 +961,20 @@ type userProfilePatch struct {
 	customSchemas map[string]googleapi.RawMessage
 }
 
-// applyUserProfilePatch applies a partial profile update with patch semantics and
-// returns the updated user plus the list of changed fields. Shared by the
-// resource-scoped update_user_profile action and the global update_user action
-// consumed by ConductorOne push rules.
+// applyUserProfilePatch applies a partial profile update and returns the
+// updated user plus the list of changed fields. Shared by the resource-scoped
+// update_user_profile action and the global update_user action consumed by
+// ConductorOne push rules. Despite the name, this issues a Users.Update (PUT)
+// rather than Users.Patch whenever Organizations/ExternalIds/Relations/Name
+// might be touched - see the `usePut` comment below for why - so it is not
+// pure patch semantics end to end; only the recovery-email/phone/custom-schema
+// -only path actually sends a sparse Patch.
 func applyUserProfilePatch(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
 	userId string,
 	patch userProfilePatch,
 ) (*admin.User, []string, error) {
-	update := &admin.User{}
 	forceSend := make([]string, 0)
 
 	// Name fields. A patch replaces the whole "name" object, so read-modify-write
@@ -996,11 +999,11 @@ func applyUserProfilePatch(
 		}
 	}
 
-	// Organizations, ExternalIds, and Relations are array fields: a patch
-	// replaces the whole array, so a GET is required first to preserve sibling
-	// entries (other organizations, other external-ID types, other relation
-	// types) the caller did not set. Fetch once and reuse across all three
-	// blocks below, plus the Name block, instead of issuing a GET per field.
+	// Organizations, ExternalIds, and Relations are array fields, so a GET is
+	// required first to preserve sibling entries (other organizations, other
+	// external-ID types, other relation types) the caller did not set. Fetch
+	// once and reuse across all three blocks below, plus the Name block,
+	// instead of issuing a GET per field.
 	needCurrent := (setGiven != setFamily) || setOrg || patch.employeeID != nil || setManagerEmail
 	var current *admin.User
 	if needCurrent {
@@ -1009,6 +1012,33 @@ func applyUserProfilePatch(
 		if err != nil {
 			return nil, nil, err
 		}
+	}
+
+	// Users.Patch does not reliably shrink a repeated field down to empty:
+	// confirmed against a live tenant that clearing the only ExternalIds entry
+	// via Patch (empty slice, with or without ForceSendFields/NullFields)
+	// silently leaves the existing entry in place, even though the same patch
+	// correctly overwrites a *sub-field* of a retained Organizations entry. A
+	// *sparse* Update (PUT) has the same problem - also confirmed live - so
+	// Update only clears it when given the genuinely complete object. So
+	// whenever we already fetched `current` (because an array field might
+	// shrink, or Name needs a sibling-preserving merge), start from a full
+	// copy of it and send the result via Update instead of Patch: `update`
+	// begins as an exact copy of `current` with only the fields below
+	// overwritten, so nothing this function doesn't touch changes - modulo
+	// the accepted tradeoff that a full-object Update widens the read-modify
+	// -write race window to every field on the user (not just the ones this
+	// call touches) versus Patch's narrower one, since anything changed on
+	// the server between this GET and the Update below would be silently
+	// reverted to the value captured here. When nothing array-shaped is being
+	// touched (current == nil), Patch is cheaper and keeps the narrow window.
+	usePut := current != nil
+	var update *admin.User
+	if usePut {
+		full := *current
+		update = &full
+	} else {
+		update = &admin.User{}
 	}
 
 	if setGiven || setFamily {
@@ -1091,24 +1121,35 @@ func applyUserProfilePatch(
 	// Only treat custom schemas as a real update when non-empty. An empty object
 	// ("{}") unmarshals to a non-nil empty map; assigning it would pass the
 	// "at least one updatable field" guard and issue a no-op patch that falsely
-	// reports CustomSchemas as changed.
-	if len(patch.customSchemas) > 0 {
+	// reports CustomSchemas as changed. Tracked as its own bool rather than
+	// testing update.CustomSchemas != nil below: when usePut, update.CustomSchemas
+	// starts out already non-nil for any user with pre-existing custom schemas
+	// (inherited from the `current` copy above), which would otherwise falsely
+	// report CustomSchemas as touched on every such call regardless of patch.
+	customSchemasSet := len(patch.customSchemas) > 0
+	if customSchemasSet {
 		update.CustomSchemas = patch.customSchemas
 	}
 
-	if len(forceSend) == 0 && update.CustomSchemas == nil {
+	if len(forceSend) == 0 && !customSchemasSet {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
 	}
 
 	update.ForceSendFields = forceSend
 
-	updatedUser, err := client.PatchUser(ctx, userId, update)
+	var updatedUser *admin.User
+	var err error
+	if usePut {
+		updatedUser, err = client.UpdateUser(ctx, userId, update)
+	} else {
+		updatedUser, err = client.PatchUser(ctx, userId, update)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 
 	updatedFields := append([]string{}, forceSend...)
-	if update.CustomSchemas != nil {
+	if customSchemasSet {
 		updatedFields = append(updatedFields, "CustomSchemas")
 	}
 	return updatedUser, updatedFields, nil

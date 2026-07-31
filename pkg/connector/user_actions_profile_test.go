@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -83,7 +84,7 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 				ExternalIDs:   testExternalIDs(u),
 				Relations:     extractRelations(u),
 			})
-		case http.MethodPatch:
+		case http.MethodPatch, http.MethodPut:
 			state.patchCount++
 			raw, _ := io.ReadAll(r.Body)
 			state.lastPatchRawBody = raw
@@ -103,8 +104,19 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			if body.Organizations != nil {
 				u.Organizations = body.Organizations
 			}
+			// Users.Patch does not reliably shrink ExternalIds down to empty
+			// (confirmed against the real Directory API - see applyUserProfilePatch);
+			// Users.Update (PUT) does. Model that quirk here so a regression back
+			// to Patch for the clearing path fails TestUpdateUserProfile_EmployeeID_EmptyClears
+			// instead of silently passing against a mock more lenient than the real API.
 			if body.ExternalIds != nil {
-				u.ExternalIds = body.ExternalIds
+				emptyArray := false
+				if arr, ok := body.ExternalIds.([]interface{}); ok && len(arr) == 0 {
+					emptyArray = true
+				}
+				if !emptyArray || r.Method == http.MethodPut {
+					u.ExternalIds = body.ExternalIds
+				}
 			}
 			if body.Relations != nil {
 				u.Relations = body.Relations
@@ -274,6 +286,52 @@ func TestUpdateUserProfile_CustomSchemas_SentVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "emea") {
 		t.Fatalf("expected region 'emea' in schema, got %s", string(raw))
+	}
+}
+
+// TestUpdateUserProfile_CustomSchemasNotFalselyReportedWhenUsingUpdate guards
+// against a regression where a user with pre-existing CustomSchemas, patched
+// via the Update (PUT) path (triggered here by touching department), would
+// falsely report "CustomSchemas" as a changed field: Update sends a full copy
+// of the current user, so update.CustomSchemas is inherited from `current` and
+// non-nil even though this call never touches custom schemas.
+func TestUpdateUserProfile_CustomSchemasNotFalselyReportedWhenUsingUpdate(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				CustomSchemas: map[string]googleapi.RawMessage{
+					"EmployeeInfo": googleapi.RawMessage(`{"region":"emea"}`),
+				},
+				Organizations: []directoryAdmin.UserOrganization{
+					{Primary: true, Department: "Old Dept"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	patch := userProfilePatch{department: strPtr("New Dept")}
+	_, updatedFields, err := applyUserProfilePatch(context.Background(), userRT.client, "user123", patch)
+	if err != nil {
+		t.Fatalf("applyUserProfilePatch: %v", err)
+	}
+	// Must have gone through Update (PUT), since Organizations required a GET first.
+	if state.getCount != 1 {
+		t.Fatalf("expected 1 GET, got %d", state.getCount)
+	}
+	for _, f := range updatedFields {
+		if f == "CustomSchemas" {
+			t.Fatalf("CustomSchemas falsely reported as changed: updatedFields=%v", updatedFields)
+		}
+	}
+	if state.lastPatchBody.CustomSchemas == nil {
+		t.Fatalf("expected CustomSchemas to still be present on the wire (inherited from current, not stripped), got nil")
 	}
 }
 
