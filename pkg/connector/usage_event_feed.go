@@ -23,6 +23,10 @@ import (
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
+// usageActivitiesPageSize is the number of activity items requested per ListActivities
+// call. The Google Reports API maximum is 1000.
+const usageActivitiesPageSize = 1000
+
 // maxEventFeedLookback caps how far back event feeds query the Google Reports API.
 // Google page tokens expire after ~24h, so a cursor left mid-pagination (e.g. after
 // a connector restart or a transient timeout) would otherwise keep requesting the
@@ -81,10 +85,13 @@ func hasParameter(name string, parameters []*reportsAdmin.ActivityEventsParamete
 }
 
 type pageToken struct {
-	LatestEventSeen string `json:"latest_event_seen,omitempty"`
-	NextPageToken   string `json:"next_page_token,omitempty"`
-	StartAt         string `json:"start_at,omitempty"`
-	PageSize        int    `json:"page_size,omitempty"`
+	LatestEventSeen string            `json:"latest_event_seen,omitempty"`
+	NextPageToken   string            `json:"next_page_token,omitempty"`
+	StartAt         string            `json:"start_at,omitempty"`
+	PageSize        int               `json:"page_size,omitempty"`
+	// EventPageTokens holds per-event-name pagination cursors for feeds that
+	// issue one ListActivities request per event name (e.g. adminEventFeed).
+	EventPageTokens map[string]string `json:"event_page_tokens,omitempty"`
 }
 
 func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*pageToken, error) {
@@ -151,7 +158,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token in usage event feed: %w", err)
 	}
 
-	r, err := f.c.ListActivities(ctx, "all", "token", "authorize", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
+	r, err := f.c.ListActivities(ctx, "all", "token", "authorize", cursor.StartAt, cursor.NextPageToken, usageActivitiesPageSize)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list token activities: %w", err)
 	}

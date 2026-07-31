@@ -29,12 +29,18 @@ type safeUserResponse struct {
 }
 
 // Minimal fake for Reports Activities.List + Directory lookups used by admin_event_feed.
-func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[string]*directoryAdmin.Group, activities *reportsAdmin.Activities) *httptest.Server {
+// activitiesByEvent maps eventName query parameter values to the Activities response
+// to return. An unrecognised eventName returns an empty Activities response.
+func newAdminFeedTestServer(users map[string]*directoryAdmin.User, groups map[string]*directoryAdmin.Group, activitiesByEvent map[string]*reportsAdmin.Activities) *httptest.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/admin/reports/v1/activity/users/all/applications/admin", func(w http.ResponseWriter, r *http.Request) {
-		// ignore query parsing beyond pageToken/startTime for now
-		_ = json.NewEncoder(w).Encode(activities)
+		eventName := r.URL.Query().Get("eventName")
+		resp, ok := activitiesByEvent[eventName]
+		if !ok {
+			resp = &reportsAdmin.Activities{}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
@@ -78,40 +84,50 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 		"group@example.com": {Id: "group-1", Name: "Group One", Email: "group@example.com"},
 	}
 
-	// Build Activities with admin events we handle
+	// Build per-event-name Activities responses. The feed now issues one
+	// ListActivities call per event name, so the mock routes by eventName.
 	now := time.Now().UTC().Format(time.RFC3339)
-	acts := &reportsAdmin.Activities{
-		Items: []*reportsAdmin.Activity{
-			{
+	actsByEvent := map[string]*reportsAdmin.Activities{
+		"CHANGE_GROUP_NAME": {
+			Items: []*reportsAdmin.Activity{{
 				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 123},
-				Events: []*reportsAdmin.ActivityEvents{
-					{
-						Type: "GROUP_SETTINGS",
-						Name: "CHANGE_GROUP_NAME",
-						Parameters: []*reportsAdmin.ActivityEventsParameters{
-							{Name: "GROUP_EMAIL", Value: "group@example.com"},
-						},
+				Events: []*reportsAdmin.ActivityEvents{{
+					Type: "GROUP_SETTINGS",
+					Name: "CHANGE_GROUP_NAME",
+					Parameters: []*reportsAdmin.ActivityEventsParameters{
+						{Name: "GROUP_EMAIL", Value: "group@example.com"},
 					},
-					{
-						Type: "GROUP_SETTINGS", Name: "ADD_GROUP_MEMBER",
-						Parameters: []*reportsAdmin.ActivityEventsParameters{
-							{Name: "GROUP_EMAIL", Value: "group@example.com"},
-							{Name: "USER_EMAIL", Value: "user@example.com"},
-						},
-					},
-				},
-			},
-			{
-				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 456},
-				Events: []*reportsAdmin.ActivityEvents{
-					{Type: "USER_SETTINGS", Name: "CHANGE_FIRST_NAME", Parameters: []*reportsAdmin.ActivityEventsParameters{{Name: "USER_EMAIL", Value: "user@example.com"}}},
-				},
-			},
+				}},
+			}},
 		},
-		NextPageToken: "",
+		"ADD_GROUP_MEMBER": {
+			Items: []*reportsAdmin.Activity{{
+				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 124},
+				Events: []*reportsAdmin.ActivityEvents{{
+					Type: "GROUP_SETTINGS",
+					Name: "ADD_GROUP_MEMBER",
+					Parameters: []*reportsAdmin.ActivityEventsParameters{
+						{Name: "GROUP_EMAIL", Value: "group@example.com"},
+						{Name: "USER_EMAIL", Value: "user@example.com"},
+					},
+				}},
+			}},
+		},
+		"CHANGE_FIRST_NAME": {
+			Items: []*reportsAdmin.Activity{{
+				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 456},
+				Events: []*reportsAdmin.ActivityEvents{{
+					Type: "USER_SETTINGS",
+					Name: "CHANGE_FIRST_NAME",
+					Parameters: []*reportsAdmin.ActivityEventsParameters{
+						{Name: "USER_EMAIL", Value: "user@example.com"},
+					},
+				}},
+			}},
+		},
 	}
 
-	server := newAdminFeedTestServer(users, groups, acts)
+	server := newAdminFeedTestServer(users, groups, actsByEvent)
 	defer server.Close()
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
