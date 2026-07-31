@@ -333,7 +333,7 @@ func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwcli
 			defer func() {
 				if r := recover(); r != nil {
 					ctxzap.Extract(ctx).Error("google-workspace-connector: fetchUserTokens goroutine recovered from panic",
-						zap.String("user_id", user.Id),
+						zap.String(argUserID, user.Id),
 						zap.Any("panic", r),
 						zap.Stack("stack"),
 					)
@@ -346,7 +346,7 @@ func fetchUserTokens(ctx context.Context, sem *semaphore.Weighted, client *gwcli
 				if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
 					// Benign: the user was deleted between listing and token fetch. Skipping
 					// them is correct — they have no apps to associate.
-					ctxzap.Extract(ctx).Debug("google-workspace-connector: user not found during token fetch, skipping", zap.String("user_id", user.Id), zap.Error(err))
+					ctxzap.Extract(ctx).Debug("google-workspace-connector: user not found during token fetch, skipping", zap.String(argUserID, user.Id), zap.Error(err))
 					return
 				}
 				// Transient/auth/network error: surface it so discovery aborts rather than

@@ -35,14 +35,14 @@ var (
 		Description: "Moves a user to a different organizational unit in Google Workspace.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose organizational unit should be changed.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
 			{
-				Name:        "org_unit_path",
+				Name:        argOrgUnitPath,
 				DisplayName: "Organizational Unit Path",
 				Description: "The full path to the organizational unit (e.g., '/corp/sales' or '/engineering'). Must start with '/'.",
 				Field:       &config.Field_StringField{},
@@ -51,14 +51,14 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's organizational unit was changed successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
-				DisplayName: "Updated User",
+				Name:        fieldResource,
+				DisplayName: displayUpdatedUser,
 				Description: "The updated user resource with the new organizational unit.",
 				Field:       &config.Field_ResourceField{},
 			},
@@ -74,8 +74,8 @@ var (
 			"and optionally archives the account.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user to perform offboarding profile updates on.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -90,8 +90,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the offboarding profile updates were successfully applied.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -105,8 +105,8 @@ var (
 		Description: "Signs a user out of all web and device sessions and resets their sign-in cookies. The user will have to sign in by authenticating again.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user to sign out.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -114,8 +114,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user was signed out successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -129,8 +129,8 @@ var (
 		Description: "Deletes all OAuth access tokens issued by a user for third-party applications. This revokes access for all applications the user has authorized.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose OAuth tokens should be deleted.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -138,8 +138,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether all OAuth tokens were deleted successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -159,8 +159,8 @@ var (
 		Description: "Updates the manager relation for a user in Google Workspace. Updates the 'manager' entry in the user's Relations field.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose manager should be changed.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -175,14 +175,14 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's manager was changed successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
-				DisplayName: "Updated User",
+				Name:        fieldResource,
+				DisplayName: displayUpdatedUser,
 				Description: "The updated user resource with the new manager.",
 				Field:       &config.Field_ResourceField{},
 			},
@@ -198,8 +198,8 @@ var (
 			" This action deletes all ASPs for the user, including those created by the user themselves.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose application passwords should be deleted.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -207,8 +207,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether all application passwords were deleted successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -232,7 +232,7 @@ var (
 			"and custom-schema attribute values. At least one updatable field must be provided.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
+				Name:        argUserID,
 				DisplayName: displayUser,
 				Description: "The user to update.",
 				IsRequired:  true,
@@ -327,14 +327,14 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's profile was updated successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
-				DisplayName: "Updated User",
+				Name:        fieldResource,
+				DisplayName: displayUpdatedUser,
 				Description: "The updated user resource.",
 				Field:       &config.Field_ResourceField{},
 			},
@@ -348,7 +348,7 @@ var (
 		Description: "Promotes (status=true) or demotes (status=false) a user to/from super administrator in Google Workspace.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
+				Name:        argUserID,
 				DisplayName: displayUser,
 				Description: "The user whose super-admin status should be changed.",
 				IsRequired:  true,
@@ -370,8 +370,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's super-admin status was updated successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -426,7 +426,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Extract org_unit_path argument
-	orgUnitPathValue, ok := args.Fields["org_unit_path"]
+	orgUnitPathValue, ok := args.Fields[argOrgUnitPath]
 	if !ok || orgUnitPathValue == nil {
 		l.Debug("google-workspace: user action handler: missing org_unit_path argument", zap.Any("args", args))
 		return nil, nil, fmt.Errorf("missing org_unit_path argument")
@@ -456,7 +456,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 			return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 		}
 
-		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+		resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
@@ -487,7 +487,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	l.Debug("google-workspace: user action handler: changed org unit",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.String("old_org_unit", currentUser.OrgUnitPath),
 		zap.String("new_org_unit", orgUnitPath))
 
@@ -497,7 +497,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
@@ -569,7 +569,7 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 	}
 
 	l.Debug("google-workspace: user action handler: updated offboarding profile",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.String("actions", actionsList))
 
 	return actions.NewReturnValues(true), nil, nil
@@ -606,7 +606,7 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 	}
 
 	l.Debug("google-workspace: user action handler: signed out user",
-		zap.String("user_id", userId))
+		zap.String(argUserID, userId))
 
 	return actions.NewReturnValues(true), nil, nil
 }
@@ -641,7 +641,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	for _, token := range tokens.Items {
 		if token.ClientId == "" {
 			l.Debug("google-workspace: skipping token with empty client ID",
-				zap.String("user_id", userId),
+				zap.String(argUserID, userId),
 				zap.String("display_text", token.DisplayText))
 			continue
 		}
@@ -653,14 +653,14 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 				// If token was already deleted (404), continue
 				if gerr.Code == http.StatusNotFound {
 					l.Debug("google-workspace: token already deleted",
-						zap.String("user_id", userId),
+						zap.String(argUserID, userId),
 						zap.String("client_id", token.ClientId))
 					tokensDeleted++
 					continue
 				}
 			}
 			l.Error("google-workspace: failed to delete token",
-				zap.String("user_id", userId),
+				zap.String(argUserID, userId),
 				zap.String("client_id", token.ClientId),
 				zap.Error(err))
 			lastErr = err
@@ -676,7 +676,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	}
 
 	l.Debug("google-workspace: user action handler: deleted all OAuth tokens",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Int("tokens_deleted", tokensDeleted))
 
 	tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", float64(tokensDeleted))
@@ -719,14 +719,14 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 				// If ASP was already deleted (404), continue
 				if gerr.Code == http.StatusNotFound {
 					l.Debug("google-workspace: application password already deleted",
-						zap.String("user_id", userId),
+						zap.String(argUserID, userId),
 						zap.Int64("code_id", asp.CodeId))
 					passwordsDeleted++
 					continue
 				}
 			}
 			l.Error("google-workspace: failed to delete application password",
-				zap.String("user_id", userId),
+				zap.String(argUserID, userId),
 				zap.Int64("code_id", asp.CodeId),
 				zap.String("name", asp.Name),
 				zap.Error(err))
@@ -743,7 +743,7 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	}
 
 	l.Debug("google-workspace: user action handler: deleted all application passwords",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Int("passwords_deleted", passwordsDeleted))
 
 	passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", float64(passwordsDeleted))
@@ -798,7 +798,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 			return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 		}
 
-		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+		resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
@@ -820,7 +820,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	l.Debug("google-workspace: user action handler: changed manager",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.String("old_manager", currentManagerEmail),
 		zap.String("new_manager", managerEmail))
 
@@ -830,7 +830,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
@@ -884,7 +884,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 	}
 
 	l.Debug("google-workspace: user action handler: updated user profile",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Strings("fields", updatedFields))
 
 	userResource, err := o.userResource(ctx, updatedUser)
@@ -892,7 +892,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
@@ -934,7 +934,7 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 	}
 
 	l.Debug("google-workspace: user action handler: updated admin status",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Bool(fieldStatus, status))
 
 	return actions.NewReturnValues(true), nil, nil
@@ -1230,6 +1230,12 @@ const (
 	// externalIDTypeLoginID is one of the ExternalId types read as an
 	// additional login during sync (see userResource in user.go).
 	externalIDTypeLoginID = "login_id"
+
+	// displayUserID, argOrgUnitPath, and displayUpdatedUser are shared across
+	// several action schemas (extracted to satisfy goconst).
+	displayUserID      = "User ID"
+	argOrgUnitPath     = "org_unit_path"
+	displayUpdatedUser = "Updated User"
 )
 
 // updateUserGlobalActionSchema is the global (account-level) profile-update
@@ -1269,8 +1275,8 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 	},
 	ReturnTypes: []*config.Field{
 		{
-			Name:        "success",
-			DisplayName: "Success",
+			Name:        fieldSuccess,
+			DisplayName: displaySuccess,
 			Description: "Whether the user's profile was updated successfully.",
 			Field:       &config.Field_BoolField{},
 		},
@@ -1330,11 +1336,11 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 	}
 
 	l.Debug("google-workspace: update_user: updated user profile",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Strings("fields", updatedFields))
 
 	result, err := structpb.NewStruct(map[string]any{
-		"success":        true,
+		fieldSuccess:     true,
 		"updated_fields": strings.Join(updatedFields, ", "),
 	})
 	if err != nil {

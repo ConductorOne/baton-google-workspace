@@ -52,13 +52,13 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the group was created successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
+				Name:        fieldResource,
 				DisplayName: "Created Group",
 				Description: "The created group resource.",
 				Field:       &config.Field_ResourceField{},
@@ -136,8 +136,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the settings were updated successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -289,7 +289,7 @@ func (o *groupResourceType) createGroupActionHandler(ctx context.Context, args *
 		return nil, nil, fmt.Errorf("google-workspace: failed to create group resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", resource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, resource)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
 		l.Error("failed to build resource return field", zap.Error(err))
@@ -488,7 +488,7 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 
 	// Build response with previous and new values
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		"success":          {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldSuccess:       {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		"group_email":      {Kind: &structpb.Value_StringValue{StringValue: group.Email}},
 		"settings_updated": {Kind: &structpb.Value_BoolValue{BoolValue: settingsUpdated}},
 	}}

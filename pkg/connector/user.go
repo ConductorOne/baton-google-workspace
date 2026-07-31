@@ -38,7 +38,7 @@ func (o *userResourceType) userStatus(user *admin.User) (v2.UserTrait_Status_Sta
 	}
 
 	if user.Suspended {
-		reason := "Suspended"
+		reason := fieldSuspended
 		if user.SuspensionReason != "" {
 			reason += ": " + user.SuspensionReason
 		}
@@ -122,8 +122,8 @@ func userProfile(user *admin.User) map[string]interface{} {
 		profile["manager_email"] = extractManagerEmail(user)
 	}
 
-	profile["user_id"] = user.Id
-	profile["org_unit_path"] = user.OrgUnitPath
+	profile[argUserID] = user.Id
+	profile[argOrgUnitPath] = user.OrgUnitPath
 	profile["include_in_global_address_list"] = user.IncludeInGlobalAddressList
 
 	primaryOrg := extractPrimaryOrganizations(user)
@@ -356,6 +356,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		)
 	}
 
+	resourceOpts = append(resourceOpts, rs.WithResourceProfile(profile))
 	traitOpts = append(traitOpts,
 		rs.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 	)
@@ -368,6 +369,12 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 			},
 		),
 	)
+
+	resourceOpts = append(resourceOpts, rs.WithAnnotation(
+		&v2.V1Identifier{
+			Id: user.Id,
+		},
+	))
 
 	userResource, err := rs.NewUserResource(
 		user.Name.FullName,

@@ -19,6 +19,8 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
+const testUserEmail = "user@example.com"
+
 // safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
 type safeUserResponse struct {
 	Id            string                             `json:"id,omitempty"`
@@ -75,7 +77,7 @@ func newReportsService(t *testing.T, baseURL string, hc *http.Client) *reportsAd
 func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	// Create one group and one user resolvable by email
 	users := map[string]*directoryAdmin.User{
-		"user@example.com": {Id: "user-1", Name: &directoryAdmin.UserName{FullName: "User One", GivenName: "User", FamilyName: "One", DisplayName: "User One"}, PrimaryEmail: "user@example.com"},
+		testUserEmail: {Id: "user-1", Name: &directoryAdmin.UserName{FullName: "User One", GivenName: "User", FamilyName: "One", DisplayName: "User One"}, PrimaryEmail: testUserEmail},
 	}
 	groups := map[string]*directoryAdmin.Group{
 		"group@example.com": {Id: "group-1", Name: "Group One", Email: "group@example.com"},
@@ -89,17 +91,17 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 123},
 				Events: []*reportsAdmin.ActivityEvents{
 					{
-						Type: "GROUP_SETTINGS",
+						Type: eventTypeGroupSettings,
 						Name: "CHANGE_GROUP_NAME",
 						Parameters: []*reportsAdmin.ActivityEventsParameters{
 							{Name: "GROUP_EMAIL", Value: "group@example.com"},
 						},
 					},
 					{
-						Type: "GROUP_SETTINGS", Name: "ADD_GROUP_MEMBER",
+						Type: eventTypeGroupSettings, Name: "ADD_GROUP_MEMBER",
 						Parameters: []*reportsAdmin.ActivityEventsParameters{
 							{Name: "GROUP_EMAIL", Value: "group@example.com"},
-							{Name: "USER_EMAIL", Value: "user@example.com"},
+							{Name: "USER_EMAIL", Value: testUserEmail},
 						},
 					},
 				},
@@ -107,7 +109,7 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 			{
 				Id: &reportsAdmin.ActivityId{Time: now, UniqueQualifier: 456},
 				Events: []*reportsAdmin.ActivityEvents{
-					{Type: "USER_SETTINGS", Name: "CHANGE_FIRST_NAME", Parameters: []*reportsAdmin.ActivityEventsParameters{{Name: "USER_EMAIL", Value: "user@example.com"}}},
+					{Type: "USER_SETTINGS", Name: "CHANGE_FIRST_NAME", Parameters: []*reportsAdmin.ActivityEventsParameters{{Name: "USER_EMAIL", Value: testUserEmail}}},
 				},
 			},
 		},

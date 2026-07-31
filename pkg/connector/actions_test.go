@@ -207,7 +207,7 @@ func TestDisableEnableUser_IdempotentAndPayload(t *testing.T) {
 
 	// disable user
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 	}}
 	if _, _, err := c.disableUserActionHandler(context.Background(), args); err != nil {
 		t.Fatalf("disableUser: %v", err)
@@ -226,7 +226,7 @@ func TestDisableEnableUser_IdempotentAndPayload(t *testing.T) {
 
 	// enable user
 	argsEnable := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
 	}}
 	if _, _, err := c.enableUserActionHandler(context.Background(), argsEnable); err != nil {
 		t.Fatalf("enableUser: %v", err)
