@@ -356,7 +356,6 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		)
 	}
 
-	resourceOpts = append(resourceOpts, rs.WithResourceProfile(profile))
 	traitOpts = append(traitOpts,
 		rs.WithUserLogin(user.PrimaryEmail, additionalLogins.ToSlice()...),
 	)
@@ -369,12 +368,6 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 			},
 		),
 	)
-
-	resourceOpts = append(resourceOpts, rs.WithAnnotation(
-		&v2.V1Identifier{
-			Id: user.Id,
-		},
-	))
 
 	userResource, err := rs.NewUserResource(
 		user.Name.FullName,

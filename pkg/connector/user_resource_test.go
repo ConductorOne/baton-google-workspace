@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -41,6 +42,18 @@ func TestUserResource_ResourceLevelAttributes(t *testing.T) {
 
 		require.NotNil(t, res.GetProfile())
 		require.Equal(t, "user123", res.GetProfile().GetFields()[argUserID].GetStringValue())
+
+		// Regression guard: WithAnnotation appends rather than dedupes, so a
+		// duplicated resourceOpts append (e.g. from a bad merge/rebase) would
+		// silently give every synced user resource two identical V1Identifier
+		// annotations instead of failing loudly.
+		v1IdentifierCount := 0
+		for _, a := range res.GetAnnotations() {
+			if strings.Contains(a.GetTypeUrl(), "V1Identifier") {
+				v1IdentifierCount++
+			}
+		}
+		require.Equal(t, 1, v1IdentifierCount, "expected exactly one V1Identifier annotation, got a duplicate")
 	})
 
 	t.Run("suspended user: DISABLED status wins over the initial detailed status", func(t *testing.T) {
