@@ -316,7 +316,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		*/
 		for _, id := range externalIDs {
 			switch id.Type {
-			case "organization":
+			case externalIDTypeOrganization:
 				// oddly named, this is the employee ID in the google console.
 				if id.Value != "" {
 					employeeIDs.Add(id.Value)
@@ -325,7 +325,7 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 				if id.Value != "" {
 					additionalLogins.Add(id.Value)
 				}
-			case "login_id":
+			case externalIDTypeLoginID:
 				if id.Value != "" {
 					additionalLogins.Add(id.Value)
 				}

@@ -21,11 +21,14 @@ import (
 
 // safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
 type safeUserResponse struct {
-	Id            string                          `json:"id,omitempty"`
-	PrimaryEmail  string                          `json:"primaryEmail,omitempty"`
-	Name          *directoryAdmin.UserName        `json:"name,omitempty"`
-	RecoveryEmail string                          `json:"recoveryEmail,omitempty"`
-	CustomSchemas map[string]googleapi.RawMessage `json:"customSchemas,omitempty"`
+	Id            string                             `json:"id,omitempty"`
+	PrimaryEmail  string                             `json:"primaryEmail,omitempty"`
+	Name          *directoryAdmin.UserName           `json:"name,omitempty"`
+	RecoveryEmail string                             `json:"recoveryEmail,omitempty"`
+	CustomSchemas map[string]googleapi.RawMessage    `json:"customSchemas,omitempty"`
+	Organizations []*directoryAdmin.UserOrganization `json:"organizations,omitempty"`
+	ExternalIDs   []*directoryAdmin.UserExternalId   `json:"externalIds,omitempty"`
+	Relations     []*directoryAdmin.UserRelation     `json:"relations,omitempty"`
 }
 
 // Minimal fake for Reports Activities.List + Directory lookups used by admin_event_feed.

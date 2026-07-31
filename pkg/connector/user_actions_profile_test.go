@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,13 +18,25 @@ import (
 // (users.patch) and POST (users.makeAdmin) endpoints exercised by the
 // update_user_profile and make_admin actions.
 type testProfileServerState struct {
-	mtx           sync.Mutex
-	users         map[string]*directoryAdmin.User
-	getCount      int
-	patchCount    int
-	makeAdminCnt  int
-	lastPatchBody *directoryAdmin.User
-	lastAdminBody *directoryAdmin.UserMakeAdmin
+	mtx          sync.Mutex
+	users        map[string]*directoryAdmin.User
+	getCount     int
+	patchCount   int
+	makeAdminCnt int
+	// lastPatchRawBody is the raw JSON bytes of the last PATCH request, kept
+	// alongside lastPatchBody (its decoded form) to assert on wire-level
+	// details (e.g. an explicitly forced empty string) that decoding back into
+	// a Go struct would otherwise hide.
+	lastPatchRawBody []byte
+	lastPatchBody    *directoryAdmin.User
+	lastAdminBody    *directoryAdmin.UserMakeAdmin
+}
+
+// testExternalIDs extracts a typed ExternalIds slice from a user's interface{}
+// field for the mock server's JSON responses; parse errors are treated as empty.
+func testExternalIDs(u *directoryAdmin.User) []*directoryAdmin.UserExternalId {
+	ids, _ := extractFromInterface[*directoryAdmin.UserExternalId](u.ExternalIds)
+	return ids
 }
 
 func newTestProfileServer(state *testProfileServerState) *httptest.Server {
@@ -66,11 +79,16 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 				Name:          u.Name,
 				RecoveryEmail: u.RecoveryEmail,
 				CustomSchemas: u.CustomSchemas,
+				Organizations: extractOrganizations(u),
+				ExternalIDs:   testExternalIDs(u),
+				Relations:     extractRelations(u),
 			})
 		case http.MethodPatch:
 			state.patchCount++
+			raw, _ := io.ReadAll(r.Body)
+			state.lastPatchRawBody = raw
 			body := &directoryAdmin.User{}
-			_ = json.NewDecoder(r.Body).Decode(body)
+			_ = json.Unmarshal(raw, body)
 			state.lastPatchBody = body
 			// Apply a minimal merge so the echoed resource reflects the change.
 			if body.Name != nil {
@@ -82,12 +100,24 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			if body.CustomSchemas != nil {
 				u.CustomSchemas = body.CustomSchemas
 			}
+			if body.Organizations != nil {
+				u.Organizations = body.Organizations
+			}
+			if body.ExternalIds != nil {
+				u.ExternalIds = body.ExternalIds
+			}
+			if body.Relations != nil {
+				u.Relations = body.Relations
+			}
 			_ = json.NewEncoder(w).Encode(safeUserResponse{
 				Id:            u.Id,
 				PrimaryEmail:  u.PrimaryEmail,
 				Name:          u.Name,
 				RecoveryEmail: u.RecoveryEmail,
 				CustomSchemas: u.CustomSchemas,
+				Organizations: extractOrganizations(u),
+				ExternalIDs:   testExternalIDs(u),
+				Relations:     extractRelations(u),
 			})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -121,7 +151,7 @@ func TestUpdateUserProfile_NameFields_MergesAndPatches(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":    strArg("user123"),
+		argUserID:    strArg("user123"),
 		"given_name": strArg("New"),
 	}}
 
@@ -164,7 +194,7 @@ func TestUpdateUserProfile_EmptyNameValue_IsIgnored(t *testing.T) {
 
 	// Empty given_name must NOT blank the name; the non-empty family_name still applies.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":     strArg("user123"),
+		argUserID:     strArg("user123"),
 		"given_name":  strArg(""),
 		"family_name": strArg("Changed"),
 	}}
@@ -194,7 +224,7 @@ func TestUpdateUserProfile_OnlyEmptyName_NoUpdatableField(t *testing.T) {
 
 	// Only an empty name value -> nothing to update -> validation error, no PATCH.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":    strArg("user123"),
+		argUserID:    strArg("user123"),
 		"given_name": strArg(""),
 	}}
 
@@ -223,7 +253,7 @@ func TestUpdateUserProfile_CustomSchemas_SentVerbatim(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":        strArg("user123"),
+		argUserID:        strArg("user123"),
 		"custom_schemas": strArg(`{"EmployeeInfo":{"region":"emea"}}`),
 	}}
 
@@ -257,7 +287,7 @@ func TestUpdateUserProfile_NoUpdatableFields(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": strArg("user123"),
+		argUserID: strArg("user123"),
 	}}
 
 	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
@@ -279,7 +309,7 @@ func TestUpdateUserProfile_InvalidCustomSchemasJSON(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":        strArg("user123"),
+		argUserID:        strArg("user123"),
 		"custom_schemas": strArg("{not valid json"),
 	}}
 
@@ -302,7 +332,7 @@ func TestUpdateUserProfile_InvalidRecoveryEmail(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":        strArg("user123"),
+		argUserID:        strArg("user123"),
 		"recovery_email": strArg("not-an-email"),
 	}}
 
@@ -333,7 +363,7 @@ func TestUpdateUserProfile_EmptyRecoveryEmail_Clears(t *testing.T) {
 
 	// Empty string is a legitimate "clear" request and must still patch.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":        strArg("user123"),
+		argUserID:        strArg("user123"),
 		"recovery_email": strArg(""),
 	}}
 
@@ -362,6 +392,441 @@ func TestUpdateUserProfile_MissingUserId(t *testing.T) {
 	}
 }
 
+func TestUpdateUserProfile_Department_PreservesSiblingOrgFields(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				Organizations: []directoryAdmin.UserOrganization{
+					{Primary: true, Department: "Old Dept", Title: "Old Title", CostCenter: "CC1"},
+					{Primary: false, Department: "Secondary Dept"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:    strArg("user123"),
+		"department": strArg("New Dept"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+	if state.getCount != 1 {
+		t.Fatalf("expected 1 GET for read-modify-write of organizations, got %d", state.getCount)
+	}
+	if state.patchCount != 1 {
+		t.Fatalf("expected 1 PATCH, got %d", state.patchCount)
+	}
+
+	orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
+	if err != nil || len(orgs) != 2 {
+		t.Fatalf("expected 2 organizations in patch body, got %+v (err=%v)", state.lastPatchBody.Organizations, err)
+	}
+	var primary, secondary *directoryAdmin.UserOrganization
+	for _, o := range orgs {
+		if o.Primary {
+			primary = o
+		} else {
+			secondary = o
+		}
+	}
+	if primary == nil {
+		t.Fatalf("expected a primary organization in patch body")
+	}
+	if primary.Department != "New Dept" {
+		t.Fatalf("expected Department 'New Dept', got %q", primary.Department)
+	}
+	if primary.Title != "Old Title" {
+		t.Fatalf("expected sibling Title preserved as 'Old Title', got %q", primary.Title)
+	}
+	if primary.CostCenter != "CC1" {
+		t.Fatalf("expected sibling CostCenter preserved as 'CC1', got %q", primary.CostCenter)
+	}
+	if secondary == nil || secondary.Department != "Secondary Dept" {
+		t.Fatalf("expected secondary organization preserved, got %+v", secondary)
+	}
+}
+
+func TestUpdateUserProfile_Department_ClearedToEmpty_OnWire(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				Organizations: []directoryAdmin.UserOrganization{
+					{Primary: true, Department: "Old Dept", Title: "Old Title"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:    strArg("user123"),
+		"department": strArg(""),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+
+	// UserOrganization has its own ForceSendFields separate from the top-level
+	// User.ForceSendFields; without it Google's MarshalJSON omits an empty
+	// Department from the wire body (standard omitempty), silently failing to
+	// clear it. Assert on the raw JSON, since decoding back into a Go struct
+	// cannot distinguish "sent as empty" from "omitted".
+	if !strings.Contains(string(state.lastPatchRawBody), `"department":""`) {
+		t.Fatalf("expected wire body to explicitly send department=\"\", got %s", state.lastPatchRawBody)
+	}
+	orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
+	if err != nil || len(orgs) != 1 {
+		t.Fatalf("expected 1 organization in patch body, got %+v (err=%v)", state.lastPatchBody.Organizations, err)
+	}
+	if orgs[0].Department != "" {
+		t.Fatalf("expected Department cleared to empty, got %q", orgs[0].Department)
+	}
+	if orgs[0].Title != "Old Title" {
+		t.Fatalf("expected sibling Title preserved as 'Old Title', got %q", orgs[0].Title)
+	}
+}
+
+func TestUpdateUserProfile_Department_NoPrimaryFlagged_UpdatesExistingOrg(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				// No organization is flagged Primary - this happens for
+				// accounts provisioned via GCDS or third-party sync. The read
+				// path (extractPrimaryOrganizations) falls back to orgs[0];
+				// the write path must do the same, or the existing Title/
+				// CostCenter silently vanish from the profile behind a
+				// newly-appended (but now-primary) empty organization.
+				Organizations: []directoryAdmin.UserOrganization{
+					{Department: "Sales", Title: "Rep", CostCenter: "CC9"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:    strArg("user123"),
+		"department": strArg("Engineering"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+
+	orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
+	if err != nil || len(orgs) != 1 {
+		t.Fatalf("expected the single existing organization to be updated in place, got %+v (err=%v)", state.lastPatchBody.Organizations, err)
+	}
+	if !orgs[0].Primary {
+		t.Fatalf("expected the existing organization to be promoted to primary")
+	}
+	if orgs[0].Department != "Engineering" {
+		t.Fatalf("expected Department 'Engineering', got %q", orgs[0].Department)
+	}
+	if orgs[0].Title != "Rep" {
+		t.Fatalf("expected sibling Title preserved as 'Rep', got %q", orgs[0].Title)
+	}
+	if orgs[0].CostCenter != "CC9" {
+		t.Fatalf("expected sibling CostCenter preserved as 'CC9', got %q", orgs[0].CostCenter)
+	}
+}
+
+func TestUpdateUserProfile_EmployeeType_MapsToOrgDescription(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:       strArg("user123"),
+		"employee_type": strArg("Contractor"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+
+	orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
+	if err != nil || len(orgs) != 1 {
+		t.Fatalf("expected 1 organization in patch body, got %+v (err=%v)", state.lastPatchBody.Organizations, err)
+	}
+	if !orgs[0].Primary {
+		t.Fatalf("expected the created organization to be primary")
+	}
+	if orgs[0].Description != "Contractor" {
+		t.Fatalf("expected Description 'Contractor', got %q", orgs[0].Description)
+	}
+}
+
+func TestUpdateUserProfile_EmployeeID_PreservesOtherExternalIds(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				ExternalIds: []directoryAdmin.UserExternalId{
+					{Type: "organization", Value: "E-OLD"},
+					{Type: "login_id", Value: "alogin"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:     strArg("user123"),
+		"employee_id": strArg("E-NEW"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+	if state.getCount != 1 {
+		t.Fatalf("expected 1 GET for read-modify-write of external ids, got %d", state.getCount)
+	}
+
+	extIDs, err := extractFromInterface[*directoryAdmin.UserExternalId](state.lastPatchBody.ExternalIds)
+	if err != nil || len(extIDs) != 2 {
+		t.Fatalf("expected 2 external ids in patch body, got %+v (err=%v)", state.lastPatchBody.ExternalIds, err)
+	}
+	var org, login *directoryAdmin.UserExternalId
+	for _, id := range extIDs {
+		switch id.Type {
+		case "organization":
+			org = id
+		case "login_id":
+			login = id
+		}
+	}
+	if org == nil || org.Value != "E-NEW" {
+		t.Fatalf("expected organization external id updated to 'E-NEW', got %+v", org)
+	}
+	if login == nil || login.Value != "alogin" {
+		t.Fatalf("expected login_id external id preserved as 'alogin', got %+v", login)
+	}
+}
+
+func TestUpdateUserProfile_EmployeeID_EmptyClears(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				ExternalIds: []directoryAdmin.UserExternalId{
+					{Type: "organization", Value: "E-OLD"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:     strArg("user123"),
+		"employee_id": strArg(""),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+
+	// ExternalIds must be sent as a non-nil (possibly empty) slice: a nil value
+	// would be omitted from the request entirely, leaving the stale entry in
+	// place instead of clearing it.
+	if state.lastPatchBody.ExternalIds == nil {
+		t.Fatalf("expected ExternalIds to be sent (non-nil) so the stale entry is actually cleared, got nil")
+	}
+	extIDs, err := extractFromInterface[*directoryAdmin.UserExternalId](state.lastPatchBody.ExternalIds)
+	if err != nil {
+		t.Fatalf("failed to parse external ids: %v", err)
+	}
+	if len(extIDs) != 0 {
+		t.Fatalf("expected 0 external ids after clearing the only entry, got %+v", extIDs)
+	}
+}
+
+func TestUpdateUserProfile_ManagerEmail_PreservesOtherRelations(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				Relations: []directoryAdmin.UserRelation{
+					{Type: "manager", Value: "old-manager@example.com"},
+					{Type: "assistant", Value: "assistant@example.com"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:       strArg("user123"),
+		"manager_email": strArg("new-manager@example.com"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+	if state.getCount != 1 {
+		t.Fatalf("expected 1 GET for read-modify-write of relations, got %d", state.getCount)
+	}
+
+	rels, err := extractFromInterface[*directoryAdmin.UserRelation](state.lastPatchBody.Relations)
+	if err != nil || len(rels) != 2 {
+		t.Fatalf("expected 2 relations in patch body, got %+v (err=%v)", state.lastPatchBody.Relations, err)
+	}
+	var manager, assistant *directoryAdmin.UserRelation
+	for _, r := range rels {
+		switch r.Type {
+		case "manager":
+			manager = r
+		case "assistant":
+			assistant = r
+		}
+	}
+	if manager == nil || manager.Value != "new-manager@example.com" {
+		t.Fatalf("expected manager relation updated to 'new-manager@example.com', got %+v", manager)
+	}
+	if assistant == nil || assistant.Value != "assistant@example.com" {
+		t.Fatalf("expected assistant relation preserved, got %+v", assistant)
+	}
+}
+
+func TestUpdateUserProfile_ManagerEmail_EmptyIsNotProvided(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	// An empty manager_email is treated as "not provided" (matching the name
+	// fields), not an error by itself; with no other field set, the request
+	// fails the generic "at least one updatable field" guard instead - and
+	// crucially does not perform the read-modify-write GET for Relations.
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:       strArg("user123"),
+		"manager_email": strArg(""),
+	}}
+
+	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error when manager_email is the only (empty) field provided")
+	}
+	if state.getCount != 0 {
+		t.Fatalf("expected 0 GET for an empty manager_email, got %d", state.getCount)
+	}
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH on empty manager_email, got %d", state.patchCount)
+	}
+}
+
+func TestUpdateUserProfile_ManagerEmail_Empty_OtherFieldStillApplies(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	// An empty manager_email alongside a real field must not abort the whole
+	// patch - it is simply ignored, like an empty given_name/family_name.
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:        strArg("user123"),
+		"manager_email":  strArg(""),
+		"recovery_email": strArg("new@example.com"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("updateUserProfile: %v", err)
+	}
+	if state.patchCount != 1 {
+		t.Fatalf("expected 1 PATCH, got %d", state.patchCount)
+	}
+	if state.lastPatchBody.Relations != nil {
+		t.Fatalf("expected Relations untouched when manager_email is empty, got %+v", state.lastPatchBody.Relations)
+	}
+}
+
+func TestUpdateUserProfile_ManagerEmail_InvalidEmailRejected(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:       strArg("user123"),
+		"manager_email": strArg("not-an-email"),
+	}}
+
+	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error for invalid manager_email")
+	}
+	// Validation happens before the read-modify-write GET, so a malformed
+	// address must fail fast without spending an API call.
+	if state.getCount != 0 {
+		t.Fatalf("expected 0 GET on invalid manager_email (fail fast before RMW read), got %d", state.getCount)
+	}
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH on invalid manager_email, got %d", state.patchCount)
+	}
+}
+
 func TestMakeAdmin_GrantAndRevoke(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},
@@ -373,7 +838,7 @@ func TestMakeAdmin_GrantAndRevoke(t *testing.T) {
 
 	// Grant super-admin.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": strArg("user123"),
+		argUserID: strArg("user123"),
 		"status":  boolArg(true),
 	}}
 	resp, _, err := userRT.makeAdminActionHandler(context.Background(), args)
@@ -407,7 +872,7 @@ func TestMakeAdmin_MissingStatus(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": strArg("user123"),
+		argUserID: strArg("user123"),
 	}}
 
 	_, _, err := userRT.makeAdminActionHandler(context.Background(), args)

@@ -166,7 +166,7 @@ var (
 				IsRequired:  true,
 			},
 			{
-				Name:        "manager_email",
+				Name:        argManagerEmail,
 				DisplayName: "Manager Email",
 				Description: "The email address of the new manager.",
 				Field:       &config.Field_StringField{},
@@ -227,8 +227,9 @@ var (
 		DisplayName: "Update User Profile",
 		Description: "Applies a partial update to a user's profile using patch semantics " +
 			"(only the provided fields are modified, so unrelated server-side state is preserved). " +
-			"Supports name fields, recovery details, and custom-schema attribute values. " +
-			"At least one updatable field must be provided.",
+			"Supports name fields, recovery details, Employee Information attributes " +
+			"(department, job title, cost center, employee ID, employee type), the manager relation, " +
+			"and custom-schema attribute values. At least one updatable field must be provided.",
 		Arguments: []*config.Field{
 			{
 				Name:        "user_id",
@@ -270,6 +271,49 @@ var (
 				Description: "New recovery phone (E.164, e.g. +14155550100). Send an empty string to clear it.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  false,
+			},
+			{
+				Name:        argDepartment,
+				DisplayName: "Department",
+				Description: "New department. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argJobTitle,
+				DisplayName: "Job Title",
+				Description: "New job title. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argCostCenter,
+				DisplayName: "Cost Center",
+				Description: "New cost center. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argEmployeeType,
+				DisplayName: "Employee Type",
+				Description: "New employee type. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argEmployeeID,
+				DisplayName: "Employee ID",
+				Description: "New employee ID. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argManagerEmail,
+				DisplayName: "Manager Email",
+				Description: "The email address of the new manager. An empty value is ignored (not applied); " +
+					"use update_user_manager to remove the manager relation entirely.",
+				Field:      &config.Field_StringField{},
+				IsRequired: false,
 			},
 			{
 				Name:        argCustomSchemas,
@@ -724,7 +768,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	// Extract manager_email argument
-	managerEmailValue, ok := args.Fields["manager_email"]
+	managerEmailValue, ok := args.Fields[argManagerEmail]
 	if !ok || managerEmailValue == nil {
 		l.Debug("google-workspace: user action handler: missing manager_email argument", zap.Any("args", args))
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing manager_email argument")
@@ -764,17 +808,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 
 	// Build updated relations: keep all non-manager relations, replace/add manager
 	currentRelations := extractRelations(currentUser)
-	updatedRelations := make([]admin.UserRelation, 0, len(currentRelations)+1)
-	for _, rel := range currentRelations {
-		if rel.Type != relTypeManager {
-			updatedRelations = append(updatedRelations, *rel)
-		}
-	}
-	// Add the new manager relation
-	updatedRelations = append(updatedRelations, admin.UserRelation{
-		Type:  relTypeManager,
-		Value: managerEmail,
-	})
+	updatedRelations := buildManagerRelations(currentRelations, managerEmail)
 
 	// Update the user's relations
 	updatedUser, err := o.client.UpdateUser(ctx, userId, &admin.User{
@@ -825,6 +859,12 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		familyName:    optionalStringField(args, argFamilyName),
 		recoveryEmail: optionalStringField(args, argRecoveryEmail),
 		recoveryPhone: optionalStringField(args, argRecoveryPhone),
+		department:    optionalStringField(args, argDepartment),
+		jobTitle:      optionalStringField(args, argJobTitle),
+		costCenter:    optionalStringField(args, argCostCenter),
+		employeeType:  optionalStringField(args, argEmployeeType),
+		employeeID:    optionalStringField(args, argEmployeeID),
+		managerEmail:  optionalStringField(args, argManagerEmail),
 	}
 
 	// Custom schemas: raw JSON object mapping schemaName -> { fieldName: value },
@@ -903,13 +943,21 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 // userProfilePatch holds the optional profile fields to apply with patch
 // semantics. A nil pointer leaves the field untouched; a non-nil pointer
 // (including a pointer to the empty string) is sent to the API so callers can
-// clear a value. Exception: the name fields (givenName/familyName) ignore empty
-// strings — Google rejects empty names and blanking a name is never intended.
+// clear a value. Exceptions: the name fields (givenName/familyName) and
+// managerEmail ignore empty strings and are treated as "not provided" —
+// Google rejects empty names, and this patch path has no way to clear the
+// manager relation, so an empty value must not fail the whole request.
 type userProfilePatch struct {
 	givenName     *string
 	familyName    *string
 	recoveryEmail *string
 	recoveryPhone *string
+	department    *string
+	jobTitle      *string
+	costCenter    *string
+	employeeType  *string
+	employeeID    *string
+	managerEmail  *string
 	customSchemas map[string]googleapi.RawMessage
 }
 
@@ -933,20 +981,43 @@ func applyUserProfilePatch(
 	// name is never an intended outcome, so empty values are ignored.
 	setGiven := patch.givenName != nil && *patch.givenName != ""
 	setFamily := patch.familyName != nil && *patch.familyName != ""
+	setOrg := patch.department != nil || patch.jobTitle != nil || patch.costCenter != nil || patch.employeeType != nil
+	// Unlike recovery fields (empty means "clear"), manager_email has no clear
+	// path through this action - see the Relations block below - so an empty
+	// value is treated the same as "not provided", matching the name fields'
+	// convention, rather than failing the whole multi-field patch.
+	setManagerEmail := patch.managerEmail != nil && *patch.managerEmail != ""
+	// Validate before the read-modify-write GET below so a malformed address
+	// fails fast without burning an API call.
+	if setManagerEmail {
+		if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
+		}
+	}
+
+	// Organizations, ExternalIds, and Relations are array fields: a patch
+	// replaces the whole array, so a GET is required first to preserve sibling
+	// entries (other organizations, other external-ID types, other relation
+	// types) the caller did not set. Fetch once and reuse across all three
+	// blocks below, plus the Name block, instead of issuing a GET per field.
+	needCurrent := (setGiven != setFamily) || setOrg || patch.employeeID != nil || setManagerEmail
+	var current *admin.User
+	if needCurrent {
+		var err error
+		current, err = client.GetUserFullForProvisioning(ctx, userId)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	if setGiven || setFamily {
 		name := &admin.UserName{}
 		// Read-modify-write only when exactly one name field is provided, to
 		// preserve the sibling field the caller did not set. When both are
-		// supplied the whole name object is overwritten, so the GET would be a
-		// wasted API call (doubling per-user quota on bulk push rules).
-		if setGiven != setFamily {
-			current, err := client.GetUserFullForProvisioning(ctx, userId)
-			if err != nil {
-				return nil, nil, err
-			}
-			if current.Name != nil {
-				*name = *current.Name
-			}
+		// supplied the whole name object is overwritten.
+		if setGiven != setFamily && current.Name != nil {
+			*name = *current.Name
 		}
 		if setGiven {
 			name.GivenName = *patch.givenName
@@ -975,6 +1046,48 @@ func applyUserProfilePatch(
 		update.RecoveryPhone = *patch.recoveryPhone
 		forceSend = append(forceSend, "RecoveryPhone")
 	}
+
+	// Employee Information: Department, Job title, and Cost center live on the
+	// primary entry of the Organizations array; Employee type maps to that same
+	// entry's Description field (per Admin console mapping). Preserve secondary
+	// organizations and any sibling fields on the primary entry the caller did
+	// not set.
+	if setOrg {
+		orgs, err := extractFromInterface[*admin.UserOrganization](current.Organizations)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
+		}
+		update.Organizations = buildUpdatedOrganizations(orgs, patch)
+		forceSend = append(forceSend, "Organizations")
+	}
+
+	// Employee ID: the Admin console's "Employee ID" is the ExternalIds entry
+	// with Type "organization" (an oddly-named but stable API mapping). Preserve
+	// any other ExternalIds entries (account/login_id/network, etc.).
+	if patch.employeeID != nil {
+		currentExtIDs, err := extractFromInterface[*admin.UserExternalId](current.ExternalIds)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
+		}
+		update.ExternalIds = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
+		forceSend = append(forceSend, "ExternalIds")
+	}
+
+	// Manager: same "manager" Relations entry the standalone update_user_manager
+	// action writes - buildManagerRelations is shared with that handler so the
+	// two stay behaviorally identical. Unlike the recovery fields, an empty
+	// value means "not provided" rather than "clear" - clearing the manager
+	// relation is out of scope for this bulk patch path, so it is skipped (like
+	// the name fields) rather than failing the request.
+	if setManagerEmail {
+		currentRelations, err := extractFromInterface[*admin.UserRelation](current.Relations)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse relations: %w", err)
+		}
+		update.Relations = buildManagerRelations(currentRelations, *patch.managerEmail)
+		forceSend = append(forceSend, "Relations")
+	}
+
 	// Only treat custom schemas as a real update when non-empty. An empty object
 	// ("{}") unmarshals to a non-nil empty map; assigning it would pass the
 	// "at least one updatable field" guard and issue a no-op patch that falsely
@@ -1001,6 +1114,98 @@ func applyUserProfilePatch(
 	return updatedUser, updatedFields, nil
 }
 
+// buildUpdatedOrganizations merges the requested department/job title/cost
+// center/employee type changes into the current primary organization,
+// preserving secondary organizations and any sibling fields on the primary
+// entry the caller did not set. Google does not guarantee a Primary flag is
+// set (e.g. accounts provisioned via GCDS or third-party sync); this mirrors
+// the read path's extractPrimaryOrganizations fallback of orgs[0] so an
+// existing organization is updated in place instead of appending a second one
+// that silently orphans its sibling fields.
+func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfilePatch) []admin.UserOrganization {
+	primaryIdx := -1
+	for i, org := range orgs {
+		if org.Primary {
+			primaryIdx = i
+			break
+		}
+	}
+	if primaryIdx < 0 && len(orgs) > 0 {
+		primaryIdx = 0
+	}
+	primary := &admin.UserOrganization{}
+	if primaryIdx >= 0 {
+		*primary = *orgs[primaryIdx]
+	}
+	primary.Primary = true
+	if patch.department != nil {
+		primary.Department = *patch.department
+		primary.ForceSendFields = append(primary.ForceSendFields, "Department")
+	}
+	if patch.jobTitle != nil {
+		primary.Title = *patch.jobTitle
+		primary.ForceSendFields = append(primary.ForceSendFields, "Title")
+	}
+	if patch.costCenter != nil {
+		primary.CostCenter = *patch.costCenter
+		primary.ForceSendFields = append(primary.ForceSendFields, "CostCenter")
+	}
+	if patch.employeeType != nil {
+		primary.Description = *patch.employeeType
+		primary.ForceSendFields = append(primary.ForceSendFields, "Description")
+	}
+	updatedOrgs := make([]admin.UserOrganization, 0, len(orgs)+1)
+	for i, org := range orgs {
+		if i == primaryIdx {
+			updatedOrgs = append(updatedOrgs, *primary)
+		} else {
+			updatedOrgs = append(updatedOrgs, *org)
+		}
+	}
+	if primaryIdx < 0 {
+		updatedOrgs = append(updatedOrgs, *primary)
+	}
+	return updatedOrgs
+}
+
+// buildUpdatedExternalIDs sets the ExternalIds entry with Type "organization"
+// (the Admin console's "Employee ID") to employeeID, removing it entirely when
+// employeeID is empty. Other ExternalIds entries (account/login_id/network,
+// etc.) are preserved.
+func buildUpdatedExternalIDs(ids []*admin.UserExternalId, employeeID string) []admin.UserExternalId {
+	updated := make([]admin.UserExternalId, 0, len(ids)+1)
+	for _, id := range ids {
+		if id.Type != externalIDTypeOrganization {
+			updated = append(updated, *id)
+		}
+	}
+	if employeeID != "" {
+		updated = append(updated, admin.UserExternalId{
+			Type:  externalIDTypeOrganization,
+			Value: employeeID,
+		})
+	}
+	return updated
+}
+
+// buildManagerRelations sets the "manager" Relations entry to managerEmail,
+// preserving any other relation types. Shared by the standalone
+// update_user_manager action and the bulk profile-patch path so the two stay
+// behaviorally identical.
+func buildManagerRelations(relations []*admin.UserRelation, managerEmail string) []admin.UserRelation {
+	updated := make([]admin.UserRelation, 0, len(relations)+1)
+	for _, rel := range relations {
+		if rel.Type != relTypeManager {
+			updated = append(updated, *rel)
+		}
+	}
+	updated = append(updated, admin.UserRelation{
+		Type:  relTypeManager,
+		Value: managerEmail,
+	})
+	return updated
+}
+
 const (
 	actionUpdateUser = "update_user"
 	argUserProfile   = "user_profile"
@@ -1011,7 +1216,20 @@ const (
 	argRecoveryEmail = "recovery_email"
 	argRecoveryPhone = "recovery_phone"
 	argCustomSchemas = "custom_schemas"
+	argDepartment    = "department"
+	argJobTitle      = "job_title"
+	argCostCenter    = "cost_center"
+	argEmployeeType  = "employee_type"
+	argEmployeeID    = "employee_id"
+	argManagerEmail  = "manager_email"
 	displayUser      = "User"
+
+	// externalIDTypeOrganization is the admin.UserExternalId.Type value the
+	// Admin console's "Employee ID" field is stored under.
+	externalIDTypeOrganization = "organization"
+	// externalIDTypeLoginID is one of the ExternalId types read as an
+	// additional login during sync (see userResource in user.go).
+	externalIDTypeLoginID = "login_id"
 )
 
 // updateUserGlobalActionSchema is the global (account-level) profile-update
@@ -1024,7 +1242,8 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 	DisplayName: "Update User",
 	Description: "Updates a user's profile from a user_profile JSON object. " +
 		"Consumed by ConductorOne push rules for automated profile sync. " +
-		"Supported keys: given_name, family_name, recovery_email, recovery_phone, custom_schemas.",
+		"Supported keys: given_name, family_name, recovery_email, recovery_phone, department, job_title, " +
+		"cost_center, employee_type, employee_id, manager_email, custom_schemas.",
 	Arguments: []*config.Field{
 		{
 			Name:        argUserID,
@@ -1042,9 +1261,10 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 		{
 			Name:        argUserProfile,
 			DisplayName: "User Profile Data",
-			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, custom_schemas.",
-			IsRequired:  true,
-			Field:       &config.Field_StringField{},
+			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, " +
+				"department, job_title, cost_center, employee_type, employee_id, manager_email, custom_schemas.",
+			IsRequired: true,
+			Field:      &config.Field_StringField{},
 		},
 	},
 	ReturnTypes: []*config.Field{
@@ -1139,6 +1359,24 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 	}
 	if v, ok := stringFromJSON(profile, argRecoveryPhone, "recoveryPhone"); ok {
 		patch.recoveryPhone = &v
+	}
+	if v, ok := stringFromJSON(profile, argDepartment, "department"); ok {
+		patch.department = &v
+	}
+	if v, ok := stringFromJSON(profile, argJobTitle, "jobTitle"); ok {
+		patch.jobTitle = &v
+	}
+	if v, ok := stringFromJSON(profile, argCostCenter, "costCenter"); ok {
+		patch.costCenter = &v
+	}
+	if v, ok := stringFromJSON(profile, argEmployeeType, "employeeType"); ok {
+		patch.employeeType = &v
+	}
+	if v, ok := stringFromJSON(profile, argEmployeeID, "employeeId"); ok {
+		patch.employeeID = &v
+	}
+	if v, ok := stringFromJSON(profile, argManagerEmail, "managerEmail"); ok {
+		patch.managerEmail = &v
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
