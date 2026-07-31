@@ -88,7 +88,7 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | Action | Key arguments | Description |
 | ------ | ------------- | ----------- |
 | `update_user_status` / `disable_user` / `enable_user` | `user_id` / `is_suspended` | Suspend or activate a user (idempotent) |
-| `update_user_profile` | `user_id`, plus any of `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `department`, `job_title`, `cost_center`, `employee_type`, `employee_id`, `manager_email`, `custom_schemas` | Partial profile update (patch semantics); supports Employee Information attributes and custom-schema attribute values |
+| `update_user_profile` | `user_id`, plus any of `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `department`, `job_title`, `cost_center`, `employee_type`, `employee_id`, `manager_email`, `custom_schemas` | Partial profile update (patch semantics); supports Employee Information attributes and custom-schema attribute values. Exception: clearing `employee_id` down to the last remaining external ID uses a full-object update instead, since Google does not reliably shrink a repeated field via patch. |
 | `update_user` | `user_id` (resource ID), `user_profile` (JSON) | Profile update from a JSON object; consumed by C1 push rules for automated profile sync |
 | `update_user_manager` | `user_id`, `manager_email` | Set the user's `manager` relation |
 | `make_admin` | `user_id`, `status` (bool) | Promote/demote a user to/from super administrator |

@@ -85,4 +85,35 @@ func TestUserResource_ResourceLevelAttributes(t *testing.T) {
 		require.NotNil(t, res.GetStatus())
 		require.Equal(t, v2.Status_RESOURCE_STATUS_DELETED, res.GetStatus().GetStatus())
 	})
+
+	// Regression guard: update_user_profile/update_user write job_title,
+	// employee_type, and employee_id, so a push rule must be able to read
+	// those same keys back from the synced profile - otherwise it can never
+	// observe the value it wrote and either no-ops forever or re-pushes every
+	// sync. These must stay present alongside the pre-existing "title"/
+	// "description" keys (never removed/renamed - see CLAUDE.md on profile
+	// stability), just additively aliased under the write-side names.
+	t.Run("job_title, employee_type, and employee_id round-trip under the same keys the write path uses", func(t *testing.T) {
+		user := &directoryAdmin.User{
+			Id:           "user999",
+			PrimaryEmail: "roundtrip@example.com",
+			Name:         &directoryAdmin.UserName{GivenName: "Round", FamilyName: "Trip", FullName: "Round Trip"},
+			Organizations: []directoryAdmin.UserOrganization{
+				{Primary: true, Title: "Staff Engineer", Description: "Full-time"},
+			},
+			ExternalIds: []directoryAdmin.UserExternalId{
+				{Type: "organization", Value: "E12345"},
+			},
+		}
+
+		res, err := o.userResource(context.Background(), user)
+		require.NoError(t, err)
+
+		profile := res.GetProfile().GetFields()
+		require.Equal(t, "Staff Engineer", profile["title"].GetStringValue(), "pre-existing title key must be unchanged")
+		require.Equal(t, "Staff Engineer", profile[argJobTitle].GetStringValue())
+		require.Equal(t, "Full-time", profile["description"].GetStringValue(), "pre-existing description key must be unchanged")
+		require.Equal(t, "Full-time", profile[argEmployeeType].GetStringValue())
+		require.Equal(t, "E12345", profile[argEmployeeID].GetStringValue())
+	})
 }

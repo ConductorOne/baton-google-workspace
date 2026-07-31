@@ -311,7 +311,7 @@ var (
 				Name:        argManagerEmail,
 				DisplayName: "Manager Email",
 				Description: "The email address of the new manager. An empty value is ignored (not applied); " +
-					"use update_user_manager to remove the manager relation entirely.",
+					"clearing the manager relation is not currently supported by this connector.",
 				Field:      &config.Field_StringField{},
 				IsRequired: false,
 			},
@@ -965,10 +965,10 @@ type userProfilePatch struct {
 // updated user plus the list of changed fields. Shared by the resource-scoped
 // update_user_profile action and the global update_user action consumed by
 // ConductorOne push rules. Despite the name, this issues a Users.Update (PUT)
-// rather than Users.Patch whenever Organizations/ExternalIds/Relations/Name
-// might be touched - see the `usePut` comment below for why - so it is not
-// pure patch semantics end to end; only the recovery-email/phone/custom-schema
-// -only path actually sends a sparse Patch.
+// instead of Users.Patch only in the one case Patch is confirmed not to
+// handle - see the `usePut` comment below for why - so most fields (name,
+// recovery, Employee Information, manager) keep pure patch semantics; only
+// clearing employee_id down to the last ExternalIds entry forces a full PUT.
 func applyUserProfilePatch(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
@@ -1014,25 +1014,43 @@ func applyUserProfilePatch(
 		}
 	}
 
+	// Employee ID: the Admin console's "Employee ID" is the ExternalIds entry
+	// with Type "organization" (an oddly-named but stable API mapping). Preserve
+	// any other ExternalIds entries (account/login_id/network, etc.). Computed
+	// up front (rather than inline further down) because whether this shrinks
+	// the array decides usePut below.
+	var updatedExternalIDs []admin.UserExternalId
+	externalIDsWillShrink := false
+	if patch.employeeID != nil {
+		currentExtIDs, err := extractFromInterface[*admin.UserExternalId](current.ExternalIds)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
+		}
+		updatedExternalIDs = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
+		externalIDsWillShrink = len(updatedExternalIDs) < len(currentExtIDs)
+	}
+
 	// Users.Patch does not reliably shrink a repeated field down to empty:
 	// confirmed against a live tenant that clearing the only ExternalIds entry
 	// via Patch (empty slice, with or without ForceSendFields/NullFields)
 	// silently leaves the existing entry in place, even though the same patch
-	// correctly overwrites a *sub-field* of a retained Organizations entry. A
-	// *sparse* Update (PUT) has the same problem - also confirmed live - so
-	// Update only clears it when given the genuinely complete object. So
-	// whenever we already fetched `current` (because an array field might
-	// shrink, or Name needs a sibling-preserving merge), start from a full
-	// copy of it and send the result via Update instead of Patch: `update`
-	// begins as an exact copy of `current` with only the fields below
-	// overwritten, so nothing this function doesn't touch changes - modulo
-	// the accepted tradeoff that a full-object Update widens the read-modify
-	// -write race window to every field on the user (not just the ones this
-	// call touches) versus Patch's narrower one, since anything changed on
-	// the server between this GET and the Update below would be silently
-	// reverted to the value captured here. When nothing array-shaped is being
-	// touched (current == nil), Patch is cheaper and keeps the narrow window.
-	usePut := current != nil
+	// correctly overwrites a *sub-field* of a retained Organizations entry (and
+	// Organizations/Relations never shrink here - buildUpdatedOrganizations only
+	// ever preserves or appends, buildManagerRelations only ever appends the
+	// manager entry - so neither needs this workaround). A *sparse* Update
+	// (PUT) has the same problem - also confirmed live - so Update only clears
+	// it when given the genuinely complete object. So only when ExternalIds is
+	// actually shrinking, start from a full copy of `current` and send the
+	// result via Update instead of Patch: `update` begins as an exact copy of
+	// `current` with only the fields below overwritten, so nothing this
+	// function doesn't touch changes - modulo the accepted tradeoff that a
+	// full-object Update widens the read-modify-write race window to every
+	// field on the user (not just the ones this call touches) versus Patch's
+	// narrower one, since anything changed on the server between this GET and
+	// the Update below would be silently reverted to the value captured here.
+	// Every other case (name, recovery, Employee Information, manager) keeps
+	// the narrower, cheaper Patch.
+	usePut := externalIDsWillShrink
 	var update *admin.User
 	if usePut {
 		full := *current
@@ -1081,25 +1099,24 @@ func applyUserProfilePatch(
 	// primary entry of the Organizations array; Employee type maps to that same
 	// entry's Description field (per Admin console mapping). Preserve secondary
 	// organizations and any sibling fields on the primary entry the caller did
-	// not set.
+	// not set. buildUpdatedOrganizations reports whether it actually changed
+	// anything (it's a no-op when every provided field is an empty "clear" and
+	// no organization exists to persist it on) so a no-op doesn't get reported
+	// as "Organizations" changed or send empty wire noise.
 	if setOrg {
 		orgs, err := extractFromInterface[*admin.UserOrganization](current.Organizations)
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
 		}
-		update.Organizations = buildUpdatedOrganizations(orgs, patch)
-		forceSend = append(forceSend, "Organizations")
+		updatedOrgs, changed := buildUpdatedOrganizations(orgs, patch)
+		update.Organizations = updatedOrgs
+		if changed {
+			forceSend = append(forceSend, "Organizations")
+		}
 	}
 
-	// Employee ID: the Admin console's "Employee ID" is the ExternalIds entry
-	// with Type "organization" (an oddly-named but stable API mapping). Preserve
-	// any other ExternalIds entries (account/login_id/network, etc.).
 	if patch.employeeID != nil {
-		currentExtIDs, err := extractFromInterface[*admin.UserExternalId](current.ExternalIds)
-		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
-		}
-		update.ExternalIds = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
+		update.ExternalIds = updatedExternalIDs
 		forceSend = append(forceSend, "ExternalIds")
 	}
 
@@ -1169,10 +1186,17 @@ func applyUserProfilePatch(
 // preserving secondary organizations and any sibling fields on the primary
 // entry the caller did not set. Google does not guarantee a Primary flag is
 // set (e.g. accounts provisioned via GCDS or third-party sync); this mirrors
-// the read path's extractPrimaryOrganizations fallback of orgs[0] so an
-// existing organization is updated in place instead of appending a second one
-// that silently orphans its sibling fields.
-func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfilePatch) []admin.UserOrganization {
+// the read path's extractPrimaryOrganizations fallback of orgs[0] to pick
+// which existing organization to edit in place (instead of appending a second
+// one that silently orphans its sibling fields) - but persisting a Primary
+// flag Google never set is a separate decision from choosing the entry, so
+// the chosen entry's own Primary value is left untouched; only a brand-new
+// entry (no organizations existed at all) is created already flagged Primary.
+// The second return value reports whether anything was actually changed, so
+// a caller-provided patch that resolves to a no-op (every field is an empty
+// "clear" and no organization exists to persist it on) can be told apart from
+// a genuine change.
+func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfilePatch) ([]admin.UserOrganization, bool) {
 	primaryIdx := -1
 	for i, org := range orgs {
 		if org.Primary {
@@ -1188,17 +1212,14 @@ func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfile
 		// empty-string "clear" request: there is nothing to persist. Skip
 		// creating a spurious empty primary organization, which would read
 		// back as a phantom organization on the next sync.
-		updatedOrgs := make([]admin.UserOrganization, 0, len(orgs))
-		for _, org := range orgs {
-			updatedOrgs = append(updatedOrgs, *org)
-		}
-		return updatedOrgs
+		return []admin.UserOrganization{}, false
 	}
 	primary := &admin.UserOrganization{}
 	if primaryIdx >= 0 {
 		*primary = *orgs[primaryIdx]
+	} else {
+		primary.Primary = true
 	}
-	primary.Primary = true
 	if patch.department != nil {
 		primary.Department = *patch.department
 		primary.ForceSendFields = append(primary.ForceSendFields, "Department")
@@ -1226,7 +1247,7 @@ func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfile
 	if primaryIdx < 0 {
 		updatedOrgs = append(updatedOrgs, *primary)
 	}
-	return updatedOrgs
+	return updatedOrgs, true
 }
 
 // hasNonEmptyOrgField reports whether the patch sets at least one Employee

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -32,13 +33,20 @@ func (o *userResourceType) ResourceType(_ context.Context) *v2.ResourceType {
 	return o.resourceType
 }
 
+// userStatusReasonSuspended is the human-readable status-reason text shown
+// for a suspended user. Kept separate from fieldSuspended (the ForceSendFields
+// Go struct field name literal in actions.go) even though the literal
+// currently matches, since a struct field rename and a display-text change are
+// independent decisions that should never accidentally couple.
+const userStatusReasonSuspended = "Suspended"
+
 func (o *userResourceType) userStatus(user *admin.User) (v2.UserTrait_Status_Status, string) {
 	if user.DeletionTime != "" {
 		return v2.UserTrait_Status_STATUS_DELETED, ""
 	}
 
 	if user.Suspended {
-		reason := fieldSuspended
+		reason := userStatusReasonSuspended
 		if user.SuspensionReason != "" {
 			reason += ": " + user.SuspensionReason
 		}
@@ -112,6 +120,15 @@ func userBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, doma
 	}
 }
 
+// profileKeyUserID is the synced user profile's "user_id" key. Kept separate
+// from argUserID (the "user_id" wire action-argument name used throughout
+// user_actions.go/helpers.go) even though the literal currently matches,
+// since a profile key is permanent API surface (CLAUDE.md: never remove or
+// rename profile keys) while an action-argument name is a different, more
+// freely-evolvable surface - coupling them through one constant would make a
+// future argument rename silently change the profile schema too.
+const profileKeyUserID = "user_id"
+
 func userProfile(user *admin.User) map[string]interface{} {
 	profile := make(map[string]interface{})
 	if user.Name != nil {
@@ -122,7 +139,7 @@ func userProfile(user *admin.User) map[string]interface{} {
 		profile["manager_email"] = extractManagerEmail(user)
 	}
 
-	profile[argUserID] = user.Id
+	profile[profileKeyUserID] = user.Id
 	profile[argOrgUnitPath] = user.OrgUnitPath
 	profile["include_in_global_address_list"] = user.IncludeInGlobalAddressList
 
@@ -132,9 +149,17 @@ func userProfile(user *admin.User) map[string]interface{} {
 		profile["organization"] = primaryOrg.Name
 		profile["department"] = primaryOrg.Department
 		profile["title"] = primaryOrg.Title
+		// job_title aliases "title" under the same name update_user_profile's
+		// job_title argument writes, so a push rule can observe the value it
+		// wrote back on the next sync (the write side added job_title/
+		// employee_type/employee_id without a matching read-side key).
+		profile[argJobTitle] = primaryOrg.Title
 		profile["location"] = primaryOrg.Location
 		profile["cost_center"] = primaryOrg.CostCenter
 		profile["description"] = primaryOrg.Description
+		// employee_type aliases "description" (the Admin console's Employee
+		// type maps to Organization.Description) for the same reason.
+		profile[argEmployeeType] = primaryOrg.Description
 	}
 
 	return profile
@@ -354,6 +379,11 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		traitOpts = append(traitOpts,
 			rs.WithEmployeeID(employeeIDs.ToSlice()...),
 		)
+		// Also surface under the same key update_user_profile's employee_id
+		// argument writes, so a push rule can observe the value it wrote (the
+		// write side added employee_id without a matching read-side key; see
+		// argJobTitle/argEmployeeType above for the same fix on those fields).
+		profile[argEmployeeID] = strings.Join(employeeIDs.ToSlice(), ",")
 	}
 
 	traitOpts = append(traitOpts,

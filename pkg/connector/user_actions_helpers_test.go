@@ -17,8 +17,9 @@ func TestBuildUpdatedOrganizations(t *testing.T) {
 		}
 		patch := userProfilePatch{department: strPtr("New Dept")}
 
-		updated := buildUpdatedOrganizations(orgs, patch)
+		updated, changed := buildUpdatedOrganizations(orgs, patch)
 
+		require.True(t, changed)
 		require.Len(t, updated, 2)
 		require.True(t, updated[0].Primary)
 		require.Equal(t, "New Dept", updated[0].Department)
@@ -27,53 +28,58 @@ func TestBuildUpdatedOrganizations(t *testing.T) {
 		require.Equal(t, "Secondary Dept", updated[1].Department)
 	})
 
-	t.Run("falls back to orgs[0] when none flagged primary", func(t *testing.T) {
+	t.Run("falls back to orgs[0] when none flagged primary, without persisting a Primary flag Google never set", func(t *testing.T) {
 		orgs := []*directoryAdmin.UserOrganization{
 			{Department: "Sales", Title: "Rep", CostCenter: "CC9"},
 		}
 		patch := userProfilePatch{department: strPtr("Engineering")}
 
-		updated := buildUpdatedOrganizations(orgs, patch)
+		updated, changed := buildUpdatedOrganizations(orgs, patch)
 
+		require.True(t, changed)
 		require.Len(t, updated, 1)
-		require.True(t, updated[0].Primary, "existing org must be promoted to primary")
+		require.False(t, updated[0].Primary, "editing the fallback-selected org must not silently promote it to primary")
 		require.Equal(t, "Engineering", updated[0].Department)
 		require.Equal(t, "Rep", updated[0].Title)
 		require.Equal(t, "CC9", updated[0].CostCenter)
 	})
 
 	t.Run("creates a new primary org when none exist", func(t *testing.T) {
-		updated := buildUpdatedOrganizations(nil, userProfilePatch{employeeType: strPtr("Contractor")})
+		updated, changed := buildUpdatedOrganizations(nil, userProfilePatch{employeeType: strPtr("Contractor")})
 
+		require.True(t, changed)
 		require.Len(t, updated, 1)
-		require.True(t, updated[0].Primary)
+		require.True(t, updated[0].Primary, "a brand-new organization entry is created as primary")
 		require.Equal(t, "Contractor", updated[0].Description)
 	})
 
 	t.Run("employee type maps to Description, force-sent even when empty", func(t *testing.T) {
 		orgs := []*directoryAdmin.UserOrganization{{Primary: true, Description: "Full-time"}}
-		updated := buildUpdatedOrganizations(orgs, userProfilePatch{employeeType: strPtr("")})
+		updated, changed := buildUpdatedOrganizations(orgs, userProfilePatch{employeeType: strPtr("")})
 
+		require.True(t, changed)
 		require.Len(t, updated, 1)
 		require.Equal(t, "", updated[0].Description)
 		require.Contains(t, updated[0].ForceSendFields, "Description")
 	})
 
 	t.Run("no organizations and only empty-string clears: does not create a phantom org", func(t *testing.T) {
-		updated := buildUpdatedOrganizations(nil, userProfilePatch{
+		updated, changed := buildUpdatedOrganizations(nil, userProfilePatch{
 			department:   strPtr(""),
 			employeeType: strPtr(""),
 		})
 
+		require.False(t, changed, "a no-op clear-only patch must not be reported as a change")
 		require.Len(t, updated, 0, "must not fabricate an empty primary organization when there is nothing to persist")
 	})
 
 	t.Run("no organizations, one empty clear and one real value: still creates the org", func(t *testing.T) {
-		updated := buildUpdatedOrganizations(nil, userProfilePatch{
+		updated, changed := buildUpdatedOrganizations(nil, userProfilePatch{
 			department: strPtr(""),
 			jobTitle:   strPtr("Engineer"),
 		})
 
+		require.True(t, changed)
 		require.Len(t, updated, 1)
 		require.True(t, updated[0].Primary)
 		require.Equal(t, "Engineer", updated[0].Title)

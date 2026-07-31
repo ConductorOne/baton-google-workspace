@@ -24,6 +24,10 @@ type testProfileServerState struct {
 	getCount     int
 	patchCount   int
 	makeAdminCnt int
+	// lastMethod records the HTTP verb (PATCH or PUT) of the last write
+	// request, so tests can assert which one applyUserProfilePatch actually
+	// chose instead of only observing verb-blind side effects.
+	lastMethod string
 	// lastPatchRawBody is the raw JSON bytes of the last PATCH request, kept
 	// alongside lastPatchBody (its decoded form) to assert on wire-level
 	// details (e.g. an explicitly forced empty string) that decoding back into
@@ -86,6 +90,7 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			})
 		case http.MethodPatch, http.MethodPut:
 			state.patchCount++
+			state.lastMethod = r.Method
 			raw, _ := io.ReadAll(r.Body)
 			state.lastPatchRawBody = raw
 			body := &directoryAdmin.User{}
@@ -176,6 +181,9 @@ func TestUpdateUserProfile_NameFields_MergesAndPatches(t *testing.T) {
 	}
 	if state.patchCount != 1 {
 		t.Fatalf("expected 1 PATCH, got %d", state.patchCount)
+	}
+	if state.lastMethod != http.MethodPatch {
+		t.Fatalf("expected a single-name-field update to use PATCH, not a full-object PUT, got %s", state.lastMethod)
 	}
 	if state.getCount != 1 {
 		t.Fatalf("expected 1 GET for read-modify-write of name, got %d", state.getCount)
@@ -289,13 +297,16 @@ func TestUpdateUserProfile_CustomSchemas_SentVerbatim(t *testing.T) {
 	}
 }
 
-// TestUpdateUserProfile_CustomSchemasNotFalselyReportedWhenUsingUpdate guards
-// against a regression where a user with pre-existing CustomSchemas, patched
-// via the Update (PUT) path (triggered here by touching department), would
-// falsely report "CustomSchemas" as a changed field: Update sends a full copy
-// of the current user, so update.CustomSchemas is inherited from `current` and
-// non-nil even though this call never touches custom schemas.
-func TestUpdateUserProfile_CustomSchemasNotFalselyReportedWhenUsingUpdate(t *testing.T) {
+// TestUpdateUserProfile_DepartmentOnly_UsesPatchAndOmitsCustomSchemas locks in
+// that department (like the other Employee Information fields, name, and
+// manager_email) uses the narrow Patch path, not a full-object Update: a user
+// with pre-existing CustomSchemas, patched by touching only department, must
+// not report "CustomSchemas" as changed, and - since Organizations/ExternalIds
+// never shrink here, so Patch (not Update) is the write - the wire body must
+// not carry CustomSchemas at all (Patch is sparse; the server leaves anything
+// not present in the request untouched, so there is nothing to inherit from
+// `current` client-side).
+func TestUpdateUserProfile_DepartmentOnly_UsesPatchAndOmitsCustomSchemas(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
 			"user123": {
@@ -321,34 +332,41 @@ func TestUpdateUserProfile_CustomSchemasNotFalselyReportedWhenUsingUpdate(t *tes
 	if err != nil {
 		t.Fatalf("applyUserProfilePatch: %v", err)
 	}
-	// Must have gone through Update (PUT), since Organizations required a GET first.
+	// Organizations requires a GET first regardless of which write verb is used.
 	if state.getCount != 1 {
 		t.Fatalf("expected 1 GET, got %d", state.getCount)
+	}
+	if state.lastMethod != http.MethodPatch {
+		t.Fatalf("expected department-only update to use PATCH (Organizations never shrinks), got %s", state.lastMethod)
 	}
 	for _, f := range updatedFields {
 		if f == "CustomSchemas" {
 			t.Fatalf("CustomSchemas falsely reported as changed: updatedFields=%v", updatedFields)
 		}
 	}
-	if state.lastPatchBody.CustomSchemas == nil {
-		t.Fatalf("expected CustomSchemas to still be present on the wire (inherited from current, not stripped), got nil")
+	if state.lastPatchBody.CustomSchemas != nil {
+		t.Fatalf("expected CustomSchemas to be absent from a sparse Patch body, got %+v", state.lastPatchBody.CustomSchemas)
 	}
 }
 
-// TestUpdateUserProfile_CustomSchemas_ViaUpdate_SendsPatchVerbatimNotMerged
-// documents (and guards) a deliberate design decision raised in review: when
-// the Update/PUT path is triggered (here by department) and the caller also
-// sets custom_schemas, the code sends patch.customSchemas as-is rather than
-// merging it into the inherited current.CustomSchemas map, unlike the
-// Organizations/ExternalIds/Relations read-modify-write above it. This is
-// safe because - confirmed against a live tenant - Google merges custom
-// schema fields server-side even over Update/PUT (a sibling field on the same
-// schema survived when omitted from the request), unlike the repeated/array
-// fields this file otherwise has to read-modify-write around. If that ever
-// stops being true, a local merge would need to be added here; this test at
-// least locks in that the code currently sends the patch verbatim rather than
-// pre-emptively (and redundantly) merging it client-side.
-func TestUpdateUserProfile_CustomSchemas_ViaUpdate_SendsPatchVerbatimNotMerged(t *testing.T) {
+// TestUpdateUserProfile_CustomSchemas_SendsVerbatimNotMerged documents (and
+// guards) a deliberate design decision raised in review: alongside another
+// field that requires a GET (here department, via the Organizations
+// read-modify-write), when the caller also sets custom_schemas, the code
+// sends patch.customSchemas as-is rather than merging it into the inherited
+// current.CustomSchemas map, unlike the Organizations/ExternalIds/Relations
+// read-modify-write above it. This is safe because - confirmed against a live
+// tenant - Google merges custom schema fields server-side even over a
+// full-object Update (a sibling field on the same schema survived when
+// omitted from the request), unlike the repeated/array fields this file
+// otherwise has to read-modify-write around; the same holds a fortiori for
+// the narrower Patch this scenario now actually uses (see the usePut
+// narrowing above - department alone never triggers Update). If server-side
+// merging ever stops being true, a local merge would need to be added here;
+// this test at least locks in that the code currently sends the patch
+// verbatim rather than pre-emptively (and redundantly) merging it
+// client-side.
+func TestUpdateUserProfile_CustomSchemas_SendsVerbatimNotMerged(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
 			"user123": {
@@ -379,6 +397,9 @@ func TestUpdateUserProfile_CustomSchemas_ViaUpdate_SendsPatchVerbatimNotMerged(t
 	}
 	if state.getCount != 1 {
 		t.Fatalf("expected 1 GET (Organizations read-modify-write), got %d", state.getCount)
+	}
+	if state.lastMethod != http.MethodPatch {
+		t.Fatalf("expected department+custom_schemas update to use PATCH, got %s", state.lastMethod)
 	}
 	if raw, ok := state.lastPatchBody.CustomSchemas["QATestSchema"]; !ok || !strings.Contains(string(raw), "apac") {
 		t.Fatalf("expected QATestSchema with region=apac on the wire, got %+v", state.lastPatchBody.CustomSchemas)
@@ -610,7 +631,7 @@ func TestUpdateUserProfile_Department_ClearedToEmpty_OnWire(t *testing.T) {
 	}
 }
 
-func TestUpdateUserProfile_Department_NoPrimaryFlagged_UpdatesExistingOrg(t *testing.T) {
+func TestUpdateUserProfile_Department_NoPrimaryFlagged_UpdatesExistingOrgWithoutPromotingPrimary(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
 			"user123": {
@@ -620,9 +641,10 @@ func TestUpdateUserProfile_Department_NoPrimaryFlagged_UpdatesExistingOrg(t *tes
 				// No organization is flagged Primary - this happens for
 				// accounts provisioned via GCDS or third-party sync. The read
 				// path (extractPrimaryOrganizations) falls back to orgs[0];
-				// the write path must do the same, or the existing Title/
-				// CostCenter silently vanish from the profile behind a
-				// newly-appended (but now-primary) empty organization.
+				// the write path must edit that same entry in place (not
+				// append a second one), but must not silently persist a
+				// Primary flag Google never set as a side effect of an
+				// unrelated field edit.
 				Organizations: []directoryAdmin.UserOrganization{
 					{Department: "Sales", Title: "Rep", CostCenter: "CC9"},
 				},
@@ -643,12 +665,16 @@ func TestUpdateUserProfile_Department_NoPrimaryFlagged_UpdatesExistingOrg(t *tes
 		t.Fatalf("updateUserProfile: %v", err)
 	}
 
+	if state.lastMethod != http.MethodPatch {
+		t.Fatalf("expected department-only update to use PATCH, got %s", state.lastMethod)
+	}
+
 	orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
 	if err != nil || len(orgs) != 1 {
 		t.Fatalf("expected the single existing organization to be updated in place, got %+v (err=%v)", state.lastPatchBody.Organizations, err)
 	}
-	if !orgs[0].Primary {
-		t.Fatalf("expected the existing organization to be promoted to primary")
+	if orgs[0].Primary {
+		t.Fatalf("expected the existing organization's Primary flag to remain false, not be silently promoted")
 	}
 	if orgs[0].Department != "Engineering" {
 		t.Fatalf("expected Department 'Engineering', got %q", orgs[0].Department)
@@ -776,6 +802,13 @@ func TestUpdateUserProfile_EmployeeID_EmptyClears(t *testing.T) {
 		t.Fatalf("updateUserProfile: %v", err)
 	}
 
+	// Clearing the only ExternalIds entry down to empty is the one case that
+	// genuinely needs Update (PUT): Patch does not reliably shrink a repeated
+	// field, confirmed against a live tenant.
+	if state.lastMethod != http.MethodPut {
+		t.Fatalf("expected employee_id clear-to-empty to use PUT, got %s", state.lastMethod)
+	}
+
 	// ExternalIds must be sent as a non-nil (possibly empty) slice: a nil value
 	// would be omitted from the request entirely, leaving the stale entry in
 	// place instead of clearing it.
@@ -820,6 +853,9 @@ func TestUpdateUserProfile_ManagerEmail_PreservesOtherRelations(t *testing.T) {
 	}
 	if state.getCount != 1 {
 		t.Fatalf("expected 1 GET for read-modify-write of relations, got %d", state.getCount)
+	}
+	if state.lastMethod != http.MethodPatch {
+		t.Fatalf("expected manager_email-only update to use PATCH (Relations never shrinks), got %s", state.lastMethod)
 	}
 
 	rels, err := extractFromInterface[*directoryAdmin.UserRelation](state.lastPatchBody.Relations)

@@ -34,8 +34,14 @@ const (
 	argNewPrimaryEmail    = "new_primary_email"
 	fieldPreviousEmail    = "previous_primary_email"
 	displayUserResourceID = "User Resource ID"
-	fieldSuspended        = "Suspended"
-	fieldResource         = "resource"
+	// fieldSuspended is the directoryAdmin.User Go struct field name, used only
+	// in ForceSendFields entries (must match the field name exactly). Kept
+	// separate from any user-facing display text even where the literal
+	// happens to match, since the two can diverge independently - a struct
+	// field rename would need to update this constant, but should never
+	// accidentally affect display text (or vice versa).
+	fieldSuspended = "Suspended"
+	fieldResource  = "resource"
 )
 
 // Global (account-level) connector action schemas. Their handlers live in this
