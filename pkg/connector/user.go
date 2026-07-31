@@ -388,6 +388,19 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		// nondeterministic, which would otherwise make this joined value churn
 		// between syncs (and re-trigger push rules) even when the underlying
 		// set of IDs hasn't changed.
+		//
+		// Lossy in one edge case: if a user somehow has more than one
+		// ExternalIds entry of Type "organization" (Google's own Admin
+		// console only ever creates one - this connector's own write path,
+		// buildUpdatedExternalIDs, also only ever creates at most one - so
+		// this requires external tooling to produce), this joins them into
+		// "A,B,C", and writing that value back verbatim via employee_id would
+		// collapse it into a single malformed external ID rather than
+		// restoring the original multiple entries. Not guarded against here:
+		// splitting on write would misfire on a legitimate single ID that
+		// happens to contain a comma, and Google's own product doesn't
+		// support multiple Employee IDs, so there is no round-trip-safe
+		// representation to fall back to in that case.
 		sortedEmployeeIDs := employeeIDs.ToSlice()
 		sort.Strings(sortedEmployeeIDs)
 		profile[argEmployeeID] = strings.Join(sortedEmployeeIDs, ",")

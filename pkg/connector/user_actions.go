@@ -1263,7 +1263,9 @@ func hasNonEmptyOrgField(patch userProfilePatch) bool {
 // buildUpdatedExternalIDs sets the ExternalIds entry with Type "organization"
 // (the Admin console's "Employee ID") to employeeID, removing it entirely when
 // employeeID is empty. Other ExternalIds entries (account/login_id/network,
-// etc.) are preserved.
+// etc.) are preserved. Always writes at most one "organization" entry - see
+// the comment on profile[argEmployeeID] in user.go for the one edge case
+// where that's lossy against a tenant that already has more than one.
 func buildUpdatedExternalIDs(ids []*admin.UserExternalId, employeeID string) []admin.UserExternalId {
 	updated := make([]admin.UserExternalId, 0, len(ids)+1)
 	for _, id := range ids {
