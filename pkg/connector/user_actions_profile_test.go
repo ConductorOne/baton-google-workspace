@@ -335,6 +335,56 @@ func TestUpdateUserProfile_CustomSchemasNotFalselyReportedWhenUsingUpdate(t *tes
 	}
 }
 
+// TestUpdateUserProfile_CustomSchemas_ViaUpdate_SendsPatchVerbatimNotMerged
+// documents (and guards) a deliberate design decision raised in review: when
+// the Update/PUT path is triggered (here by department) and the caller also
+// sets custom_schemas, the code sends patch.customSchemas as-is rather than
+// merging it into the inherited current.CustomSchemas map, unlike the
+// Organizations/ExternalIds/Relations read-modify-write above it. This is
+// safe because - confirmed against a live tenant - Google merges custom
+// schema fields server-side even over Update/PUT (a sibling field on the same
+// schema survived when omitted from the request), unlike the repeated/array
+// fields this file otherwise has to read-modify-write around. If that ever
+// stops being true, a local merge would need to be added here; this test at
+// least locks in that the code currently sends the patch verbatim rather than
+// pre-emptively (and redundantly) merging it client-side.
+func TestUpdateUserProfile_CustomSchemas_ViaUpdate_SendsPatchVerbatimNotMerged(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				CustomSchemas: map[string]googleapi.RawMessage{
+					"QATestSchema": googleapi.RawMessage(`{"region":"emea","costCenter":"CC99"}`),
+				},
+				Organizations: []directoryAdmin.UserOrganization{
+					{Primary: true, Department: "Old Dept"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	patch := userProfilePatch{
+		department:    strPtr("New Dept"),
+		customSchemas: map[string]googleapi.RawMessage{"QATestSchema": googleapi.RawMessage(`{"region":"apac"}`)},
+	}
+	_, _, err := applyUserProfilePatch(context.Background(), userRT.client, "user123", patch)
+	if err != nil {
+		t.Fatalf("applyUserProfilePatch: %v", err)
+	}
+	if state.getCount != 1 {
+		t.Fatalf("expected 1 GET (Organizations read-modify-write), got %d", state.getCount)
+	}
+	if raw, ok := state.lastPatchBody.CustomSchemas["QATestSchema"]; !ok || !strings.Contains(string(raw), "apac") {
+		t.Fatalf("expected QATestSchema with region=apac on the wire, got %+v", state.lastPatchBody.CustomSchemas)
+	}
+}
+
 func TestUpdateUserProfile_NoUpdatableFields(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},

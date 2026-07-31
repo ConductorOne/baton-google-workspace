@@ -1126,6 +1126,15 @@ func applyUserProfilePatch(
 	// starts out already non-nil for any user with pre-existing custom schemas
 	// (inherited from the `current` copy above), which would otherwise falsely
 	// report CustomSchemas as touched on every such call regardless of patch.
+	//
+	// Deliberately overwrites rather than merging with the inherited current
+	// map (unlike Organizations/ExternalIds/Relations above, which all read-
+	// modify-write to preserve siblings): confirmed against a live tenant that,
+	// unlike those repeated/array fields (which Google replaces wholesale, the
+	// original bug this file works around), custom schema fields merge at the
+	// schema level server-side - sending only {"SchemaA":{"region":"apac"}}
+	// left a sibling field on the SAME schema ("costCenter") untouched even
+	// over Update/PUT. No local merge needed here.
 	customSchemasSet := len(patch.customSchemas) > 0
 	if customSchemasSet {
 		update.CustomSchemas = patch.customSchemas
