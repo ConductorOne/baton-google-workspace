@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -383,7 +384,13 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		// argument writes, so a push rule can observe the value it wrote (the
 		// write side added employee_id without a matching read-side key; see
 		// argJobTitle/argEmployeeType above for the same fix on those fields).
-		profile[argEmployeeID] = strings.Join(employeeIDs.ToSlice(), ",")
+		// Sorted before joining: employeeIDs is a set, so ToSlice()'s order is
+		// nondeterministic, which would otherwise make this joined value churn
+		// between syncs (and re-trigger push rules) even when the underlying
+		// set of IDs hasn't changed.
+		sortedEmployeeIDs := employeeIDs.ToSlice()
+		sort.Strings(sortedEmployeeIDs)
+		profile[argEmployeeID] = strings.Join(sortedEmployeeIDs, ",")
 	}
 
 	traitOpts = append(traitOpts,

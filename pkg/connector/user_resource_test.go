@@ -116,4 +116,29 @@ func TestUserResource_ResourceLevelAttributes(t *testing.T) {
 		require.Equal(t, "Full-time", profile[argEmployeeType].GetStringValue())
 		require.Equal(t, "E12345", profile[argEmployeeID].GetStringValue())
 	})
+
+	// Regression guard: employeeIDs is a mapset.Set, so ToSlice() returns
+	// elements in nondeterministic order. Joining unsorted would make the
+	// profile's employee_id value churn between syncs (and re-trigger push
+	// rules) purely from iteration-order jitter, even when the underlying set
+	// of external IDs hasn't changed. Run repeatedly since a single run can
+	// pass by chance regardless of sorting.
+	t.Run("multiple organization-type external IDs join deterministically regardless of set iteration order", func(t *testing.T) {
+		user := &directoryAdmin.User{
+			Id:           "user111",
+			PrimaryEmail: "multi@example.com",
+			Name:         &directoryAdmin.UserName{GivenName: "Multi", FamilyName: "ID", FullName: "Multi ID"},
+			ExternalIds: []directoryAdmin.UserExternalId{
+				{Type: "organization", Value: "E-ZEBRA"},
+				{Type: "organization", Value: "E-APPLE"},
+				{Type: "organization", Value: "E-MANGO"},
+			},
+		}
+
+		for i := 0; i < 20; i++ {
+			res, err := o.userResource(context.Background(), user)
+			require.NoError(t, err)
+			require.Equal(t, "E-APPLE,E-MANGO,E-ZEBRA", res.GetProfile().GetFields()[argEmployeeID].GetStringValue())
+		}
+	})
 }
