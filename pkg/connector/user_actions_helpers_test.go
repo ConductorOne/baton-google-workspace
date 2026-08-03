@@ -44,6 +44,26 @@ func TestBuildUpdatedOrganizations(t *testing.T) {
 		require.Equal(t, "CC9", updated[0].CostCenter)
 	})
 
+	t.Run("multiple orgs, none flagged primary: edits orgs[0] and leaves the rest untouched", func(t *testing.T) {
+		orgs := []*directoryAdmin.UserOrganization{
+			{Department: "Sales", Title: "Rep", CostCenter: "CC9"},
+			{Department: "Marketing", Title: "Analyst", CostCenter: "CC7"},
+		}
+		patch := userProfilePatch{department: strPtr("Engineering")}
+
+		updated, changed := buildUpdatedOrganizations(orgs, patch)
+
+		require.True(t, changed)
+		require.Len(t, updated, 2, "the fallback must never drop a sibling organization entry")
+		require.False(t, updated[0].Primary, "editing the fallback-selected org must not silently promote it to primary")
+		require.Equal(t, "Engineering", updated[0].Department, "orgs[0] is the entry the current fallback picks")
+		require.Equal(t, "Rep", updated[0].Title)
+		require.Equal(t, "CC9", updated[0].CostCenter)
+		require.Equal(t, "Marketing", updated[1].Department, "the second entry must survive verbatim, not be silently mutated instead")
+		require.Equal(t, "Analyst", updated[1].Title)
+		require.Equal(t, "CC7", updated[1].CostCenter)
+	})
+
 	t.Run("creates a new primary org when none exist", func(t *testing.T) {
 		updated, changed := buildUpdatedOrganizations(nil, userProfilePatch{employeeType: strPtr("Contractor")})
 
