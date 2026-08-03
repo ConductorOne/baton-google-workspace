@@ -109,7 +109,14 @@ func scanUsersForEvents(
 	if len(cursor.PendingUsers) == 0 {
 		usersResp, err := client.ListUserIDsPage(ctx, customerID, domain, cursor.DirectoryPageToken)
 		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace-connector: failed to list users for event feed: %w", err)
+			// Preserve the cursor as-is so a transient Directory API failure does not rewind
+			// the walk back to the start on retry.
+			cursorToken, marshalErr := cursor.marshal()
+			if marshalErr != nil {
+				return nil, nil, fmt.Errorf("google-workspace-connector: failed to marshal cursor token in event feed: %w", marshalErr)
+			}
+			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true},
+				fmt.Errorf("google-workspace-connector: failed to list users for event feed: %w", err)
 		}
 		cursor.DirectoryPageToken = usersResp.NextPageToken
 		for _, u := range usersResp.Users {
@@ -130,13 +137,19 @@ func scanUsersForEvents(
 	if len(batch) > usersPerEventFeedCall {
 		batch = batch[:usersPerEventFeedCall]
 	}
-	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
 
 	events := []*v2.Event{}
 	for _, u := range batch {
 		userEvents, err := lookup(ctx, client, u)
 		if err != nil {
-			return nil, nil, err
+			// Don't remove `batch` from cursor.PendingUsers until every lookup in it has
+			// succeeded, so a single user's Reports API blip doesn't lose the remaining
+			// unprocessed users and restart the walk from the beginning on retry.
+			cursorToken, marshalErr := cursor.marshal()
+			if marshalErr != nil {
+				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
+			}
+			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true}, err
 		}
 		for _, e := range userEvents {
 			if earliestEvent != nil && e.GetOccurredAt() != nil && e.GetOccurredAt().AsTime().Before(earliestEvent.AsTime()) {
@@ -145,6 +158,7 @@ func scanUsersForEvents(
 			events = append(events, e)
 		}
 	}
+	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
 
 	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""
 	if !hasMore {
