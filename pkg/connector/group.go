@@ -25,6 +25,7 @@ import (
 
 const (
 	groupMemberEntitlement = "member"
+	groupOwnerEntitlement  = "owner"
 )
 
 type groupResourceType struct {
@@ -95,7 +96,12 @@ func (o *groupResourceType) Entitlements(ctx context.Context, resource *v2.Resou
 	member.Description = fmt.Sprintf("Is member of the %s group in Google Workspace", resource.DisplayName)
 	member.Annotations = annos
 	member.DisplayName = fmt.Sprintf("%s Group Member", resource.DisplayName)
-	return []*v2.Entitlement{member}, nil, nil
+
+	owner := sdkEntitlement.NewOwnershipEntitlement(resource, groupOwnerEntitlement, sdkEntitlement.WithGrantableTo(resourceTypeUser))
+	owner.Description = fmt.Sprintf("Is owner of the %s group in Google Workspace", resource.DisplayName)
+	owner.DisplayName = fmt.Sprintf("%s Group Owner", resource.DisplayName)
+
+	return []*v2.Entitlement{member, owner}, nil, nil
 }
 
 func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, attrs rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
@@ -150,6 +156,11 @@ func (o *groupResourceType) Grants(ctx context.Context, resource *v2.Resource, a
 
 		grant := sdkGrant.NewGrant(resource, groupMemberEntitlement, gmID, opts...)
 		rv = append(rv, grant)
+
+		if strings.EqualFold(member.Role, "OWNER") && strings.EqualFold(member.Type, "USER") {
+			ownerGrant := sdkGrant.NewGrant(resource, groupOwnerEntitlement, gmID)
+			rv = append(rv, ownerGrant)
+		}
 	}
 
 	nextPage, err := bag.NextToken(members.NextPageToken)
