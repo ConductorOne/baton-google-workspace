@@ -44,7 +44,9 @@ type adminEventFeedPageToken struct {
 	PageSize        int    `json:"page_size,omitempty"`
 }
 
-func unmarshalAdminEventFeedPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*adminEventFeedPageToken, error) {
+func unmarshalAdminEventFeedPageToken(ctx context.Context, token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*adminEventFeedPageToken, error) {
+	l := ctxzap.Extract(ctx)
+
 	pt := &adminEventFeedPageToken{}
 	if token != nil && token.Cursor != "" {
 		data, err := base64.StdEncoding.DecodeString(token.Cursor)
@@ -59,23 +61,32 @@ func unmarshalAdminEventFeedPageToken(token *pagination.StreamToken, defaultStar
 		pt.PageSize = token.Size
 	}
 
-	// Enforce the lookback cap regardless of what the caller passes as defaultStart.
-	// This prevents stale cursors (e.g. from an expired mid-pagination pageToken) from
-	// requesting years of data and timing out on every retry.
 	cutoff := time.Now().Add(-maxEventFeedLookback)
-	if defaultStart == nil || defaultStart.AsTime().Before(cutoff) {
-		// There's lag on these events, so we're going to start roughly when google says events should come in
-		// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
-		defaultStart = timestamppb.New(cutoff)
-	}
 
-	if pt.StartAt == "" {
-		pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
-	} else {
+	switch {
+	case pt.StartAt == "":
+		// Fresh cursor: pick a starting point, clamped to the lookback cap.
+		start := defaultStart
+		if start == nil || start.AsTime().Before(cutoff) {
+			// There's lag on these events, so we're going to start roughly when google says events should come in
+			// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
+			start = timestamppb.New(cutoff)
+		}
+		pt.StartAt = start.AsTime().Format(time.RFC3339)
+	case pt.NextPageToken == "":
+		// Not mid-pagination: safe to re-validate staleness (e.g. a cursor left over from a
+		// completed page-walk long ago) against the lookback cap.
 		cursorStart, err := time.Parse(time.RFC3339, pt.StartAt)
-		if err != nil || cursorStart.Before(cutoff) {
+		switch {
+		case err != nil:
+			l.Debug("google-workspace: admin event feed cursor start_at was unparseable, resetting to lookback cutoff",
+				zap.String("start_at", pt.StartAt), zap.Error(err))
 			pt.StartAt = cutoff.Format(time.RFC3339)
-			pt.NextPageToken = ""
+			pt.LatestEventSeen = ""
+		case cursorStart.Before(cutoff):
+			l.Debug("google-workspace: admin event feed cursor start_at is stale, resetting to lookback cutoff",
+				zap.String("start_at", pt.StartAt))
+			pt.StartAt = cutoff.Format(time.RFC3339)
 			pt.LatestEventSeen = ""
 		}
 	}
@@ -120,7 +131,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	var streamState *pagination.StreamState
 
-	cursor, err := unmarshalAdminEventFeedPageToken(pToken, startAt)
+	cursor, err := unmarshalAdminEventFeedPageToken(ctx, pToken, startAt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token: %w", err)
 	}
