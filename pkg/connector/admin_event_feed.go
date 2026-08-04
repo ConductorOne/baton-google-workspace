@@ -44,7 +44,11 @@ type adminEventFeedPageToken struct {
 	PageSize        int    `json:"page_size,omitempty"`
 }
 
-func unmarshalAdminEventFeedPageToken(ctx context.Context, token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*adminEventFeedPageToken, error) {
+// resolveAdminEventFeedPageToken decodes the incoming page token and applies the admin event
+// feed's lookback/staleness policy: picking a starting point for a fresh cursor, and resetting a
+// resumed cursor's StartAt when it is unparseable or older than maxEventFeedLookback (but only
+// when not mid-pagination — see the pt.NextPageToken == "" case below).
+func resolveAdminEventFeedPageToken(ctx context.Context, token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*adminEventFeedPageToken, error) {
 	l := ctxzap.Extract(ctx)
 
 	pt := &adminEventFeedPageToken{}
@@ -76,16 +80,15 @@ func unmarshalAdminEventFeedPageToken(ctx context.Context, token *pagination.Str
 	case pt.NextPageToken == "":
 		// Not mid-pagination: safe to re-validate staleness (e.g. a cursor left over from a
 		// completed page-walk long ago) against the lookback cap.
-		cursorStart, err := time.Parse(time.RFC3339, pt.StartAt)
-		switch {
-		case err != nil:
+		cursorStart, parseErr := time.Parse(time.RFC3339, pt.StartAt)
+		if parseErr != nil {
 			l.Debug("google-workspace: admin event feed cursor start_at was unparseable, resetting to lookback cutoff",
-				zap.String("start_at", pt.StartAt), zap.Error(err))
-			pt.StartAt = cutoff.Format(time.RFC3339)
-			pt.LatestEventSeen = ""
-		case cursorStart.Before(cutoff):
+				zap.String("start_at", pt.StartAt), zap.Error(parseErr))
+		} else if cursorStart.Before(cutoff) {
 			l.Debug("google-workspace: admin event feed cursor start_at is stale, resetting to lookback cutoff",
 				zap.String("start_at", pt.StartAt))
+		}
+		if parseErr != nil || cursorStart.Before(cutoff) {
 			pt.StartAt = cutoff.Format(time.RFC3339)
 			pt.LatestEventSeen = ""
 		}
@@ -103,10 +106,7 @@ func (pt *adminEventFeedPageToken) marshal() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal page token: %w", err)
 	}
-
-	basedToken := base64.StdEncoding.EncodeToString(data)
-
-	return basedToken, nil
+	return base64.StdEncoding.EncodeToString(data), nil
 }
 
 type cacheEntry struct {
@@ -131,7 +131,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	var streamState *pagination.StreamState
 
-	cursor, err := unmarshalAdminEventFeedPageToken(ctx, pToken, startAt)
+	cursor, err := resolveAdminEventFeedPageToken(ctx, pToken, startAt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token: %w", err)
 	}
