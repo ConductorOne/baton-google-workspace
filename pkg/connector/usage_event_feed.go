@@ -174,6 +174,7 @@ func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		}
 		// There can be multiple events, have not found an example of this yet
 		for _, e := range activity.Events {
+			// NewUserTrait defaults to STATUS_ENABLED when no status option is given.
 			userTrait, err := resource.NewUserTrait(
 				resource.WithEmail(activity.Actor.Email, true),
 			)

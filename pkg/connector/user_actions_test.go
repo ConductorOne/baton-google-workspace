@@ -291,8 +291,8 @@ func TestChangeUserOrgUnit_Success(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
-		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/sales"}},
+		argUserID:      {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argOrgUnitPath: {Kind: &structpb.Value_StringValue{StringValue: "/sales"}},
 	}}
 
 	resp, _, err := userRT.changeUserOrgUnitActionHandler(context.Background(), args)
@@ -335,8 +335,8 @@ func TestChangeUserOrgUnit_Idempotent(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
-		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/sales"}},
+		argUserID:      {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argOrgUnitPath: {Kind: &structpb.Value_StringValue{StringValue: "/sales"}},
 	}}
 
 	// First call - should succeed without PUT since already in target org unit
@@ -368,7 +368,7 @@ func TestChangeUserOrgUnit_MissingUserId(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "/sales"}},
+		argOrgUnitPath: {Kind: &structpb.Value_StringValue{StringValue: "/sales"}},
 	}}
 
 	_, _, err := userRT.changeUserOrgUnitActionHandler(context.Background(), args)
@@ -388,7 +388,7 @@ func TestChangeUserOrgUnit_MissingOrgUnitPath(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	_, _, err := userRT.changeUserOrgUnitActionHandler(context.Background(), args)
@@ -417,8 +417,8 @@ func TestChangeUserOrgUnit_InvalidOrgUnitPathFormat(t *testing.T) {
 
 	// Test with path that doesn't start with '/'
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
-		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: "sales"}},
+		argUserID:      {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argOrgUnitPath: {Kind: &structpb.Value_StringValue{StringValue: "sales"}},
 	}}
 
 	_, _, err := userRT.changeUserOrgUnitActionHandler(context.Background(), args)
@@ -431,8 +431,8 @@ func TestChangeUserOrgUnit_InvalidOrgUnitPathFormat(t *testing.T) {
 
 	// Test with empty path
 	argsEmpty := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
-		"org_unit_path": {Kind: &structpb.Value_StringValue{StringValue: ""}},
+		argUserID:      {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argOrgUnitPath: {Kind: &structpb.Value_StringValue{StringValue: ""}},
 	}}
 
 	_, _, err = userRT.changeUserOrgUnitActionHandler(context.Background(), argsEmpty)
@@ -455,7 +455,7 @@ func TestSignOutUser_Success(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	resp, _, err := userRT.signOutUserActionHandler(context.Background(), args)
@@ -482,7 +482,7 @@ func TestSignOutUser_UserNotFound(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
 	}}
 
 	_, _, err := userRT.signOutUserActionHandler(context.Background(), args)
@@ -518,7 +518,7 @@ func TestSignOutUser_NoSecurityService(t *testing.T) {
 	}
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	_, _, err := userRT.signOutUserActionHandler(context.Background(), args)
@@ -547,7 +547,7 @@ func TestDeleteAllOAuthTokens_Success_NoTokens(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	resp, _, err := userRT.deleteAllOAuthTokensActionHandler(context.Background(), args)
@@ -588,7 +588,7 @@ func TestDeleteAllOAuthTokens_Success_WithTokens(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	resp, _, err := userRT.deleteAllOAuthTokensActionHandler(context.Background(), args)
@@ -637,7 +637,7 @@ func TestDeleteAllOAuthTokens_SkipsEmptyClientId(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	resp, _, err := userRT.deleteAllOAuthTokensActionHandler(context.Background(), args)
@@ -666,7 +666,7 @@ func TestDeleteAllOAuthTokens_UserNotFound(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
 	}}
 
 	_, _, err := userRT.deleteAllOAuthTokensActionHandler(context.Background(), args)
@@ -695,7 +695,7 @@ func TestDeleteAllApplicationPasswords_Success_NoPasswords(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	resp, _, err := userRT.deleteAllApplicationPasswordsActionHandler(context.Background(), args)
@@ -736,7 +736,7 @@ func TestDeleteAllApplicationPasswords_Success_WithPasswords(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	resp, _, err := userRT.deleteAllApplicationPasswordsActionHandler(context.Background(), args)
@@ -776,7 +776,7 @@ func TestDeleteAllApplicationPasswords_UserNotFound(t *testing.T) {
 	userRT := newTestUserResourceTypeWithSecurity(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
 	}}
 
 	_, _, err := userRT.deleteAllApplicationPasswordsActionHandler(context.Background(), args)
@@ -825,7 +825,7 @@ func TestUpdateUserManager_Success(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID:       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "new-manager@example.com"}},
 	}}
 
@@ -870,7 +870,7 @@ func TestUpdateUserManager_Idempotent(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID:       {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "manager@example.com"}},
 	}}
 
@@ -922,7 +922,7 @@ func TestUpdateUserManager_MissingManagerEmail(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
+		argUserID: {Kind: &structpb.Value_StringValue{StringValue: "user123"}},
 	}}
 
 	_, _, err := userRT.updateUserManagerActionHandler(context.Background(), args)
@@ -942,7 +942,7 @@ func TestUpdateUserManager_UserNotFound(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":       {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
+		argUserID:       {Kind: &structpb.Value_StringValue{StringValue: "nonexistent"}},
 		"manager_email": {Kind: &structpb.Value_StringValue{StringValue: "manager@example.com"}},
 	}}
 

@@ -79,10 +79,10 @@ func emailsEqual(email1 string, email2 string) bool {
 // picker used by the UI and C1 push rules) is preferred, falling back to a plain
 // string so CLI and CI invocations that pass user_id as a raw string still work.
 func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (string, error) {
-	if ref, ok := actions.GetResourceIDArg(args, "user_id"); ok && ref.GetResource() != "" {
+	if ref, ok := actions.GetResourceIDArg(args, argUserID); ok && ref.GetResource() != "" {
 		return ref.GetResource(), nil
 	}
-	userIdValue, ok := args.Fields["user_id"]
+	userIdValue, ok := args.Fields[argUserID]
 	if !ok || userIdValue == nil {
 		l.Debug("google-workspace: user action handler: missing user_id argument", zap.String("action", actionName), zap.Any("args", args))
 		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: missing user_id argument")

@@ -72,6 +72,7 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Tim
 		}
 
 		for _, e := range activity.Events {
+			// NewUserTrait defaults to STATUS_ENABLED when no status option is given.
 			userTrait, err := resource.NewUserTrait(
 				resource.WithEmail(activity.Actor.Email, true),
 			)

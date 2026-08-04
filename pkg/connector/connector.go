@@ -37,6 +37,10 @@ import (
 	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
 )
 
+// placeholderUserEmail is the example value shown for the email field on the
+// account-creation schema (extracted to satisfy goconst).
+const placeholderUserEmail = "user@example.com"
+
 type Config struct {
 	CustomerID         string
 	AdministratorEmail string
@@ -239,7 +243,7 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 	})
 
 	return &v2.ConnectorMetadata{
-		DisplayName: "Google Workspace",
+		DisplayName: googleWorkspaceAppDisplayName,
 		Annotations: annos,
 		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
 			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
@@ -250,10 +254,10 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
-					Placeholder: "user@example.com",
+					Placeholder: placeholderUserEmail,
 					Order:       1,
 				},
-				"given_name": {
+				argGivenName: {
 					DisplayName: "First Name",
 					Required:    true,
 					Description: "User's first name.",
@@ -263,7 +267,7 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 					Placeholder: "John",
 					Order:       2,
 				},
-				"family_name": {
+				argFamilyName: {
 					DisplayName: "Last Name",
 					Required:    true,
 					Description: "User's last name.",
@@ -643,7 +647,7 @@ func DefaultCapabilitiesBuilder() connectorbuilder.ConnectorBuilderV2 {
 type defaultCapabilitiesBuilder struct{}
 
 func (d *defaultCapabilitiesBuilder) Metadata(_ context.Context) (*v2.ConnectorMetadata, error) {
-	return &v2.ConnectorMetadata{DisplayName: "Google Workspace"}, nil
+	return &v2.ConnectorMetadata{DisplayName: googleWorkspaceAppDisplayName}, nil
 }
 
 func (d *defaultCapabilitiesBuilder) Validate(_ context.Context) (annotations.Annotations, error) {

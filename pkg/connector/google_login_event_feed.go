@@ -65,6 +65,7 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 			latestEvent = occurredAt.AsTime()
 		}
 
+		// NewUserTrait defaults to STATUS_ENABLED when no status option is given.
 		userTrait, err := resource.NewUserTrait(
 			resource.WithEmail(activity.Actor.Email, true),
 		)
@@ -82,7 +83,7 @@ func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestam
 							ResourceType: resourceTypeEnterpriseApplication.Id,
 							Resource:     googleWorkspaceAppID,
 						},
-						DisplayName: "Google Workspace",
+						DisplayName: googleWorkspaceAppDisplayName,
 					},
 					ActorResource: &v2.Resource{
 						Id: &v2.ResourceId{

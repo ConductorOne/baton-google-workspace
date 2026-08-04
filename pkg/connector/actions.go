@@ -34,6 +34,14 @@ const (
 	argNewPrimaryEmail    = "new_primary_email"
 	fieldPreviousEmail    = "previous_primary_email"
 	displayUserResourceID = "User Resource ID"
+	// fieldSuspended is the directoryAdmin.User Go struct field name, used only
+	// in ForceSendFields entries (must match the field name exactly). Kept
+	// separate from any user-facing display text even where the literal
+	// happens to match, since the two can diverge independently - a struct
+	// field rename would need to update this constant, but should never
+	// accidentally affect display text (or vice versa).
+	fieldSuspended = "Suspended"
+	fieldResource  = "resource"
 )
 
 // Global (account-level) connector action schemas. Their handlers live in this
@@ -277,7 +285,7 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	// update user.isSuspended state
 	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
 		Suspended:       isSuspended,
-		ForceSendFields: []string{"Suspended"},
+		ForceSendFields: []string{fieldSuspended},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to update user status: %w", err)
@@ -321,7 +329,7 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 
 	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
 		Suspended:       true,
-		ForceSendFields: []string{"Suspended"},
+		ForceSendFields: []string{fieldSuspended},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
@@ -360,7 +368,7 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 
 	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
 		Suspended:       false,
-		ForceSendFields: []string{"Suspended"}, // This is needed because the SDK would omit any field that has the field type default value (false).
+		ForceSendFields: []string{fieldSuspended}, // This is needed because the SDK would omit any field that has the field type default value (false).
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
@@ -404,9 +412,9 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	prev := u.PrimaryEmail
 	if emailsEqual(prev, newPrimary) { // Already primary email
 		response := structpb.Struct{Fields: map[string]*structpb.Value{
-			fieldSuccess:                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+			fieldSuccess:       {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 			fieldPreviousEmail: {Kind: &structpb.Value_StringValue{StringValue: prev}},
-			argNewPrimaryEmail:      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
+			argNewPrimaryEmail: {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
 		}}
 		return &response, nil, nil
 	}
@@ -420,9 +428,9 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	}
 
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		fieldSuccess:                {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldSuccess:       {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		fieldPreviousEmail: {Kind: &structpb.Value_StringValue{StringValue: prev}},
-		argNewPrimaryEmail:      {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
+		argNewPrimaryEmail: {Kind: &structpb.Value_StringValue{StringValue: newPrimary}},
 	}}
 	return &response, nil, nil
 }
@@ -519,9 +527,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 				for _, adt := range t.ApplicationDataTransfers {
 					if adt.ApplicationId == appID {
 						resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-							fieldSuccess:     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+							fieldSuccess:    {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 							fieldTransferID: {Kind: &structpb.Value_StringValue{StringValue: t.Id}},
-							fieldStatus:      {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
+							fieldStatus:     {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
 						}}
 						return resp, nil, nil
 					}
@@ -552,9 +560,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	}
 
 	resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-		fieldSuccess:     {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldSuccess:    {Kind: &structpb.Value_BoolValue{BoolValue: true}},
 		fieldTransferID: {Kind: &structpb.Value_StringValue{StringValue: created.Id}},
-		fieldStatus:      {Kind: &structpb.Value_StringValue{StringValue: created.OverallTransferStatusCode}},
+		fieldStatus:     {Kind: &structpb.Value_StringValue{StringValue: created.OverallTransferStatusCode}},
 	}}
 	return resp, nil, nil
 }

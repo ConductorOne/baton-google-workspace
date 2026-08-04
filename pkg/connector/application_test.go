@@ -36,13 +36,13 @@ func TestIsCloudIdentityAPIDisabledError(t *testing.T) {
 		},
 		{
 			"403 accessNotConfigured legacy item",
-			&googleapi.Error{Code: http.StatusForbidden, Errors: []googleapi.ErrorItem{{Reason: "accessNotConfigured"}}},
+			&googleapi.Error{Code: http.StatusForbidden, Errors: []googleapi.ErrorItem{{Reason: errorReasonAccessNotConfigured}}},
 			true,
 		},
 		{
 			"wrapped 403 disabled error",
 			fmt.Errorf("failed to list SAML profiles: %w",
-				&googleapi.Error{Code: http.StatusForbidden, Errors: []googleapi.ErrorItem{{Reason: "accessNotConfigured"}}}),
+				&googleapi.Error{Code: http.StatusForbidden, Errors: []googleapi.ErrorItem{{Reason: errorReasonAccessNotConfigured}}}),
 			true,
 		},
 		{
@@ -53,7 +53,7 @@ func TestIsCloudIdentityAPIDisabledError(t *testing.T) {
 		{"403 with no reason", &googleapi.Error{Code: http.StatusForbidden}, false},
 		{
 			"500 even with disabled-looking reason",
-			&googleapi.Error{Code: http.StatusInternalServerError, Errors: []googleapi.ErrorItem{{Reason: "accessNotConfigured"}}},
+			&googleapi.Error{Code: http.StatusInternalServerError, Errors: []googleapi.ErrorItem{{Reason: errorReasonAccessNotConfigured}}},
 			false,
 		},
 		{"429", &googleapi.Error{Code: http.StatusTooManyRequests}, false},
