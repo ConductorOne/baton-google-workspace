@@ -943,10 +943,14 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 // userProfilePatch holds the optional profile fields to apply with patch
 // semantics. A nil pointer leaves the field untouched; a non-nil pointer
 // (including a pointer to the empty string) is sent to the API so callers can
-// clear a value. Exceptions: the name fields (givenName/familyName) and
-// managerEmail ignore empty strings and are treated as "not provided" —
-// Google rejects empty names, and this patch path has no way to clear the
-// manager relation, so an empty value must not fail the whole request.
+// clear a value. Exceptions: the name fields (givenName/familyName) ignore
+// empty strings and are treated as "not provided", since Google rejects empty
+// names. managerEmail is stricter still: present-but-empty is rejected
+// outright (InvalidArgument) rather than silently ignored, matching the
+// standalone update_user_manager action, which has never supported clearing
+// the manager relation - CXH-2153 asks this path to write "the same relation
+// the existing update_user_manager action writes", and that action requires
+// a non-empty, valid manager email.
 type userProfilePatch struct {
 	givenName     *string
 	familyName    *string
@@ -985,14 +989,22 @@ func applyUserProfilePatch(
 	setGiven := patch.givenName != nil && *patch.givenName != ""
 	setFamily := patch.familyName != nil && *patch.familyName != ""
 	setOrg := patch.department != nil || patch.jobTitle != nil || patch.costCenter != nil || patch.employeeType != nil
-	// Unlike recovery fields (empty means "clear"), manager_email has no clear
-	// path through this action - see the Relations block below - so an empty
-	// value is treated the same as "not provided", matching the name fields'
-	// convention, rather than failing the whole multi-field patch.
-	setManagerEmail := patch.managerEmail != nil && *patch.managerEmail != ""
-	// Validate before the read-modify-write GET below so a malformed address
+	// manager_email has no clear path through this action - see the Relations
+	// block below - matching the standalone update_user_manager action, which
+	// has never accepted an empty manager_email either. So unlike the recovery
+	// fields (empty means "clear") and unlike the name fields (empty means
+	// "not provided", silently skipped), a present-but-empty manager_email is
+	// rejected outright: silently no-op'ing it would leave a caller asking to
+	// drop a manager with a false "success" and no indication anything was
+	// skipped.
+	setManagerEmail := patch.managerEmail != nil
+	// Validate before the read-modify-write GET below so an invalid value
 	// fails fast without burning an API call.
 	if setManagerEmail {
+		if *patch.managerEmail == "" {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				"google-workspace: invalid manager_email: manager_email cannot be cleared through this action")
+		}
 		if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
 			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
 				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
@@ -1122,10 +1134,8 @@ func applyUserProfilePatch(
 
 	// Manager: same "manager" Relations entry the standalone update_user_manager
 	// action writes - buildManagerRelations is shared with that handler so the
-	// two stay behaviorally identical. Unlike the recovery fields, an empty
-	// value means "not provided" rather than "clear" - clearing the manager
-	// relation is out of scope for this bulk patch path, so it is skipped (like
-	// the name fields) rather than failing the request.
+	// two stay behaviorally identical, including rejecting empty values above;
+	// clearing the manager relation is out of scope for both paths.
 	if setManagerEmail {
 		currentRelations, err := extractFromInterface[*admin.UserRelation](current.Relations)
 		if err != nil {

@@ -888,10 +888,10 @@ func TestUpdateUserProfile_ManagerEmail_EmptyIsNotProvided(t *testing.T) {
 
 	userRT := newTestUserResourceType(t, server)
 
-	// An empty manager_email is treated as "not provided" (matching the name
-	// fields), not an error by itself; with no other field set, the request
-	// fails the generic "at least one updatable field" guard instead - and
-	// crucially does not perform the read-modify-write GET for Relations.
+	// A present-but-empty manager_email is rejected outright (InvalidArgument),
+	// matching the standalone update_user_manager action, which has never
+	// accepted an empty manager_email either - this must fail fast, before any
+	// read-modify-write GET for Relations.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
 		argUserID:       strArg("user123"),
 		"manager_email": strArg(""),
@@ -899,7 +899,7 @@ func TestUpdateUserProfile_ManagerEmail_EmptyIsNotProvided(t *testing.T) {
 
 	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
 	if err == nil {
-		t.Fatalf("expected error when manager_email is the only (empty) field provided")
+		t.Fatalf("expected error when manager_email is empty")
 	}
 	if state.getCount != 0 {
 		t.Fatalf("expected 0 GET for an empty manager_email, got %d", state.getCount)
@@ -909,7 +909,7 @@ func TestUpdateUserProfile_ManagerEmail_EmptyIsNotProvided(t *testing.T) {
 	}
 }
 
-func TestUpdateUserProfile_ManagerEmail_Empty_OtherFieldStillApplies(t *testing.T) {
+func TestUpdateUserProfile_ManagerEmail_EmptyRejectedEvenWithOtherFields(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
 			"user123": {
@@ -924,22 +924,26 @@ func TestUpdateUserProfile_ManagerEmail_Empty_OtherFieldStillApplies(t *testing.
 
 	userRT := newTestUserResourceType(t, server)
 
-	// An empty manager_email alongside a real field must not abort the whole
-	// patch - it is simply ignored, like an empty given_name/family_name.
+	// An empty manager_email must reject the whole request even when another
+	// field is also set - silently no-op'ing it would leave a caller asking to
+	// drop a manager with a false "success" and no indication anything was
+	// skipped. No GET/PATCH should happen: this fails fast on validation,
+	// before the read-modify-write GET.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
 		argUserID:        strArg("user123"),
 		"manager_email":  strArg(""),
 		"recovery_email": strArg("new@example.com"),
 	}}
 
-	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
-		t.Fatalf("updateUserProfile: %v", err)
+	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	if err == nil {
+		t.Fatalf("expected error when manager_email is empty, even with recovery_email also set")
 	}
-	if state.patchCount != 1 {
-		t.Fatalf("expected 1 PATCH, got %d", state.patchCount)
+	if state.getCount != 0 {
+		t.Fatalf("expected 0 GET, got %d", state.getCount)
 	}
-	if state.lastPatchBody.Relations != nil {
-		t.Fatalf("expected Relations untouched when manager_email is empty, got %+v", state.lastPatchBody.Relations)
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH, got %d", state.patchCount)
 	}
 }
 
