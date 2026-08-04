@@ -310,7 +310,7 @@ var (
 			{
 				Name:        argManagerEmail,
 				DisplayName: "Manager Email",
-				Description: "The email address of the new manager. An empty value is ignored (not applied); " +
+				Description: "The email address of the new manager. An empty value is rejected; " +
 					"clearing the manager relation is not currently supported by this connector.",
 				Field:      &config.Field_StringField{},
 				IsRequired: false,
