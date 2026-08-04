@@ -399,19 +399,28 @@ func loadSAMLProfileMapFromSession(ctx context.Context, ss sessions.SessionStore
 	return profileMap, nil
 }
 
-// markAppEmitted reports whether appID has already been returned as a resource by a prior
-// applicationResource.List() page, recording it as emitted if not. This prevents the same app
-// resource from being returned multiple times across pages as different users reference it.
-func markAppEmitted(ctx context.Context, ss sessions.SessionStore, appID string) (bool, error) {
+// isAppEmitted reports whether appID has already been returned as a resource by a prior
+// applicationResource.List() page. Read-only: callers that intend to emit appID this call must
+// pair this with recordAppEmitted, called only once the resource is confirmed part of the
+// returned batch — see recordAppEmitted for why the two must not be collapsed back into one
+// check-and-set call.
+func isAppEmitted(ctx context.Context, ss sessions.SessionStore, appID string) (bool, error) {
 	_, found, err := session.GetJSON[string](ctx, ss, appID, appLoginEmittedAppNamespace)
 	if err != nil {
 		return false, fmt.Errorf("google-workspace-connector: failed to check emitted-app marker for %s: %w", appID, err)
 	}
-	if found {
-		return true, nil
-	}
+	return found, nil
+}
+
+// recordAppEmitted marks appID as emitted, so it is never returned as a resource again across
+// pages. Callers must only call this after the app's resource has been built and appended to the
+// batch that will be returned to the SDK. Marking it earlier (e.g. before building the resource)
+// would leave appID marked emitted even if the resource build failed or a later item in the same
+// call aborted the whole List() call — the SDK retries with the same page token, so appID would
+// then be silently skipped forever without ever having actually been returned as a resource.
+func recordAppEmitted(ctx context.Context, ss sessions.SessionStore, appID string) error {
 	if err := session.SetJSON(ctx, ss, appID, "1", appLoginEmittedAppNamespace); err != nil {
-		return false, fmt.Errorf("google-workspace-connector: failed to store emitted-app marker for %s: %w", appID, err)
+		return fmt.Errorf("google-workspace-connector: failed to store emitted-app marker for %s: %w", appID, err)
 	}
-	return false, nil
+	return nil
 }

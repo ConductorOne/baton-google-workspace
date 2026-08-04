@@ -81,7 +81,7 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		if _, isSAML := newSAMLApps[appID]; isSAML {
 			continue
 		}
-		alreadyEmitted, err := markAppEmitted(ctx, attrs.Session, appID)
+		alreadyEmitted, err := isAppEmitted(ctx, attrs.Session, appID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -94,10 +94,13 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
+		if err := recordAppEmitted(ctx, attrs.Session, appID); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	for appID, displayName := range newSAMLApps {
-		alreadyEmitted, err := markAppEmitted(ctx, attrs.Session, appID)
+		alreadyEmitted, err := isAppEmitted(ctx, attrs.Session, appID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -110,13 +113,16 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
+		if err := recordAppEmitted(ctx, attrs.Session, appID); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	if nextPageToken == "" {
 		// Final page of this pass: Google Workspace itself is always an app — sign-in events
 		// from googleLoginEventFeed target this resource. Emit it once, only here, so it is
 		// never returned more than once across pages.
-		alreadyEmitted, err := markAppEmitted(ctx, attrs.Session, googleWorkspaceAppID)
+		alreadyEmitted, err := isAppEmitted(ctx, attrs.Session, googleWorkspaceAppID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -127,6 +133,9 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 				return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", googleWorkspaceAppID, err)
 			}
 			resources = append(resources, r)
+			if err := recordAppEmitted(ctx, attrs.Session, googleWorkspaceAppID); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 
