@@ -972,7 +972,9 @@ type userProfilePatch struct {
 // instead of Users.Patch only in the one case Patch is confirmed not to
 // handle - see the `usePut` comment below for why - so most fields (name,
 // recovery, Employee Information, manager) keep pure patch semantics; only
-// clearing employee_id down to the last ExternalIds entry forces a full PUT.
+// setting employee_id in a way that shrinks the ExternalIds array (any
+// decrease in entry count - not just clearing it to empty, see the
+// `externalIDsWillShrink` comment below) forces a full PUT.
 func applyUserProfilePatch(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
@@ -1030,7 +1032,12 @@ func applyUserProfilePatch(
 	// with Type "organization" (an oddly-named but stable API mapping). Preserve
 	// any other ExternalIds entries (account/login_id/network, etc.). Computed
 	// up front (rather than inline further down) because whether this shrinks
-	// the array decides usePut below.
+	// the array decides usePut below. Note this can fire even when employeeID
+	// is non-empty: buildUpdatedExternalIDs always collapses down to at most
+	// one "organization" entry, so a tenant that already had 2+ duplicate
+	// organization entries (see the lossy multi-value note on
+	// profile[argEmployeeID] in user.go) shrinks the array here too, not just
+	// the empty-string clear case.
 	var updatedExternalIDs []admin.UserExternalId
 	externalIDsWillShrink := false
 	if patch.employeeID != nil {
@@ -1043,7 +1050,7 @@ func applyUserProfilePatch(
 	}
 
 	// Users.Patch does not reliably shrink a repeated field down to empty:
-	// confirmed against a live tenant that clearing the only ExternalIds entry
+	// confirmed against a live tenant that clearing the sole ExternalIds entry
 	// via Patch (empty slice, with or without ForceSendFields/NullFields)
 	// silently leaves the existing entry in place, even though the same patch
 	// correctly overwrites a *sub-field* of a retained Organizations entry (and
@@ -1051,9 +1058,10 @@ func applyUserProfilePatch(
 	// ever preserves or appends, buildManagerRelations only ever appends the
 	// manager entry - so neither needs this workaround). A *sparse* Update
 	// (PUT) has the same problem - also confirmed live - so Update only clears
-	// it when given the genuinely complete object. So only when ExternalIds is
-	// actually shrinking, start from a full copy of `current` and send the
-	// result via Update instead of Patch: `update` begins as an exact copy of
+	// it when given the genuinely complete object. So whenever ExternalIds is
+	// actually shrinking - per externalIDsWillShrink above, which is not
+	// limited to the empty-clear case - start from a full copy of `current` and
+	// send the result via Update instead of Patch: `update` begins as an exact copy of
 	// `current` with only the fields below overwritten, so nothing this
 	// function doesn't touch changes - modulo the accepted tradeoff that a
 	// full-object Update widens the read-modify-write race window to every

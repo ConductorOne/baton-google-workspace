@@ -169,15 +169,19 @@ func (c *GoogleWorkspaceClient) InsertUser(ctx context.Context, user *directoryA
 
 // UpdateUser fully replaces a user via Users.Update (PUT). Unlike PatchUser,
 // this reliably shrinks repeated fields (e.g. ExternalIds, Organizations) down
-// to empty - confirmed against a live tenant that Patch silently leaves an
-// existing entry in place when asked to clear the last one, even with
-// ForceSendFields/NullFields set - but only when given the genuinely complete
-// current object; a sparse object sent via Update has the same problem as
-// Patch. Callers should pass the full current user (fields they don't intend
-// to change included) rather than a partial one, and should weigh the wider
-// read-modify-write race window this implies: anything else on the user that
-// changes between the caller's GET and this call is silently overwritten back
-// to the value captured at GET time.
+// to empty - confirmed via manual live-tenant testing (not covered by an
+// automated test in this repo) that Patch silently leaves an existing entry in
+// place when asked to clear the last one, even with ForceSendFields/NullFields
+// set - but only when given the genuinely complete current object; a sparse
+// object sent via Update has the same problem as Patch. Callers relying on
+// that shrink-to-empty guarantee must pass the full current user (fields they
+// don't intend to change included) rather than a partial one, and should weigh
+// the wider read-modify-write race window this implies: anything else on the
+// user that changes between the caller's GET and this call is silently
+// overwritten back to the value captured at GET time. Callers only touching
+// scalar fields (as most existing call sites in pkg/connector do - suspend,
+// primary email, org unit, manager relation, etc.) are unaffected and can keep
+// sending a sparse object.
 func (c *GoogleWorkspaceClient) UpdateUser(ctx context.Context, userId string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
@@ -195,12 +199,13 @@ func (c *GoogleWorkspaceClient) UpdateUser(ctx context.Context, userId string, u
 // caller did not intend to change. Use ForceSendFields on the supplied user to
 // send zero-valued fields (e.g. clearing a value or setting a bool to false).
 //
-// Does NOT reliably clear a repeated field down to empty - confirmed against a
-// live tenant that clearing the only entry in ExternalIds this way (empty
-// slice, with or without ForceSendFields/NullFields) silently leaves the
-// existing entry in place, even though Patch correctly overwrites a sub-field
-// of a retained entry. Use UpdateUser with the complete current object instead
-// when a repeated field needs to shrink to empty.
+// Does NOT reliably clear a repeated field down to empty - confirmed via
+// manual live-tenant testing (not covered by an automated test in this repo)
+// that clearing the only entry in ExternalIds this way (empty slice, with or
+// without ForceSendFields/NullFields) silently leaves the existing entry in
+// place, even though Patch correctly overwrites a sub-field of a retained
+// entry. Use UpdateUser with the complete current object instead when a
+// repeated field needs to shrink to empty.
 // https://developers.google.com/workspace/admin/directory/reference/rest/v1/users/patch
 func (c *GoogleWorkspaceClient) PatchUser(ctx context.Context, userId string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
