@@ -22,6 +22,8 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
@@ -121,6 +123,8 @@ func scanUsersForEvents(
 		cursor.DirectoryPageToken = usersResp.NextPageToken
 		for _, u := range usersResp.Users {
 			if u.PrimaryEmail == "" || u.Id == "" {
+				ctxzap.Extract(ctx).Debug("google-workspace-connector: directory user missing id or primary email, skipping for event feed",
+					zap.String("user_id", u.Id))
 				continue
 			}
 			cursor.PendingUsers = append(cursor.PendingUsers, pendingUser{Email: u.PrimaryEmail, ID: u.Id})

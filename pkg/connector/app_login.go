@@ -91,6 +91,8 @@ func scanAppLoginsPage(
 		dirUserBatch := make(map[string]string, len(usersResp.Users))
 		for _, u := range usersResp.Users {
 			if u.Id == "" || u.PrimaryEmail == "" {
+				ctxzap.Extract(ctx).Debug("google-workspace-connector: directory user missing id or primary email, skipping for app login discovery",
+					zap.String("user_id", u.Id))
 				continue
 			}
 			cursor.PendingUsers = append(cursor.PendingUsers, pendingUser{Email: u.PrimaryEmail, ID: u.Id})
