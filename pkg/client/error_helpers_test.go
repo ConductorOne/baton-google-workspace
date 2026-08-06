@@ -22,7 +22,7 @@ func TestWrapGoogleApiErrorWithContext_403Throttle(t *testing.T) {
 		require.Equal(t, codes.Unavailable, st.Code())
 	})
 
-	t.Run("quotaExceeded reclassifies to Unavailable", func(t *testing.T) {
+	t.Run("quotaExceeded stays PermissionDenied - not reliably transient, unlike userRateLimitExceeded", func(t *testing.T) {
 		e := &googleapi.Error{
 			Code:   403,
 			Errors: []googleapi.ErrorItem{{Reason: errorReasonQuotaExceeded}},
@@ -30,7 +30,7 @@ func TestWrapGoogleApiErrorWithContext_403Throttle(t *testing.T) {
 		wrapped := wrapGoogleApiErrorWithContext(e, "test")
 		st, ok := status.FromError(wrapped)
 		require.True(t, ok)
-		require.Equal(t, codes.Unavailable, st.Code())
+		require.Equal(t, codes.PermissionDenied, st.Code())
 	})
 
 	t.Run("structured ErrorInfo RATE_LIMIT_EXCEEDED reclassifies to Unavailable", func(t *testing.T) {
@@ -78,7 +78,8 @@ func TestWrapGoogleApiErrorWithContext_403Throttle(t *testing.T) {
 
 func TestIsThrottled(t *testing.T) {
 	require.True(t, isThrottled(&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: errorReasonUserRateLimitExceeded}}}))
-	require.True(t, isThrottled(&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: errorReasonQuotaExceeded}}}))
+	require.False(t, isThrottled(&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: errorReasonQuotaExceeded}}}),
+		"quotaExceeded is deliberately excluded from throttleReasons - not reliably transient")
 	require.True(t, isThrottled(&googleapi.Error{Code: 403, Details: []interface{}{map[string]interface{}{"reason": errorInfoReasonRateLimitExceeded}}}))
 	require.False(t, isThrottled(&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "forbidden"}}}))
 	require.False(t, isThrottled(&googleapi.Error{Code: 403}))

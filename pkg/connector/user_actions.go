@@ -1249,9 +1249,23 @@ func applyUserProfilePatch(
 
 	var updatedUser *admin.User
 	var err error
-	if usePut {
+	switch {
+	case len(forceSend) == 0 && !customSchemasSet:
+		// A true no-op (the guard above let it through via the setOrg/
+		// employeeID exemptions - see the comment there). Re-fetch instead of
+		// issuing an empty-body PatchUser/UpdateUser: a write-classified call
+		// that changes nothing is still a write as far as Directory audit
+		// logs and any other system watching for real user changes are
+		// concerned, and externalIDsWillShrink (so usePut) can only be true
+		// when ExternalIds actually differs, which would have made forceSend
+		// non-empty - so usePut is never true here. A fresh GET also avoids
+		// returning the `current` snapshot fetched earlier in this call,
+		// which can be stale relative to a concurrent change (e.g.
+		// Suspended, LastLoginTime) by the time this function returns.
+		updatedUser, err = client.GetUserFullForProvisioning(ctx, userId)
+	case usePut:
 		updatedUser, err = client.UpdateUser(ctx, userId, update)
-	} else {
+	default:
 		updatedUser, err = client.PatchUser(ctx, userId, update)
 	}
 	if err != nil {
@@ -1612,14 +1626,17 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 
 // stringFromJSON returns the value of the first key present in profile whose
 // value is a string, and reports whether any of the keys were present. It
-// returns an error if a key is present but its value is not a string (e.g. a
-// JSON number), rather than silently treating a malformed value as absent -
-// the caller would otherwise see the field quietly dropped with no
-// indication anything was wrong.
+// returns an error if a key is present with a genuinely wrong-typed value
+// (e.g. a JSON number or bool), rather than silently treating a malformed
+// value as absent - the caller would otherwise see the field quietly dropped
+// with no indication anything was wrong. A JSON null is treated the same as
+// the key being absent, not as wrong-typed: it's how a caller (e.g. a push
+// rule serializing a source profile with explicit nulls for unset fields)
+// represents "no value," not a malformed one.
 func stringFromJSON(profile map[string]any, keys ...string) (string, bool, error) {
 	for _, k := range keys {
 		v, ok := profile[k]
-		if !ok {
+		if !ok || v == nil {
 			continue
 		}
 		s, ok := v.(string)

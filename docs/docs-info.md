@@ -19,8 +19,8 @@
    | Action | API endpoint(s) | Purpose |
    | --- | --- | --- |
    | `update_user_status` / `disable_user` / `enable_user` | `users.update` | Suspend / activate a user (idempotent) |
-   | `update_user_profile` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Partial profile update: name, recovery details, Employee Information (department, job title, cost center, employee ID, employee type), manager relation, custom-schema values |
-   | `update_user` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Profile update from a `user_profile` JSON object (same fields as `update_user_profile`); consumed by C1 push rules for automated profile sync |
+   | `update_user_profile` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Partial profile update: name, recovery details, Employee Information (department, job title, cost center, employee ID, employee type), manager relation, custom-schema values. An empty/invalid `manager_email` is skipped (not applied, reported via the `skipped_fields` return field) rather than failing the whole call, as long as another provided field is valid. |
+   | `update_user` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Profile update from a `user_profile` JSON object (same fields as `update_user_profile`); consumed by C1 push rules for automated profile sync. Same `manager_email` partial-success behavior as `update_user_profile`. |
    | `update_user_manager` | `users.update` | Set the user's `manager` relation |
    | `make_admin` | `users.makeAdmin` | Promote/demote a user to/from super administrator |
    | `change_user_org_unit` | `users.update` | Move a user to a different organizational unit |
@@ -124,4 +124,4 @@
 
    ### Rate limits
 
-   The Admin SDK Directory API enforces per-project and per-user quotas (default ~2,400 queries/minute/project for the Directory API). Throttling can arrive as `429`, or as `403` with a rate-limit reason (`userRateLimitExceeded`/`quotaExceeded`); the connector classifies both, along with `5xx` responses, as retryable, and the Baton SDK's sync-phase retryer backs off and retries.
+   The Admin SDK Directory API enforces per-project and per-user quotas (default ~2,400 queries/minute/project for the Directory API). Throttling can arrive as `429`, or as `403` with reason `userRateLimitExceeded` (a per-user, per-100-second window); the connector classifies both, along with `5xx` responses, as retryable, and the Baton SDK's sync-phase retryer backs off and retries. A `403` with reason `quotaExceeded` is deliberately **not** retried - Google also uses that reason for longer-lived daily/project quota exhaustion that wouldn't clear within a retry window, and the sync-phase retryer has no attempt-count ceiling - so it's surfaced as `PermissionDenied` to point at the real (quota/configuration) cause instead of retrying indefinitely.

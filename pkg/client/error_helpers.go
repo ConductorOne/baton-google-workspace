@@ -28,7 +28,7 @@ func wrapGoogleApiErrorWithContext(err error, contextMsg string) error {
 	case http.StatusForbidden:
 		if isThrottled(e) {
 			// Google documents throttling arriving on 403 with reason
-			// userRateLimitExceeded/quotaExceeded, in addition to 429 with
+			// userRateLimitExceeded, in addition to 429 with
 			// rateLimitExceeded (handled below) - see
 			// https://developers.google.com/workspace/admin/directory/v1/limits.
 			// Reclassify as Unavailable, matching the 429 case, so it rides
@@ -36,6 +36,17 @@ func wrapGoogleApiErrorWithContext(err error, contextMsg string) error {
 			// retryer already applies there (it gates strictly on
 			// codes.Unavailable/DeadlineExceeded) - a real, genuine 403
 			// permissions/delegation failure is left as PermissionDenied.
+			// quotaExceeded is deliberately NOT reclassified here (see
+			// throttleReasons): unlike userRateLimitExceeded (a per-user,
+			// per-100-second window that reliably clears), Google also
+			// returns quotaExceeded for longer-lived daily/project quota
+			// exhaustion that won't clear inside a retry-backoff window. The
+			// SDK's sync-phase retryer has no attempt-count ceiling
+			// (vendor/.../pkg/sync/parallel_syncer.go: MaxAttempts: 0), so
+			// reclassifying a persistent quotaExceeded to Unavailable would
+			// retry roughly once a minute indefinitely instead of surfacing
+			// PermissionDenied, which is what actually points an operator at
+			// the real cause (a quota/configuration issue).
 			return wrapGoogleApiErrorWithRateLimitInfo(codes.Unavailable, contextMsg, e, err)
 		}
 		return wrapGoogleApiErrorWithRateLimitInfo(codes.PermissionDenied, contextMsg, e, err)
@@ -79,6 +90,9 @@ func wrapGoogleApiErrorWithContext(err error, contextMsg string) error {
 // google.rpc.ErrorInfo reason that indicate rate limiting rather than a
 // genuine permissions failure, on a 403 response
 // (https://developers.google.com/workspace/admin/directory/v1/limits).
+// errorReasonQuotaExceeded is intentionally declared but excluded from
+// throttleReasons below - see the comment on the 403 case in
+// wrapGoogleApiErrorWithContext for why it isn't treated as retryable here.
 const (
 	errorReasonUserRateLimitExceeded = "userRateLimitExceeded"
 	errorReasonQuotaExceeded         = "quotaExceeded"
@@ -86,9 +100,13 @@ const (
 	errorInfoReasonRateLimitExceeded = "RATE_LIMIT_EXCEEDED"
 )
 
+// throttleReasons are the 403 reasons this connector reclassifies to
+// codes.Unavailable so they ride the SDK's retry-with-backoff. Deliberately
+// excludes errorReasonQuotaExceeded: it isn't reliably a short-window,
+// transient condition the way the other three are (see the 403 case in
+// wrapGoogleApiErrorWithContext) - it stays codes.PermissionDenied.
 var throttleReasons = map[string]bool{
 	errorReasonUserRateLimitExceeded: true,
-	errorReasonQuotaExceeded:         true,
 	errorReasonRateLimitExceeded:     true,
 	errorInfoReasonRateLimitExceeded: true,
 }

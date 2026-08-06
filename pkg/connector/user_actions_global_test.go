@@ -160,6 +160,14 @@ func TestProfileFromJSON(t *testing.T) {
 		// way and not report success.
 		_ = patch
 	})
+
+	t.Run("an explicit JSON null is treated as absent, not as a wrong-typed error", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{"employee_id": nil, "department": "Sales"})
+		require.NoError(t, err, "a JSON null represents \"no value,\" not a malformed one - it must not fail the whole call")
+		require.Nil(t, patch.employeeID)
+		require.NotNil(t, patch.department)
+		require.Equal(t, "Sales", *patch.department)
+	})
 }
 
 func newTestGlobalConnector(t *testing.T, dir *directoryAdmin.Service) *GoogleWorkspace {

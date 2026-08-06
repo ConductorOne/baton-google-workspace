@@ -45,6 +45,13 @@ func TestOptionalStringField(t *testing.T) {
 		_, err := optionalStringField(args, "employee_type")
 		require.Error(t, err)
 	})
+
+	t.Run("an explicit JSON null is treated as absent, not as a wrong-typed error", func(t *testing.T) {
+		args := &structpb.Struct{Fields: map[string]*structpb.Value{"employee_id": structpb.NewNullValue()}}
+		v, err := optionalStringField(args, "employee_id")
+		require.NoError(t, err, "a JSON null represents \"no value,\" not a malformed one - it must not fail the whole call")
+		require.Nil(t, v)
+	})
 }
 
 func TestBuildUpdatedOrganizations(t *testing.T) {

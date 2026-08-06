@@ -89,8 +89,8 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | Action | Key arguments | Description |
 | ------ | ------------- | ----------- |
 | `update_user_status` / `disable_user` / `enable_user` | `user_id` / `is_suspended` | Suspend or activate a user (idempotent) |
-| `update_user_profile` | `user_id`, plus any of `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `department`, `job_title`, `cost_center`, `employee_type`, `employee_id`, `manager_email`, `custom_schemas` | Partial profile update (patch semantics); supports Employee Information attributes and custom-schema attribute values. Exception: an `employee_id` change that reduces the number of external IDs on the account (clearing it, or consolidating duplicate entries down to the new value) uses a full-object update instead, since Google does not reliably shrink a repeated field via patch. |
-| `update_user` | `user_id` (resource ID), `user_profile` (JSON string; same keys as `update_user_profile` above) | Profile update from a JSON object; consumed by C1 push rules for automated profile sync |
+| `update_user_profile` | `user_id`, plus any of `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `department`, `job_title`, `cost_center`, `employee_type`, `employee_id`, `manager_email`, `custom_schemas` | Partial profile update (patch semantics); supports Employee Information attributes and custom-schema attribute values. Exception: an `employee_id` change that reduces the number of external IDs on the account (clearing it, or consolidating duplicate entries down to the new value) uses a full-object update instead, since Google does not reliably shrink a repeated field via patch. An empty or malformed `manager_email` does not fail the whole call — see the partial-success note below. |
+| `update_user` | `user_id` (resource ID), `user_profile` (JSON string; same keys as `update_user_profile` above) | Profile update from a JSON object; consumed by C1 push rules for automated profile sync. Same partial-success behavior as `update_user_profile` for `manager_email`. |
 | `update_user_manager` | `user_id`, `manager_email` | Set the user's `manager` relation |
 | `make_admin` | `user_id`, `status` (bool) | Promote/demote a user to/from super administrator |
 | `change_user_org_unit` | `user_id`, `org_unit_path` | Move a user to a different organizational unit |
@@ -107,6 +107,8 @@ Connector actions are custom operations invoked on demand from C1 automations:
 > **Custom schemas:** `update_user_profile` and `update_user` can write values into custom-schema attributes (Directory API `customSchemas`). The connector only sets values — the schema **definitions must already exist** in the tenant (the connector does not request the `admin.directory.userschema` scope).
 
 > **Job title round-trip:** the synced user profile exposes the job title under both `title` and `job_title` for backward compatibility. Writing it back via `update_user_profile`/`update_user` only accepts `job_title` (or `jobTitle`) — a payload built from the synced profile's `title` key alone will silently drop the job title.
+
+> **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
 
 # Credentials Setup
 

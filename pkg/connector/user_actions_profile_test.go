@@ -467,6 +467,13 @@ func TestUpdateUserProfile_EmployeeInfoAllEmptyClears_NoExistingOrg_SucceedsAsNo
 	if got := state.users["user123"].Organizations; got != nil {
 		t.Fatalf("expected no phantom organization to be created, got %+v", got)
 	}
+	// A true no-op re-fetches instead of issuing an empty-body write.
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH/PUT for a true no-op, got %d", state.patchCount)
+	}
+	if state.getCount != 2 {
+		t.Fatalf("expected 2 GETs (initial read-modify-write, then a fresh re-fetch instead of a no-op write), got %d", state.getCount)
+	}
 }
 
 func TestUpdateUserProfile_InvalidCustomSchemasJSON(t *testing.T) {
@@ -847,13 +854,14 @@ func TestUpdateUserProfile_EmployeeID_IdempotentResend_SucceedsAsNoOp(t *testing
 	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
 		t.Fatalf("expected a satisfied no-op, not an error: %v", err)
 	}
-	// A harmless empty-body PATCH still round-trips (same accepted tradeoff
-	// as the Organizations no-op case above); what matters is that it
-	// doesn't error, and that ExternalIds wasn't force-sent as "changed".
-	if state.lastPatchBody != nil {
-		if extIDs, ok := state.lastPatchBody.ExternalIds.([]interface{}); ok && len(extIDs) > 0 {
-			t.Fatalf("expected ExternalIds to not be force-sent on a true no-op, got %+v", state.lastPatchBody.ExternalIds)
-		}
+	// A true no-op re-fetches instead of issuing an empty-body write: no
+	// PATCH/PUT call happens at all, only the initial read-modify-write GET
+	// plus one more GET in place of the write.
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH/PUT for a true no-op, got %d", state.patchCount)
+	}
+	if state.getCount != 2 {
+		t.Fatalf("expected 2 GETs (initial read-modify-write, then a fresh re-fetch instead of a no-op write), got %d", state.getCount)
 	}
 }
 
