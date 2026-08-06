@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/ratelimit"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // wrapGoogleApiErrorWithContext wraps a googleapi.Error with rate limit information and an optional context message.
@@ -27,27 +30,14 @@ func wrapGoogleApiErrorWithContext(err error, contextMsg string) error {
 		return wrapGoogleApiErrorWithRateLimitInfo(codes.Unauthenticated, contextMsg, e, err)
 	case http.StatusForbidden:
 		if isThrottled(e) {
-			// Google documents throttling arriving on 403 with reason
-			// userRateLimitExceeded, in addition to 429 with
-			// rateLimitExceeded (handled below) - see
-			// https://developers.google.com/workspace/admin/directory/v1/limits.
-			// Reclassify as Unavailable, matching the 429 case, so it rides
-			// the same automatic retry-with-backoff the SDK's sync-phase
-			// retryer already applies there (it gates strictly on
-			// codes.Unavailable/DeadlineExceeded) - a real, genuine 403
-			// permissions/delegation failure is left as PermissionDenied.
-			// quotaExceeded is deliberately NOT reclassified here (see
-			// throttleReasons): unlike userRateLimitExceeded (a per-user,
-			// per-100-second window that reliably clears), Google also
-			// returns quotaExceeded for longer-lived daily/project quota
-			// exhaustion that won't clear inside a retry-backoff window. The
-			// SDK's sync-phase retryer has no attempt-count ceiling
-			// (vendor/.../pkg/sync/parallel_syncer.go: MaxAttempts: 0), so
-			// reclassifying a persistent quotaExceeded to Unavailable would
-			// retry roughly once a minute indefinitely instead of surfacing
-			// PermissionDenied, which is what actually points an operator at
-			// the real cause (a quota/configuration issue).
-			return wrapGoogleApiErrorWithRateLimitInfo(codes.Unavailable, contextMsg, e, err)
+			// 403 can also carry Google's rate-limit reasons, not just 429 -
+			// see https://developers.google.com/workspace/admin/directory/v1/limits.
+			// Reclassify to Unavailable so it rides the SDK's retry-with-backoff.
+			// quotaExceeded is excluded (see throttleReasons): it's long-lived
+			// quota exhaustion, not transient, and the retryer has no attempt
+			// ceiling. Attach rate-limit detail by hand since
+			// ratelimit.ExtractRateLimitData only handles 429.
+			return wrapGoogleApiErrorWithRateLimitInfoDetail(codes.Unavailable, contextMsg, e, throttled403RateLimitDescription(), err)
 		}
 		return wrapGoogleApiErrorWithRateLimitInfo(codes.PermissionDenied, contextMsg, e, err)
 	case http.StatusNotFound:
@@ -86,13 +76,9 @@ func wrapGoogleApiErrorWithContext(err error, contextMsg string) error {
 	)
 }
 
-// Legacy googleapi.ErrorItem.Reason values and the structured
-// google.rpc.ErrorInfo reason that indicate rate limiting rather than a
-// genuine permissions failure, on a 403 response
-// (https://developers.google.com/workspace/admin/directory/v1/limits).
-// errorReasonQuotaExceeded is intentionally declared but excluded from
-// throttleReasons below - see the comment on the 403 case in
-// wrapGoogleApiErrorWithContext for why it isn't treated as retryable here.
+// Reason strings (legacy ErrorItem and structured ErrorInfo) indicating rate
+// limiting on a 403; errorReasonQuotaExceeded is intentionally excluded from
+// throttleReasons below (see the 403 case in wrapGoogleApiErrorWithContext).
 const (
 	errorReasonUserRateLimitExceeded = "userRateLimitExceeded"
 	errorReasonQuotaExceeded         = "quotaExceeded"
@@ -100,11 +86,8 @@ const (
 	errorInfoReasonRateLimitExceeded = "RATE_LIMIT_EXCEEDED"
 )
 
-// throttleReasons are the 403 reasons this connector reclassifies to
-// codes.Unavailable so they ride the SDK's retry-with-backoff. Deliberately
-// excludes errorReasonQuotaExceeded: it isn't reliably a short-window,
-// transient condition the way the other three are (see the 403 case in
-// wrapGoogleApiErrorWithContext) - it stays codes.PermissionDenied.
+// throttleReasons are the 403 reasons reclassified to codes.Unavailable
+// (errorReasonQuotaExceeded deliberately excluded - see the 403 case above).
 var throttleReasons = map[string]bool{
 	errorReasonUserRateLimitExceeded: true,
 	errorReasonRateLimitExceeded:     true,
@@ -113,10 +96,8 @@ var throttleReasons = map[string]bool{
 
 // GoogleAPIErrorReasons returns every reason string carried by e, from both
 // the legacy googleapi.ErrorItem list and any structured google.rpc.ErrorInfo
-// detail. Exported so pkg/connector (which already imports this package) can
-// share it for its own reason-string checks (e.g.
-// isCloudIdentityAPIDisabledError in pkg/connector/application.go) instead of
-// duplicating this extraction.
+// detail. Exported so pkg/connector can share it (e.g.
+// isCloudIdentityAPIDisabledError) instead of duplicating this extraction.
 func GoogleAPIErrorReasons(e *googleapi.Error) []string {
 	reasons := make([]string, 0, len(e.Errors)+len(e.Details))
 	for _, item := range e.Errors {
@@ -133,12 +114,8 @@ func GoogleAPIErrorReasons(e *googleapi.Error) []string {
 }
 
 // isThrottled reports whether e is Google API rate limiting rather than a
-// genuine permissions/delegation failure, per the reason strings documented
-// at https://developers.google.com/workspace/admin/directory/v1/limits.
-// Self-checks e.Code == 403 (rather than relying solely on its caller only
-// invoking it from the StatusForbidden branch) to match the same
-// self-contained scoping isCloudIdentityAPIDisabledError
-// (pkg/connector/application.go) uses for its own 403 check.
+// genuine permissions/delegation failure. Self-checks e.Code == 403 rather
+// than trusting the caller to only invoke it from the StatusForbidden branch.
 func isThrottled(e *googleapi.Error) bool {
 	if e.Code != http.StatusForbidden {
 		return false
@@ -154,6 +131,14 @@ func isThrottled(e *googleapi.Error) bool {
 // wrapGoogleApiErrorWithRateLimitInfo follows the baton-sdk pattern for WrapErrorsWithRateLimitInfo
 // but adapted for googleapi.Error instead of http.Response.
 func wrapGoogleApiErrorWithRateLimitInfo(preferredCode codes.Code, contextMsg string, e *googleapi.Error, errs ...error) error {
+	return wrapGoogleApiErrorWithRateLimitInfoDetail(preferredCode, contextMsg, e, nil, errs...)
+}
+
+// wrapGoogleApiErrorWithRateLimitInfoDetail is wrapGoogleApiErrorWithRateLimitInfo
+// with an optional override for the RateLimitDescription normally derived
+// from ratelimit.ExtractRateLimitData, which only populates one for e.Code
+// == 429.
+func wrapGoogleApiErrorWithRateLimitInfoDetail(preferredCode codes.Code, contextMsg string, e *googleapi.Error, override *v2.RateLimitDescription, errs ...error) error {
 	msg := e.Message
 	if msg == "" {
 		msg = fmt.Sprintf("status code: %d", e.Code)
@@ -167,9 +152,13 @@ func wrapGoogleApiErrorWithRateLimitInfo(preferredCode codes.Code, contextMsg st
 
 	st := status.New(preferredCode, msg)
 
-	description, err := ratelimit.ExtractRateLimitData(e.Code, &e.Header)
-	// Ignore any error extracting rate limit data
-	if err == nil && description != nil {
+	description := override
+	if description == nil {
+		if d, err := ratelimit.ExtractRateLimitData(e.Code, &e.Header); err == nil {
+			description = d
+		}
+	}
+	if description != nil {
 		st, _ = st.WithDetails(description)
 	}
 
@@ -179,4 +168,17 @@ func wrapGoogleApiErrorWithRateLimitInfo(preferredCode codes.Code, contextMsg st
 
 	allErrs := append([]error{st.Err()}, errs...)
 	return errors.Join(allErrs...)
+}
+
+// throttled403RateLimitDescription synthesizes a RateLimitDescription for a
+// reclassified 403 throttle, using userRateLimitExceeded's documented
+// per-user, per-100-second window as the wait hint (see
+// https://developers.google.com/workspace/admin/directory/v1/limits).
+func throttled403RateLimitDescription() *v2.RateLimitDescription {
+	return v2.RateLimitDescription_builder{
+		Status:    v2.RateLimitDescription_STATUS_OVERLIMIT,
+		Limit:     1,
+		Remaining: 0,
+		ResetAt:   timestamppb.New(time.Now().Add(100 * time.Second)),
+	}.Build()
 }

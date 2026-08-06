@@ -37,13 +37,9 @@ var (
 			"admin.directory.group",
 			"admin.directory.group.member",
 			"admin.directory.domain.readonly",
-			// Requested at runtime by getGroupsSettingsService (connector.go) for
-			// the modify_group_settings action, which reads then patches
-			// settings (client.go GroupsSettingsService.Groups.Get/Patch) -
-			// previously requested but never declared here, so a tenant
-			// granted exactly the declared set had the action fail silently
-			// against a nil service. create_group does not use this service
-			// (it only calls InsertGroup) and needs no additional scope here.
+			// Requested at runtime by getGroupsSettingsService for
+			// modify_group_settings; previously undeclared here, causing the
+			// action to fail silently.
 			"apps.groups.settings",
 		)),
 	}
@@ -59,17 +55,13 @@ var (
 			// the declared capability must request admin.directory.user, not the
 			// read-only variant. The write scope subsumes read.
 			//
-			// admin.directory.user.alias.readonly was removed from this list:
-			// no code path in this connector reads user Aliases (confirmed via
-			// grep for .Aliases across pkg/), so it was declared but never
-			// actually used - dropped per least-privilege.
+			// admin.directory.user.alias.readonly removed: unused, dropped per
+			// least-privilege.
 			"admin.directory.user",
 			"admin.directory.domain.readonly",
-			// Requested at runtime by getDataTransferService (connector.go) for
-			// transfer_user_drive_files/transfer_user_calendar (client.go
-			// DataTransferService.Transfers.List/Insert) - previously requested
-			// but never declared here, so a tenant granted exactly the declared
-			// set had both actions fail silently against a nil service.
+			// Requested at runtime by getDataTransferService for
+			// transfer_user_drive_files/transfer_user_calendar; previously
+			// undeclared here, causing them to fail silently.
 			"admin.datatransfer",
 		)),
 	}

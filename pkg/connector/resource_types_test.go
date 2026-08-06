@@ -30,16 +30,10 @@ type capabilitiesFile struct {
 	} `json:"resourceTypeCapabilities"`
 }
 
-// TestBatonCapabilitiesDeclareEveryRuntimeScope guards against a scope
-// requested at runtime (newClient, connector.go) with no matching entry in
-// any resourceType's capabilityPermissions() (resource_types.go).
-// baton_capabilities.json is generated from those annotations (run `go
-// build -o connector ./cmd/baton-google-workspace && ./connector
-// capabilities > baton_capabilities.json` to regenerate after changing
-// them) and is what a customer's domain-wide-delegation setup instructions
-// are derived from - an under-declared scope means a tenant granted exactly
-// the declared set has the dependent service(s) fail silently against a
-// nil client, with no error naming the missing scope.
+// TestBatonCapabilitiesDeclareEveryRuntimeScope guards against a runtime
+// scope with no matching entry in baton_capabilities.json (regenerate via
+// `./connector capabilities > baton_capabilities.json` after changing
+// resource_types.go's capabilityPermissions()).
 func TestBatonCapabilitiesDeclareEveryRuntimeScope(t *testing.T) {
 	raw, err := os.ReadFile("../../baton_capabilities.json")
 	require.NoError(t, err, "baton_capabilities.json must exist at the repo root")

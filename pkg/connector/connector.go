@@ -335,13 +335,8 @@ func isAuthorizationError(err error) bool {
 // recordServiceInit records an error that occurred while initializing a service for resource syncers.
 // Authorization errors are logged at debug level as they are expected when scopes are not available.
 // Other errors (network, context cancellation, etc.) are fatal so the sync cannot persist a partial c1z.
-// skipped, when non-nil, accumulates the purpose of every service skipped this
-// way so newClient can emit one Info-level summary after all services are
-// wired - the per-service Debug log above is invisible at the default log
-// level, so without this a tenant that granted the wrong scope set (whether
-// through misconfiguration or a connector bug under-declaring what it needs)
-// gets no indication anything failed to initialize until a dependent action
-// is invoked against a nil service.
+// skipped, when non-nil, collects the purpose of each skipped service so
+// newClient can log one Info-level summary after wiring completes.
 func recordServiceInit(l *zap.Logger, err error, scope, purpose string, skipped *[]string) error {
 	if err == nil {
 		return nil
@@ -433,19 +428,10 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 		return nil, err
 	}
 
-	// Visible at the default log level (unlike the per-service Debug log in
-	// recordServiceInit above), so a tenant whose granted scopes don't match
-	// what this connector actually needs - whether from misconfiguration or
-	// a connector bug under-declaring a required scope - has at least one
-	// indication a sync "succeeded" with functionality missing, instead of
-	// only discovering it when something fails later. Split into two
-	// messages rather than one generic "actions will fail": this
-	// connector's own docs use "action" specifically for the named custom
-	// operations (update_user_profile, modify_group_settings, etc.), so
-	// reusing that word for a missing resourceTypeSynchronizationScope
-	// service - which instead makes a whole resource type silently absent
-	// from ResourceSyncers() below, not merely fail an invocation - would
-	// misdirect an operator's troubleshooting.
+	// One categorized Debug-level summary, in addition to the per-service
+	// Debug log above: a missing resource-type syncer (a whole resource type
+	// absent from sync) is a different operator problem than a missing
+	// provisioning/action/enrichment scope.
 	if len(skippedServices) > 0 {
 		var missingResourceTypes, degradedOther []string
 		for _, purpose := range skippedServices {
@@ -456,13 +442,11 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 			}
 		}
 		if len(missingResourceTypes) > 0 {
-			l.Info("google-workspace: some resource types will be entirely absent from sync due to a missing OAuth scope; run with --log-level=debug for the specific scopes",
+			l.Debug("google-workspace: some resource types will be entirely absent from sync due to a missing OAuth scope",
 				zap.Strings("missing_resource_types", missingResourceTypes))
 		}
 		if len(degradedOther) > 0 {
-			l.Info("google-workspace: some provisioning operations, actions, or optional sync "+
-				"enrichment are unavailable due to a missing OAuth scope; run with --log-level=debug "+
-				"for the specific scopes",
+			l.Debug("google-workspace: some provisioning operations, actions, or optional sync enrichment are unavailable due to a missing OAuth scope",
 				zap.Strings("degraded_features", degradedOther))
 		}
 	}
@@ -470,16 +454,10 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 	return client, nil
 }
 
-// runtimeOAuthScopes are every distinct OAuth scope newClient above actually
-// requests (plus the local groupsSettingsScope constant in
-// getGroupsSettingsService, which has no exported equivalent in the
-// groupssettings package) - consumed by resource_types_test.go's
-// TestBatonCapabilitiesDeclareEveryRuntimeScope to catch a scope requested
-// here with no matching entry in any resourceType's capabilityPermissions().
-// Kept in this file, next to the calls it describes, specifically so a
-// future edit to newClient's scope wiring is more likely to get this list
-// updated in the same change - update this list whenever a getXxxService
-// call above is added, removed, or changes scope.
+// runtimeOAuthScopes lists every OAuth scope newClient above actually
+// requests; checked by TestBatonCapabilitiesDeclareEveryRuntimeScope against
+// baton_capabilities.json. Update whenever a getXxxService call above is
+// added, removed, or changes scope.
 var runtimeOAuthScopes = []string{
 	directoryAdmin.AdminDirectoryDomainReadonlyScope,
 	directoryAdmin.AdminDirectoryRolemanagementReadonlyScope,
@@ -497,13 +475,8 @@ var runtimeOAuthScopes = []string{
 	cloudidentity.CloudIdentityInboundssoReadonlyScope,
 }
 
-// subsumedByBroaderScope documents the runtimeOAuthScopes entries that are
-// intentionally absent from their own declared permission string in
-// baton_capabilities.json because a broader scope already declared elsewhere
-// covers the same access (see the "write scope subsumes read" comment on
-// resourceTypeUser in resource_types.go) - the readonly variant is still
-// requested at runtime (a separate *Service is constructed for it), but the
-// declared capability set only lists the write scope once. Anything not
+// subsumedByBroaderScope maps a runtime readonly scope to the broader write
+// scope that already covers it in baton_capabilities.json. Anything not
 // listed here must be declared under its own exact permission string.
 var subsumedByBroaderScope = map[string]string{
 	directoryAdmin.AdminDirectoryUserReadonlyScope:           "admin.directory.user",
@@ -512,12 +485,9 @@ var subsumedByBroaderScope = map[string]string{
 	directoryAdmin.AdminDirectoryRolemanagementReadonlyScope: "admin.directory.rolemanagement",
 }
 
-// syncGatingPurposes are the recordServiceInit "purpose" strings whose
-// underlying service, per ResourceSyncers() below, gates whether a resource
-// type is registered as a syncer at all - as opposed to every other purpose,
-// whose service backs provisioning, a named connector action, or optional
-// sync-time enrichment (e.g. SAML app ID resolution), which fails per
-// invocation rather than silently dropping a resource type from sync.
+// syncGatingPurposes are recordServiceInit purposes whose service gates
+// whether a resource type is registered at all, vs. every other purpose
+// (provisioning/actions/enrichment), which fails per-invocation instead.
 var syncGatingPurposes = map[string]bool{
 	"role resource synchronization":    true,
 	"user resource synchronization":    true,

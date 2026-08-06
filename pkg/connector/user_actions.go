@@ -449,7 +449,9 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Get current user to check current org unit
-	currentUser, err := o.client.GetUserForProvisioning(ctx, userId)
+	currentUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+		return o.client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -471,9 +473,11 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Update the user's organizational unit
-	updatedUser, err := o.client.UpdateUser(ctx, userId, &admin.User{
-		OrgUnitPath:     orgUnitPath,
-		ForceSendFields: []string{"OrgUnitPath"},
+	updatedUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+		return o.client.UpdateUser(ctx, userId, &admin.User{
+			OrgUnitPath:     orgUnitPath,
+			ForceSendFields: []string{"OrgUnitPath"},
+		})
 	})
 	if err != nil {
 		gerr := &googleapi.Error{}
@@ -558,7 +562,10 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 	// 4. Optionally archive the account
 	// The client wraps the Google API error (gRPC code + context + rate-limit
 	// info) via wrapGoogleApiErrorWithContext, so pass it through unchanged.
-	_, err = o.client.UpdateUser(ctx, userId, updateUser)
+	err = withActionRetry(ctx, func() error {
+		_, err := o.client.UpdateUser(ctx, userId, updateUser)
+		return err
+	})
 	if err != nil {
 		// Non-obvious cause worth surfacing: archiving requires an available
 		// archived-user license, which Google reports as a bare 412.
@@ -606,7 +613,9 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 	}
 
 	// Sign out the user
-	err = o.client.SignOutUser(ctx, userId)
+	err = withActionRetry(ctx, func() error {
+		return o.client.SignOutUser(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -630,7 +639,9 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	}
 
 	// List all tokens for the user
-	tokens, err := o.client.ListTokens(ctx, userId)
+	tokens, err := withActionRetryValue(ctx, func() (*admin.Tokens, error) {
+		return o.client.ListTokens(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -652,7 +663,9 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 			continue
 		}
 
-		err := o.client.DeleteToken(ctx, userId, token.ClientId)
+		err := withActionRetry(ctx, func() error {
+			return o.client.DeleteToken(ctx, userId, token.ClientId)
+		})
 		if err != nil {
 			gerr := &googleapi.Error{}
 			if errors.As(err, &gerr) {
@@ -703,7 +716,9 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	}
 
 	// List all application-specific passwords (ASPs) for the user
-	asps, err := o.client.ListAsps(ctx, userId)
+	asps, err := withActionRetryValue(ctx, func() (*admin.Asps, error) {
+		return o.client.ListAsps(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -718,7 +733,9 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	passwordsDeleted := 0
 	var lastErr error
 	for _, asp := range asps.Items {
-		err := o.client.DeleteAsp(ctx, userId, asp.CodeId)
+		err := withActionRetry(ctx, func() error {
+			return o.client.DeleteAsp(ctx, userId, asp.CodeId)
+		})
 		if err != nil {
 			gerr := &googleapi.Error{}
 			if errors.As(err, &gerr) {
@@ -791,7 +808,9 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	// Get current user to check current manager
-	currentUser, err := o.client.GetUserFullForProvisioning(ctx, userId)
+	currentUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+		return o.client.GetUserFullForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -817,9 +836,11 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	updatedRelations := buildManagerRelations(currentRelations, managerEmail)
 
 	// Update the user's relations
-	updatedUser, err := o.client.UpdateUser(ctx, userId, &admin.User{
-		Relations:       updatedRelations,
-		ForceSendFields: []string{"Relations"},
+	updatedUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+		return o.client.UpdateUser(ctx, userId, &admin.User{
+			Relations:       updatedRelations,
+			ForceSendFields: []string{"Relations"},
+		})
 	})
 	if err != nil {
 		return nil, nil, err
@@ -947,7 +968,9 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: make_admin: missing status argument")
 	}
 
-	err = o.client.MakeAdmin(ctx, userId, status)
+	err = withActionRetry(ctx, func() error {
+		return o.client.MakeAdmin(ctx, userId, status)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -962,14 +985,10 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 // userProfilePatch holds the optional profile fields to apply with patch
 // semantics. A nil pointer leaves the field untouched; a non-nil pointer
 // (including a pointer to the empty string) is sent to the API so callers can
-// clear a value. Exceptions: the name fields (givenName/familyName) ignore
-// empty strings and are treated as "not provided", since Google rejects empty
-// names. managerEmail is stricter still: present-but-empty is rejected
-// outright (InvalidArgument) rather than silently ignored, matching the
-// standalone update_user_manager action, which has never supported clearing
-// the manager relation - CXH-2153 asks this path to write "the same relation
-// the existing update_user_manager action writes", and that action requires
-// a non-empty, valid manager email.
+// clear a value. Exceptions: the name fields ignore empty strings (treated as
+// "not provided", since Google rejects empty names), and managerEmail has no
+// clear path at all - a present-but-invalid value is skipped, not applied
+// (see applyUserProfilePatch).
 type userProfilePatch struct {
 	givenName     *string
 	familyName    *string
@@ -984,18 +1003,12 @@ type userProfilePatch struct {
 	customSchemas map[string]googleapi.RawMessage
 }
 
-// applyUserProfilePatch applies a partial profile update and returns the
-// updated user, the list of changed fields, and any fields that were skipped
-// (provided but invalid, see the manager_email handling below) rather than
-// aborting the whole call. Shared by the resource-scoped update_user_profile
-// action and the global update_user action consumed by ConductorOne push
-// rules. Despite the name, this issues a Users.Update (PUT) instead of
-// Users.Patch only in the one case Patch is confirmed not to handle - see the
-// `usePut` comment below for why - so most fields (name, recovery, Employee
-// Information, manager) keep pure patch semantics; only setting employee_id
-// in a way that shrinks the ExternalIds array (any decrease in entry count -
-// not just clearing it to empty, see the `externalIDsWillShrink` comment
-// below) forces a full PUT.
+// applyUserProfilePatch applies a partial profile update, returning the
+// updated user, changed fields, and fields skipped as invalid rather than
+// aborting the whole call. Shared by update_user_profile and the global
+// update_user action. Uses Users.Update (PUT) instead of Patch only when an
+// employee_id change shrinks ExternalIds (see usePut below); everything else
+// uses Patch.
 func applyUserProfilePatch(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
@@ -1013,17 +1026,10 @@ func applyUserProfilePatch(
 	setGiven := patch.givenName != nil && *patch.givenName != ""
 	setFamily := patch.familyName != nil && *patch.familyName != ""
 	setOrg := patch.department != nil || patch.jobTitle != nil || patch.costCenter != nil || patch.employeeType != nil
-	// manager_email has no clear path through this action - see the Relations
-	// block below - matching the standalone update_user_manager action, which
-	// has never accepted an empty manager_email either. So unlike the recovery
-	// fields (empty means "clear") and unlike the name fields (empty means
-	// "not provided", silently skipped), a present-but-invalid manager_email is
-	// not applied. Unlike a hard validation failure, it does not abort the
-	// whole call either: it is skipped (reported in skippedFields, checked
-	// below) so any other valid fields in the same payload still apply,
-	// rather than one bad field discarding an entire push-rule-driven
-	// request. Checked before the read-modify-write GET below so a skip
-	// decision never costs an extra API call.
+	// manager_email can't be cleared through this action (matching
+	// update_user_manager). An invalid or empty value is skipped, not fatal,
+	// so other valid fields in the same payload still apply. Checked before
+	// the read-modify-write GET below so a skip decision costs no extra call.
 	setManagerEmail := patch.managerEmail != nil
 	if setManagerEmail {
 		switch *patch.managerEmail {
@@ -1047,7 +1053,9 @@ func applyUserProfilePatch(
 	var current *admin.User
 	if needCurrent {
 		var err error
-		current, err = client.GetUserFullForProvisioning(ctx, userId)
+		current, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+			return client.GetUserFullForProvisioning(ctx, userId)
+		})
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1099,11 +1107,8 @@ func applyUserProfilePatch(
 	usePut := externalIDsWillShrink
 	var update *admin.User
 	if usePut {
-		// Surface the accepted tradeoff above: today nothing signals when a
-		// call actually took the wider race window, which makes it
-		// impossible to correlate against a concurrent admin action reverted
-		// by this path after the fact (e.g. by grepping logs for a given
-		// user_id/time range once a suspicious revert is reported).
+		// Logged so a wider-race-window write (see the tradeoff above) can be
+		// correlated after the fact against a reported issue.
 		ctxzap.Extract(ctx).Debug("google-workspace: applyUserProfilePatch: employee_id shrinks ExternalIds, "+
 			"widening the update to a full-object Update (PUT) - concurrent changes to this user made "+
 			"between this call's GET and its write may be silently reverted",
@@ -1221,18 +1226,9 @@ func applyUserProfilePatch(
 		update.CustomSchemas = patch.customSchemas
 	}
 
-	// setOrg and patch.employeeID alone (regardless of whether they produced
-	// a wire-visible change) count as "a real field was provided":
-	// buildUpdatedOrganizations/buildUpdatedExternalIDs can each legitimately
-	// leave forceSend untouched - an Employee Information clear against a
-	// user with no existing organization (see buildUpdatedOrganizations's
-	// no-op comment above), or an idempotent employee_id resend that matches
-	// the current value (externalIDsDiffer false) - and that satisfied
-	// no-op must not be rejected as if nothing were provided at all. Any
-	// field whose builder can legitimately leave forceSend unchanged on a
-	// no-op needs the same treatment here; a field that always appends to
-	// forceSend when provided (recovery fields, name, manager_email) does
-	// not.
+	// setOrg/employeeID count as "provided" even when they leave forceSend
+	// untouched (a legitimate no-op, e.g. an idempotent resend) - otherwise a
+	// satisfied no-op would be rejected as "nothing provided."
 	if len(forceSend) == 0 && !customSchemasSet && !setOrg && patch.employeeID == nil {
 		if len(skippedFields) > 0 {
 			// Distinct from the "nothing provided" message below: a field
@@ -1251,22 +1247,20 @@ func applyUserProfilePatch(
 	var err error
 	switch {
 	case len(forceSend) == 0 && !customSchemasSet:
-		// A true no-op (the guard above let it through via the setOrg/
-		// employeeID exemptions - see the comment there). Re-fetch instead of
-		// issuing an empty-body PatchUser/UpdateUser: a write-classified call
-		// that changes nothing is still a write as far as Directory audit
-		// logs and any other system watching for real user changes are
-		// concerned, and externalIDsWillShrink (so usePut) can only be true
-		// when ExternalIds actually differs, which would have made forceSend
-		// non-empty - so usePut is never true here. A fresh GET also avoids
-		// returning the `current` snapshot fetched earlier in this call,
-		// which can be stale relative to a concurrent change (e.g.
-		// Suspended, LastLoginTime) by the time this function returns.
-		updatedUser, err = client.GetUserFullForProvisioning(ctx, userId)
+		// True no-op: re-fetch instead of an empty-body write (still an
+		// audited write) and to avoid returning the possibly-stale `current`
+		// snapshot fetched earlier in this call.
+		updatedUser, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+			return client.GetUserFullForProvisioning(ctx, userId)
+		})
 	case usePut:
-		updatedUser, err = client.UpdateUser(ctx, userId, update)
+		updatedUser, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+			return client.UpdateUser(ctx, userId, update)
+		})
 	default:
-		updatedUser, err = client.PatchUser(ctx, userId, update)
+		updatedUser, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+			return client.PatchUser(ctx, userId, update)
+		})
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -1437,11 +1431,16 @@ const (
 	argCustomSchemas = "custom_schemas"
 	argDepartment    = "department"
 	argJobTitle      = "job_title"
-	argCostCenter    = "cost_center"
-	argEmployeeType  = "employee_type"
-	argEmployeeID    = "employee_id"
-	argManagerEmail  = "manager_email"
-	displayUser      = "User"
+	// profileKeyTitle is the read-side profile key user.go mirrors job_title
+	// under for backward compatibility, and that profileFromJSON below also
+	// accepts as a third write-side alias for job_title (closing that
+	// round-trip gap).
+	profileKeyTitle = "title"
+	argCostCenter   = "cost_center"
+	argEmployeeType = "employee_type"
+	argEmployeeID   = "employee_id"
+	argManagerEmail = "manager_email"
+	displayUser     = "User"
 
 	// externalIDTypeOrganization is the admin.UserExternalId.Type value the
 	// Admin console's "Employee ID" field is stored under.
@@ -1590,7 +1589,7 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 		{&patch.recoveryEmail, []string{argRecoveryEmail, "recoveryEmail"}},
 		{&patch.recoveryPhone, []string{argRecoveryPhone, "recoveryPhone"}},
 		{&patch.department, []string{argDepartment}},
-		{&patch.jobTitle, []string{argJobTitle, "jobTitle"}},
+		{&patch.jobTitle, []string{argJobTitle, "jobTitle", profileKeyTitle}},
 		{&patch.costCenter, []string{argCostCenter, "costCenter"}},
 		{&patch.employeeType, []string{argEmployeeType, "employeeType"}},
 		{&patch.employeeID, []string{argEmployeeID, "employeeId"}},

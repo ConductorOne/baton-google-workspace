@@ -105,6 +105,25 @@ func TestProfileFromJSON(t *testing.T) {
 		require.Equal(t, "boss@example.com", *patch.managerEmail)
 	})
 
+	t.Run("title aliases job_title - closes the read/write round-trip gap", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{
+			"title": "Principal Engineer",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, patch.jobTitle)
+		require.Equal(t, "Principal Engineer", *patch.jobTitle)
+	})
+
+	t.Run("job_title takes precedence over title when both are present", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{
+			"job_title": "Staff Engineer",
+			"title":     "Principal Engineer",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, patch.jobTitle)
+		require.Equal(t, "Staff Engineer", *patch.jobTitle)
+	})
+
 	t.Run("empty object yields empty patch", func(t *testing.T) {
 		patch, err := profileFromJSON(map[string]any{})
 		require.NoError(t, err)

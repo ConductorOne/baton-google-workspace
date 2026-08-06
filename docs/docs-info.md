@@ -36,6 +36,12 @@
 
    **Custom schemas:** the profile-update actions (`update_user_profile`, `update_user`) can write values into custom-schema attributes via the Directory API `customSchemas` field. The connector only **sets values**; the schema **definitions must already exist** in the Workspace tenant (managed by the customer in Admin Console — the connector does not create or delete schema definitions and does not request the `admin.directory.userschema` scope).
 
+3. Does the connector support anything beyond scheduled full syncs?
+
+   Yes:
+   - **Targeted sync** — users, groups, and roles can each be fetched and refreshed individually by their native Google Workspace ID, without waiting for the next scheduled full sync (e.g. to verify current access during an access request or review).
+   - **Event feeds** — the connector streams near-real-time activity from the Google Admin Reports API between full syncs: user sign-in/app usage events (for accurate last-login tracking) and admin audit events (group/user membership changes). The usage and admin audit feeds require the `admin.reports.audit.readonly` scope; if it's missing, those feeds surface an error at sync time rather than being silently skipped. SAML and Google-login usage events are additionally gated on the Reports service being available and are omitted (not errored) if it isn't.
+
 ## Connector credentials
 
 1. What credentials or information are needed to set up the connector?

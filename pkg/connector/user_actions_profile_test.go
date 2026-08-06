@@ -428,15 +428,8 @@ func TestUpdateUserProfile_NoUpdatableFields(t *testing.T) {
 	}
 }
 
-// TestUpdateUserProfile_EmployeeInfoAllEmptyClears_NoExistingOrg_SucceedsAsNoOp
-// guards against a regression to the bug where clearing Employee Information
-// fields on a user with no existing Organizations entry was rejected with
-// "profile update requires at least one updatable field" - even though real,
-// recognized fields were supplied - instead of succeeding as a satisfied
-// no-op. buildUpdatedOrganizations correctly avoids creating a phantom
-// organization for this case (TestBuildUpdatedOrganizations covers that); this
-// test locks in that the top-level guard must not then treat the caller as
-// having provided nothing.
+// Regression guard: clearing Employee Information with no existing
+// Organizations entry must succeed as a no-op, not "nothing provided".
 func TestUpdateUserProfile_EmployeeInfoAllEmptyClears_NoExistingOrg_SucceedsAsNoOp(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
@@ -823,11 +816,8 @@ func TestUpdateUserProfile_EmployeeID_PreservesOtherExternalIds(t *testing.T) {
 	}
 }
 
-// TestUpdateUserProfile_EmployeeID_IdempotentResend_SucceedsAsNoOp guards
-// that a caller resending the employee_id it already has, with no other
-// field in the payload, succeeds as a satisfied no-op instead of hitting
-// "profile update requires at least one updatable field" - mirroring the
-// same guard exception already in place for Organizations no-ops.
+// Regression guard: resending the same employee_id with no other field must
+// succeed as a no-op, not "nothing provided".
 func TestUpdateUserProfile_EmployeeID_IdempotentResend_SucceedsAsNoOp(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{

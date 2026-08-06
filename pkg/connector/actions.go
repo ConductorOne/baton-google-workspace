@@ -288,9 +288,12 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	}
 
 	// update user.isSuspended state
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		Suspended:       isSuspended,
-		ForceSendFields: []string{fieldSuspended},
+	err = withActionRetry(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			Suspended:       isSuspended,
+			ForceSendFields: []string{fieldSuspended},
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to update user status: %w", err)
@@ -321,7 +324,9 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	}
 
 	// fetch current to ensure idempotency
-	u, err := client.GetUserForProvisioning(ctx, userId)
+	u, err := withActionRetryValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for disableUser: %w", userId, err)
 	}
@@ -332,9 +337,12 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		return &response, nil, nil
 	}
 
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		Suspended:       true,
-		ForceSendFields: []string{fieldSuspended},
+	err = withActionRetry(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			Suspended:       true,
+			ForceSendFields: []string{fieldSuspended},
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
@@ -360,7 +368,9 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	}
 
 	// fetch current to ensure idempotency
-	u, err := client.GetUserForProvisioning(ctx, userId)
+	u, err := withActionRetryValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for enableUser: %w", userId, err)
 	}
@@ -371,9 +381,12 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		return &response, nil, nil
 	}
 
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		Suspended:       false,
-		ForceSendFields: []string{fieldSuspended}, // This is needed because the SDK would omit any field that has the field type default value (false).
+	err = withActionRetry(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			Suspended:       false,
+			ForceSendFields: []string{fieldSuspended}, // This is needed because the SDK would omit any field that has the field type default value (false).
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
@@ -410,7 +423,9 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	}
 
 	// fetch current for return payload
-	u, err := client.GetUserForProvisioning(ctx, userId)
+	u, err := withActionRetryValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for changeUserPrimaryEmail: %w", userId, err)
 	}
@@ -424,9 +439,12 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return &response, nil, nil
 	}
 
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		PrimaryEmail:    newPrimary,
-		ForceSendFields: []string{"PrimaryEmail"},
+	err = withActionRetry(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			PrimaryEmail:    newPrimary,
+			ForceSendFields: []string{"PrimaryEmail"},
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to update primary email for user %s: %w", userId, err)
@@ -520,7 +538,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	for {
 		// Go through the transfers list and check if there is a transfer in progress for the given appID, source and target users.
 		// If there is, return the transfer ID and status.
-		transfers, err := client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
+		transfers, err := withActionRetryValue(ctx, func() (*datatransferAdmin.DataTransfersListResponse, error) {
+			return client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
+		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to list data transfers: %w", err)
 		}
@@ -559,6 +579,13 @@ func (c *GoogleWorkspace) dataTransferInsert(
 		},
 	}
 
+	// Deliberately not wrapped in withActionRetry: unlike the read/update
+	// calls elsewhere in this file, a retry after an ambiguous transient
+	// error (e.g. codes.DeadlineExceeded, where the server may have already
+	// committed the insert) risks creating a second, duplicate transfer -
+	// the list-based in-progress check above only runs once, before this
+	// call, so a retry here wouldn't re-detect a transfer its own earlier,
+	// timed-out attempt already created.
 	created, err := client.InsertDataTransfer(ctx, transfer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to create data transfer: %w", err)

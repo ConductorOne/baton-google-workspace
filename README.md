@@ -106,7 +106,7 @@ Connector actions are custom operations invoked on demand from C1 automations:
 
 > **Custom schemas:** `update_user_profile` and `update_user` can write values into custom-schema attributes (Directory API `customSchemas`). The connector only sets values — the schema **definitions must already exist** in the tenant (the connector does not request the `admin.directory.userschema` scope).
 
-> **Job title round-trip:** the synced user profile exposes the job title under both `title` and `job_title` for backward compatibility. Writing it back via `update_user_profile`/`update_user` only accepts `job_title` (or `jobTitle`) — a payload built from the synced profile's `title` key alone will silently drop the job title.
+> **Job title round-trip:** the synced user profile exposes the job title under both `title` and `job_title` for backward compatibility. `update_user`'s `user_profile` JSON object accepts any of `job_title`, `jobTitle`, or `title` as the source key. `update_user_profile` has a fixed schema and only exposes `job_title` as an argument name — pass the value under that key.
 
 > **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
 

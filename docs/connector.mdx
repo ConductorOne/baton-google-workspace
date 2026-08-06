@@ -46,7 +46,7 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | make_admin | `user_id` (resource ID, required)<br/>`status` (boolean, required) | Promotes (`status=true`) or demotes (`status=false`) a user to/from super administrator |
 
 <Note>
-The synced user profile exposes the job title under both `title` and `job_title`, for backward compatibility. Writing it back via `update_user_profile`/`update_user` only accepts `job_title` (or `jobTitle`) — a payload built from the synced profile's `title` key alone will silently drop the job title.
+The synced user profile exposes the job title under both `title` and `job_title`, for backward compatibility. `update_user`'s `user_profile` JSON object accepts any of `job_title`, `jobTitle`, or `title` as the source key. `update_user_profile` has a fixed argument schema and only exposes `job_title` — pass the value under that key.
 </Note>
 
 <Note>

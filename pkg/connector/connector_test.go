@@ -150,15 +150,11 @@ func TestGetClientAllowsAuthorizationInitErrors(t *testing.T) {
 	}
 }
 
-// TestGetClientLogsSkippedServicesAtInfoLevel guards that newClient surfaces
-// a missing-scope service above Debug: recordServiceInit logs each one at
-// Debug, which is invisible at the default log level, so without this a
-// tenant whose granted scopes don't match what the connector needs would
-// have zero indication a sync "succeeded" with services silently
-// unavailable. newClient emits an Info-level summary per category
-// (resource types absent from sync vs. degraded provisioning/actions/
-// enrichment - see syncGatingPurposes) naming every skipped service.
-func TestGetClientLogsSkippedServicesAtInfoLevel(t *testing.T) {
+// TestGetClientLogsSkippedServicesAtDebugLevel guards that a missing-scope
+// service is surfaced via a categorized Debug-level summary (resource types
+// absent from sync vs. degraded provisioning/actions/enrichment - see
+// syncGatingPurposes).
+func TestGetClientLogsSkippedServicesAtDebugLevel(t *testing.T) {
 	tokenServer, _ := newTokenStatusServer(http.StatusUnauthorized)
 	defer tokenServer.Close()
 
@@ -169,7 +165,7 @@ func TestGetClientLogsSkippedServicesAtInfoLevel(t *testing.T) {
 		serviceCache:       map[string]any{},
 	}
 
-	core, logs := observer.New(zapcore.InfoLevel)
+	core, logs := observer.New(zapcore.DebugLevel)
 	ctx := ctxzap.ToContext(context.Background(), zap.New(core))
 
 	if _, err := c.getClient(ctx); err != nil {
@@ -182,10 +178,10 @@ func TestGetClientLogsSkippedServicesAtInfoLevel(t *testing.T) {
 	// "user resource provisioning").
 	missingRTEntries := logs.FilterMessageSnippet("resource types will be entirely absent from sync").All()
 	if len(missingRTEntries) != 1 {
-		t.Fatalf("expected exactly one Info-level missing-resource-types summary, got %d entries: %+v", len(missingRTEntries), logs.All())
+		t.Fatalf("expected exactly one Debug-level missing-resource-types summary, got %d entries: %+v", len(missingRTEntries), logs.All())
 	}
-	if missingRTEntries[0].Level != zapcore.InfoLevel {
-		t.Fatalf("expected the summary to be logged at Info level, got %v", missingRTEntries[0].Level)
+	if missingRTEntries[0].Level != zapcore.DebugLevel {
+		t.Fatalf("expected the summary to be logged at Debug level, got %v", missingRTEntries[0].Level)
 	}
 	missingRT, ok := missingRTEntries[0].ContextMap()["missing_resource_types"].([]interface{})
 	if !ok || len(missingRT) == 0 {
@@ -194,7 +190,7 @@ func TestGetClientLogsSkippedServicesAtInfoLevel(t *testing.T) {
 
 	degradedEntries := logs.FilterMessageSnippet("provisioning operations, actions, or optional sync enrichment").All()
 	if len(degradedEntries) != 1 {
-		t.Fatalf("expected exactly one Info-level degraded-features summary, got %d entries: %+v", len(degradedEntries), logs.All())
+		t.Fatalf("expected exactly one Debug-level degraded-features summary, got %d entries: %+v", len(degradedEntries), logs.All())
 	}
 	degraded, ok := degradedEntries[0].ContextMap()["degraded_features"].([]interface{})
 	if !ok || len(degraded) == 0 {

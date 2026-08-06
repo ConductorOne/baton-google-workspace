@@ -2,7 +2,9 @@ package client
 
 import (
 	"testing"
+	"time"
 
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
@@ -20,6 +22,29 @@ func TestWrapGoogleApiErrorWithContext_403Throttle(t *testing.T) {
 		st, ok := status.FromError(wrapped)
 		require.True(t, ok)
 		require.Equal(t, codes.Unavailable, st.Code())
+	})
+
+	t.Run("userRateLimitExceeded carries a synthesized RateLimitDescription - ExtractRateLimitData only populates one for 429", func(t *testing.T) {
+		e := &googleapi.Error{
+			Code:    403,
+			Message: "User Rate Limit Exceeded",
+			Errors:  []googleapi.ErrorItem{{Reason: errorReasonUserRateLimitExceeded}},
+		}
+		before := time.Now()
+		wrapped := wrapGoogleApiErrorWithContext(e, "test")
+		st, ok := status.FromError(wrapped)
+		require.True(t, ok)
+
+		var found *v2.RateLimitDescription
+		for _, d := range st.Details() {
+			if rl, ok := d.(*v2.RateLimitDescription); ok {
+				found = rl
+			}
+		}
+		require.NotNil(t, found, "expected a RateLimitDescription detail on the reclassified 403")
+		require.Equal(t, v2.RateLimitDescription_STATUS_OVERLIMIT, found.GetStatus())
+		require.EqualValues(t, 0, found.GetRemaining())
+		require.True(t, found.GetResetAt().AsTime().After(before), "ResetAt should be in the future")
 	})
 
 	t.Run("quotaExceeded stays PermissionDenied - not reliably transient, unlike userRateLimitExceeded", func(t *testing.T) {

@@ -121,15 +121,9 @@ func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
 }
 
 // optionalStringField returns a pointer to the trimmed value of an optional
-// string arg, or nil when the arg is absent. Presence (not emptiness) decides:
-// a present empty string yields a pointer to "" so callers can distinguish
-// "clear this field" from "leave untouched". Returns an error if the arg is
-// present with a genuinely wrong-typed value (a number, bool, list, or
-// struct), rather than silently treating it the same as a present empty
-// string (which several callers interpret as an explicit clear instruction).
-// A present JSON null (structpb NullValue) is treated the same as the arg
-// being absent, not as wrong-typed - it represents "no value," not a
-// malformed one.
+// string arg, or nil when absent. A present empty string means "clear"; a
+// wrong-typed value errors instead of being silently coerced; a JSON null is
+// treated as absent.
 func optionalStringField(args *structpb.Struct, fieldName string) (*string, error) {
 	if args == nil || args.Fields == nil {
 		return nil, nil
