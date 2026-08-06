@@ -338,6 +338,12 @@ var (
 				Description: "The updated user resource.",
 				Field:       &config.Field_ResourceField{},
 			},
+			{
+				Name:        fieldSkippedFields,
+				DisplayName: "Skipped Fields",
+				Description: descriptionSkippedFields,
+				Field:       &config.Field_StringField{},
+			},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_UPDATE_PROFILE},
 	}
@@ -854,17 +860,28 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		return nil, nil, err
 	}
 
-	patch := userProfilePatch{
-		givenName:     optionalStringField(args, argGivenName),
-		familyName:    optionalStringField(args, argFamilyName),
-		recoveryEmail: optionalStringField(args, argRecoveryEmail),
-		recoveryPhone: optionalStringField(args, argRecoveryPhone),
-		department:    optionalStringField(args, argDepartment),
-		jobTitle:      optionalStringField(args, argJobTitle),
-		costCenter:    optionalStringField(args, argCostCenter),
-		employeeType:  optionalStringField(args, argEmployeeType),
-		employeeID:    optionalStringField(args, argEmployeeID),
-		managerEmail:  optionalStringField(args, argManagerEmail),
+	var patch userProfilePatch
+	for _, f := range []struct {
+		dest *(*string)
+		name string
+	}{
+		{&patch.givenName, argGivenName},
+		{&patch.familyName, argFamilyName},
+		{&patch.recoveryEmail, argRecoveryEmail},
+		{&patch.recoveryPhone, argRecoveryPhone},
+		{&patch.department, argDepartment},
+		{&patch.jobTitle, argJobTitle},
+		{&patch.costCenter, argCostCenter},
+		{&patch.employeeType, argEmployeeType},
+		{&patch.employeeID, argEmployeeID},
+		{&patch.managerEmail, argManagerEmail},
+	} {
+		v, err := optionalStringField(args, f.name)
+		if err != nil {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				fmt.Sprintf("google-workspace: update_user_profile: invalid %s", f.name), err)
+		}
+		*f.dest = v
 	}
 
 	// Custom schemas: raw JSON object mapping schemaName -> { fieldName: value },
@@ -878,14 +895,15 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		patch.customSchemas = schemas
 	}
 
-	updatedUser, updatedFields, err := applyUserProfilePatch(ctx, o.client, userId, patch)
+	updatedUser, updatedFields, skippedFields, err := applyUserProfilePatch(ctx, o.client, userId, patch)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	l.Debug("google-workspace: user action handler: updated user profile",
 		zap.String(argUserID, userId),
-		zap.Strings("fields", updatedFields))
+		zap.Strings("fields", updatedFields),
+		zap.Strings(fieldSkippedFields, skippedFields))
 
 	userResource, err := o.userResource(ctx, updatedUser)
 	if err != nil {
@@ -897,7 +915,8 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
 
-	return actions.NewReturnValues(true, resourceRv), nil, nil
+	return actions.NewReturnValues(true, resourceRv,
+		actions.NewStringReturnField(fieldSkippedFields, strings.Join(skippedFields, ", "))), nil, nil
 }
 
 func (o *userResourceType) registerMakeAdminAction(ctx context.Context, registry actions.ActionRegistry) error {
@@ -966,22 +985,25 @@ type userProfilePatch struct {
 }
 
 // applyUserProfilePatch applies a partial profile update and returns the
-// updated user plus the list of changed fields. Shared by the resource-scoped
-// update_user_profile action and the global update_user action consumed by
-// ConductorOne push rules. Despite the name, this issues a Users.Update (PUT)
-// instead of Users.Patch only in the one case Patch is confirmed not to
-// handle - see the `usePut` comment below for why - so most fields (name,
-// recovery, Employee Information, manager) keep pure patch semantics; only
-// setting employee_id in a way that shrinks the ExternalIds array (any
-// decrease in entry count - not just clearing it to empty, see the
-// `externalIDsWillShrink` comment below) forces a full PUT.
+// updated user, the list of changed fields, and any fields that were skipped
+// (provided but invalid, see the manager_email handling below) rather than
+// aborting the whole call. Shared by the resource-scoped update_user_profile
+// action and the global update_user action consumed by ConductorOne push
+// rules. Despite the name, this issues a Users.Update (PUT) instead of
+// Users.Patch only in the one case Patch is confirmed not to handle - see the
+// `usePut` comment below for why - so most fields (name, recovery, Employee
+// Information, manager) keep pure patch semantics; only setting employee_id
+// in a way that shrinks the ExternalIds array (any decrease in entry count -
+// not just clearing it to empty, see the `externalIDsWillShrink` comment
+// below) forces a full PUT.
 func applyUserProfilePatch(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
 	userId string,
 	patch userProfilePatch,
-) (*admin.User, []string, error) {
+) (*admin.User, []string, []string, error) {
 	forceSend := make([]string, 0)
+	var skippedFields []string
 
 	// Name fields. A patch replaces the whole "name" object, so read-modify-write
 	// to avoid clearing the sibling field the caller did not set. Unlike the
@@ -995,21 +1017,24 @@ func applyUserProfilePatch(
 	// block below - matching the standalone update_user_manager action, which
 	// has never accepted an empty manager_email either. So unlike the recovery
 	// fields (empty means "clear") and unlike the name fields (empty means
-	// "not provided", silently skipped), a present-but-empty manager_email is
-	// rejected outright: silently no-op'ing it would leave a caller asking to
-	// drop a manager with a false "success" and no indication anything was
-	// skipped.
+	// "not provided", silently skipped), a present-but-invalid manager_email is
+	// not applied. Unlike a hard validation failure, it does not abort the
+	// whole call either: it is skipped (reported in skippedFields, checked
+	// below) so any other valid fields in the same payload still apply,
+	// rather than one bad field discarding an entire push-rule-driven
+	// request. Checked before the read-modify-write GET below so a skip
+	// decision never costs an extra API call.
 	setManagerEmail := patch.managerEmail != nil
-	// Validate before the read-modify-write GET below so an invalid value
-	// fails fast without burning an API call.
 	if setManagerEmail {
-		if *patch.managerEmail == "" {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-				"google-workspace: invalid manager_email: manager_email cannot be cleared through this action")
-		}
-		if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
+		switch *patch.managerEmail {
+		case "":
+			skippedFields = append(skippedFields, "manager_email (cannot be cleared through this action)")
+			setManagerEmail = false
+		default:
+			if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
+				skippedFields = append(skippedFields, fmt.Sprintf("manager_email (invalid email address %q)", *patch.managerEmail))
+				setManagerEmail = false
+			}
 		}
 	}
 
@@ -1024,7 +1049,7 @@ func applyUserProfilePatch(
 		var err error
 		current, err = client.GetUserFullForProvisioning(ctx, userId)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
@@ -1039,13 +1064,14 @@ func applyUserProfilePatch(
 	// profile[argEmployeeID] in user.go) shrinks the array here too, not just
 	// the empty-string clear case.
 	var updatedExternalIDs []admin.UserExternalId
+	externalIDsChanged := false
 	externalIDsWillShrink := false
 	if patch.employeeID != nil {
 		currentExtIDs, err := extractFromInterface[*admin.UserExternalId](current.ExternalIds)
 		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
+			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
 		}
-		updatedExternalIDs = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
+		updatedExternalIDs, externalIDsChanged = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
 		externalIDsWillShrink = len(updatedExternalIDs) < len(currentExtIDs)
 	}
 
@@ -1073,6 +1099,15 @@ func applyUserProfilePatch(
 	usePut := externalIDsWillShrink
 	var update *admin.User
 	if usePut {
+		// Surface the accepted tradeoff above: today nothing signals when a
+		// call actually took the wider race window, which makes it
+		// impossible to correlate against a concurrent admin action reverted
+		// by this path after the fact (e.g. by grepping logs for a given
+		// user_id/time range once a suspicious revert is reported).
+		ctxzap.Extract(ctx).Debug("google-workspace: applyUserProfilePatch: employee_id shrinks ExternalIds, "+
+			"widening the update to a full-object Update (PUT) - concurrent changes to this user made "+
+			"between this call's GET and its write may be silently reverted",
+			zap.String(argUserID, userId))
 		full := *current
 		update = &full
 	} else {
@@ -1103,7 +1138,7 @@ func applyUserProfilePatch(
 		// Empty string is a legitimate "clear" request; only validate non-empty values.
 		if *patch.recoveryEmail != "" {
 			if _, err := mail.ParseAddress(*patch.recoveryEmail); err != nil {
-				return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
 					fmt.Sprintf("google-workspace: invalid recovery_email: %s", *patch.recoveryEmail), err)
 			}
 		}
@@ -1126,16 +1161,27 @@ func applyUserProfilePatch(
 	if setOrg {
 		orgs, err := extractFromInterface[*admin.UserOrganization](current.Organizations)
 		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
+			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
 		}
 		updatedOrgs, changed := buildUpdatedOrganizations(orgs, patch)
-		update.Organizations = updatedOrgs
+		// Only assign update.Organizations when something actually changed:
+		// Organizations is an interface{}-typed field, and Google's generated
+		// MarshalJSON (gensupport.includeField) treats any non-nil interface
+		// value as "must serialize" regardless of ForceSendFields - even a
+		// non-nil empty slice. Assigning it unconditionally would send
+		// "organizations":[] on every no-op call, exactly the empty wire
+		// noise this comment already claims to avoid.
 		if changed {
+			update.Organizations = updatedOrgs
 			forceSend = append(forceSend, "Organizations")
 		}
 	}
 
-	if patch.employeeID != nil {
+	if patch.employeeID != nil && externalIDsChanged {
+		// Gated on externalIDsChanged for the same reason as Organizations
+		// above: ExternalIds is also an interface{}-typed field, so an
+		// unconditional assignment would serialize on the wire regardless of
+		// ForceSendFields.
 		update.ExternalIds = updatedExternalIDs
 		forceSend = append(forceSend, "ExternalIds")
 	}
@@ -1147,7 +1193,7 @@ func applyUserProfilePatch(
 	if setManagerEmail {
 		currentRelations, err := extractFromInterface[*admin.UserRelation](current.Relations)
 		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace: failed to parse relations: %w", err)
+			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse relations: %w", err)
 		}
 		update.Relations = buildManagerRelations(currentRelations, *patch.managerEmail)
 		forceSend = append(forceSend, "Relations")
@@ -1175,8 +1221,28 @@ func applyUserProfilePatch(
 		update.CustomSchemas = patch.customSchemas
 	}
 
-	if len(forceSend) == 0 && !customSchemasSet {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
+	// setOrg and patch.employeeID alone (regardless of whether they produced
+	// a wire-visible change) count as "a real field was provided":
+	// buildUpdatedOrganizations/buildUpdatedExternalIDs can each legitimately
+	// leave forceSend untouched - an Employee Information clear against a
+	// user with no existing organization (see buildUpdatedOrganizations's
+	// no-op comment above), or an idempotent employee_id resend that matches
+	// the current value (externalIDsDiffer false) - and that satisfied
+	// no-op must not be rejected as if nothing were provided at all. Any
+	// field whose builder can legitimately leave forceSend unchanged on a
+	// no-op needs the same treatment here; a field that always appends to
+	// forceSend when provided (recovery fields, name, manager_email) does
+	// not.
+	if len(forceSend) == 0 && !customSchemasSet && !setOrg && patch.employeeID == nil {
+		if len(skippedFields) > 0 {
+			// Distinct from the "nothing provided" message below: a field
+			// WAS provided here, it just couldn't be applied - leading with
+			// "requires at least one updatable field" while also naming a
+			// provided-but-rejected field reads as self-contradictory.
+			return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				fmt.Sprintf("google-workspace: no updatable field was applied - the only field(s) provided were skipped: %s", strings.Join(skippedFields, "; ")))
+		}
+		return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
 	}
 
 	update.ForceSendFields = forceSend
@@ -1189,14 +1255,14 @@ func applyUserProfilePatch(
 		updatedUser, err = client.PatchUser(ctx, userId, update)
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	updatedFields := append([]string{}, forceSend...)
 	if customSchemasSet {
 		updatedFields = append(updatedFields, "CustomSchemas")
 	}
-	return updatedUser, updatedFields, nil
+	return updatedUser, updatedFields, skippedFields, nil
 }
 
 // buildUpdatedOrganizations merges the requested department/job title/cost
@@ -1283,8 +1349,12 @@ func hasNonEmptyOrgField(patch userProfilePatch) bool {
 // employeeID is empty. Other ExternalIds entries (account/login_id/network,
 // etc.) are preserved. Always writes at most one "organization" entry - see
 // the comment on profile[argEmployeeID] in user.go for the one edge case
-// where that's lossy against a tenant that already has more than one.
-func buildUpdatedExternalIDs(ids []*admin.UserExternalId, employeeID string) []admin.UserExternalId {
+// where that's lossy against a tenant that already has more than one. The
+// second return value reports whether the result actually differs from ids,
+// mirroring buildUpdatedOrganizations, so an idempotent re-send of the same
+// employee_id (or a clear request against an already-absent entry) isn't
+// reported as a changed field.
+func buildUpdatedExternalIDs(ids []*admin.UserExternalId, employeeID string) ([]admin.UserExternalId, bool) {
 	updated := make([]admin.UserExternalId, 0, len(ids)+1)
 	for _, id := range ids {
 		if id.Type != externalIDTypeOrganization {
@@ -1297,7 +1367,30 @@ func buildUpdatedExternalIDs(ids []*admin.UserExternalId, employeeID string) []a
 			Value: employeeID,
 		})
 	}
-	return updated
+	return updated, externalIDsDiffer(ids, updated)
+}
+
+// externalIDsDiffer reports whether updated differs from current as an
+// unordered set of Type+Value pairs (order isn't meaningful here: preserved
+// entries keep their relative order, but a rebuilt "organization" entry is
+// always appended last regardless of its original position).
+func externalIDsDiffer(current []*admin.UserExternalId, updated []admin.UserExternalId) bool {
+	if len(current) != len(updated) {
+		return true
+	}
+	type key struct{ Type, Value string }
+	counts := make(map[key]int, len(current))
+	for _, id := range current {
+		counts[key{id.Type, id.Value}]++
+	}
+	for _, id := range updated {
+		k := key{id.Type, id.Value}
+		if counts[k] == 0 {
+			return true
+		}
+		counts[k]--
+	}
+	return false
 }
 
 // buildManagerRelations sets the "manager" Relations entry to managerEmail,
@@ -1398,6 +1491,12 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 			Description: "Comma-separated list of profile fields that were changed.",
 			Field:       &config.Field_StringField{},
 		},
+		{
+			Name:        fieldSkippedFields,
+			DisplayName: "Skipped Fields",
+			Description: descriptionSkippedFields,
+			Field:       &config.Field_StringField{},
+		},
 	},
 	ActionType: []v2.ActionType{
 		v2.ActionType_ACTION_TYPE_ACCOUNT,
@@ -1442,18 +1541,20 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 			fmt.Sprintf("google-workspace: update_user: user provisioning service not available - requires %s scope", admin.AdminDirectoryUserScope))
 	}
 
-	_, updatedFields, err := applyUserProfilePatch(ctx, client, userId, patch)
+	_, updatedFields, skippedFields, err := applyUserProfilePatch(ctx, client, userId, patch)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	l.Debug("google-workspace: update_user: updated user profile",
 		zap.String(argUserID, userId),
-		zap.Strings("fields", updatedFields))
+		zap.Strings("fields", updatedFields),
+		zap.Strings(fieldSkippedFields, skippedFields))
 
 	result, err := structpb.NewStruct(map[string]any{
-		fieldSuccess:     true,
-		"updated_fields": strings.Join(updatedFields, ", "),
+		fieldSuccess:       true,
+		"updated_fields":   strings.Join(updatedFields, ", "),
+		fieldSkippedFields: strings.Join(skippedFields, ", "),
 	})
 	if err != nil {
 		return nil, nil, uhttp.WrapErrors(codes.Internal, "google-workspace: update_user: failed to build result")
@@ -1465,36 +1566,29 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 // profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)
 // to a userProfilePatch. Only keys present in the object are applied.
 func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
-	patch := userProfilePatch{}
-	if v, ok := stringFromJSON(profile, argGivenName, "givenName"); ok {
-		patch.givenName = &v
-	}
-	if v, ok := stringFromJSON(profile, argFamilyName, "familyName"); ok {
-		patch.familyName = &v
-	}
-	if v, ok := stringFromJSON(profile, argRecoveryEmail, "recoveryEmail"); ok {
-		patch.recoveryEmail = &v
-	}
-	if v, ok := stringFromJSON(profile, argRecoveryPhone, "recoveryPhone"); ok {
-		patch.recoveryPhone = &v
-	}
-	if v, ok := stringFromJSON(profile, argDepartment, "department"); ok {
-		patch.department = &v
-	}
-	if v, ok := stringFromJSON(profile, argJobTitle, "jobTitle"); ok {
-		patch.jobTitle = &v
-	}
-	if v, ok := stringFromJSON(profile, argCostCenter, "costCenter"); ok {
-		patch.costCenter = &v
-	}
-	if v, ok := stringFromJSON(profile, argEmployeeType, "employeeType"); ok {
-		patch.employeeType = &v
-	}
-	if v, ok := stringFromJSON(profile, argEmployeeID, "employeeId"); ok {
-		patch.employeeID = &v
-	}
-	if v, ok := stringFromJSON(profile, argManagerEmail, "managerEmail"); ok {
-		patch.managerEmail = &v
+	var patch userProfilePatch
+	for _, f := range []struct {
+		dest *(*string)
+		keys []string
+	}{
+		{&patch.givenName, []string{argGivenName, "givenName"}},
+		{&patch.familyName, []string{argFamilyName, "familyName"}},
+		{&patch.recoveryEmail, []string{argRecoveryEmail, "recoveryEmail"}},
+		{&patch.recoveryPhone, []string{argRecoveryPhone, "recoveryPhone"}},
+		{&patch.department, []string{argDepartment}},
+		{&patch.jobTitle, []string{argJobTitle, "jobTitle"}},
+		{&patch.costCenter, []string{argCostCenter, "costCenter"}},
+		{&patch.employeeType, []string{argEmployeeType, "employeeType"}},
+		{&patch.employeeID, []string{argEmployeeID, "employeeId"}},
+		{&patch.managerEmail, []string{argManagerEmail, "managerEmail"}},
+	} {
+		v, ok, err := stringFromJSON(profile, f.keys...)
+		if err != nil {
+			return patch, err
+		}
+		if ok {
+			*f.dest = &v
+		}
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
@@ -1516,14 +1610,23 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 	return patch, nil
 }
 
-// stringFromJSON returns the first key present in profile whose value is a string.
-func stringFromJSON(profile map[string]any, keys ...string) (string, bool) {
+// stringFromJSON returns the value of the first key present in profile whose
+// value is a string, and reports whether any of the keys were present. It
+// returns an error if a key is present but its value is not a string (e.g. a
+// JSON number), rather than silently treating a malformed value as absent -
+// the caller would otherwise see the field quietly dropped with no
+// indication anything was wrong.
+func stringFromJSON(profile map[string]any, keys ...string) (string, bool, error) {
 	for _, k := range keys {
-		if v, ok := profile[k]; ok {
-			if s, ok := v.(string); ok {
-				return s, true
-			}
+		v, ok := profile[k]
+		if !ok {
+			continue
 		}
+		s, ok := v.(string)
+		if !ok {
+			return "", false, fmt.Errorf("%s must be a JSON string", k)
+		}
+		return s, true, nil
 	}
-	return "", false
+	return "", false, nil
 }

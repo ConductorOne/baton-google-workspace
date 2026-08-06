@@ -71,6 +71,9 @@
               },
               {
                 "permission": "admin.directory.domain.readonly"
+              },
+              {
+                "permission": "apps.groups.settings"
               }
             ]
           }
@@ -92,6 +95,9 @@
           },
           {
             "permission": "admin.directory.domain.readonly"
+          },
+          {
+            "permission": "apps.groups.settings"
           }
         ]
       }
@@ -159,10 +165,10 @@
                 "permission": "admin.directory.user"
               },
               {
-                "permission": "admin.directory.user.alias.readonly"
+                "permission": "admin.directory.domain.readonly"
               },
               {
-                "permission": "admin.directory.domain.readonly"
+                "permission": "admin.datatransfer"
               }
             ]
           }
@@ -180,10 +186,10 @@
             "permission": "admin.directory.user"
           },
           {
-            "permission": "admin.directory.user.alias.readonly"
+            "permission": "admin.directory.domain.readonly"
           },
           {
-            "permission": "admin.directory.domain.readonly"
+            "permission": "admin.datatransfer"
           }
         ]
       }

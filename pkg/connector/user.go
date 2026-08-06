@@ -130,6 +130,19 @@ func userBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, doma
 // future argument rename silently change the profile schema too.
 const profileKeyUserID = "user_id"
 
+// profileKeyOrgUnitPath is the synced user profile's "org_unit_path" key.
+// Kept separate from argOrgUnitPath (the change_org_unit action's argument
+// name, user_actions.go) for the same reason profileKeyUserID is kept
+// separate from argUserID above: a profile key is permanent API surface
+// (CLAUDE.md: never remove or rename profile keys), while an
+// action-argument name is a different, more freely-evolvable surface -
+// unlike job_title/employee_type/employee_id below, which deliberately share
+// their literal with their action-argument name so a push rule can read
+// back the value under the same key it wrote, org_unit_path's coupling to
+// argOrgUnitPath was incidental (a goconst-driven refactor, not a
+// round-trip design), so it gets its own constant instead.
+const profileKeyOrgUnitPath = "org_unit_path"
+
 func userProfile(user *admin.User) map[string]interface{} {
 	profile := make(map[string]interface{})
 	if user.Name != nil {
@@ -141,7 +154,7 @@ func userProfile(user *admin.User) map[string]interface{} {
 	}
 
 	profile[profileKeyUserID] = user.Id
-	profile[argOrgUnitPath] = user.OrgUnitPath
+	profile[profileKeyOrgUnitPath] = user.OrgUnitPath
 	profile["include_in_global_address_list"] = user.IncludeInGlobalAddressList
 
 	primaryOrg := extractPrimaryOrganizations(user)

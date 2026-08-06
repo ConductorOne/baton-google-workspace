@@ -40,8 +40,13 @@ const (
 	// happens to match, since the two can diverge independently - a struct
 	// field rename would need to update this constant, but should never
 	// accidentally affect display text (or vice versa).
-	fieldSuspended = "Suspended"
-	fieldResource  = "resource"
+	fieldSuspended     = "Suspended"
+	fieldResource      = "resource"
+	fieldSkippedFields = "skipped_fields"
+	// descriptionSkippedFields is shared by update_user_profile and
+	// update_user's skipped_fields return field, both backed by the same
+	// applyUserProfilePatch.
+	descriptionSkippedFields = "Comma-separated list of provided fields that were not applied, with the reason why (e.g. an invalid manager_email)."
 )
 
 // Global (account-level) connector action schemas. Their handlers live in this

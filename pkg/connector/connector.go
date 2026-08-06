@@ -335,7 +335,14 @@ func isAuthorizationError(err error) bool {
 // recordServiceInit records an error that occurred while initializing a service for resource syncers.
 // Authorization errors are logged at debug level as they are expected when scopes are not available.
 // Other errors (network, context cancellation, etc.) are fatal so the sync cannot persist a partial c1z.
-func recordServiceInit(l *zap.Logger, err error, scope, purpose string) error {
+// skipped, when non-nil, accumulates the purpose of every service skipped this
+// way so newClient can emit one Info-level summary after all services are
+// wired - the per-service Debug log above is invisible at the default log
+// level, so without this a tenant that granted the wrong scope set (whether
+// through misconfiguration or a connector bug under-declaring what it needs)
+// gets no indication anything failed to initialize until a dependent action
+// is invoked against a nil service.
+func recordServiceInit(l *zap.Logger, err error, scope, purpose string, skipped *[]string) error {
 	if err == nil {
 		return nil
 	}
@@ -343,6 +350,9 @@ func recordServiceInit(l *zap.Logger, err error, scope, purpose string) error {
 		l.Debug("google-workspace: service not available due to missing authorization scope",
 			zap.String("scope", scope),
 			zap.Error(err))
+		if skipped != nil {
+			*skipped = append(*skipped, purpose)
+		}
 		return nil
 	}
 
@@ -358,71 +368,163 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 	client := &gwclient.GoogleWorkspaceClient{}
 
 	var err error
+	var skippedServices []string
 
 	client.DomainService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryDomainReadonlyScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryDomainReadonlyScope, "domain service"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryDomainReadonlyScope, "domain service", &skippedServices); err != nil {
 		return nil, err
 	}
 
 	client.RoleService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryRolemanagementReadonlyScope, "role resource synchronization", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.RoleProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryRolemanagementScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryRolemanagementScope, "role resource provisioning", &skippedServices); err != nil {
 		return nil, err
 	}
 
 	client.UserService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.UserProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserScope, "user resource provisioning", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.UserSecurityService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserSecurityScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserSecurityScope, "user security operations", &skippedServices); err != nil {
 		return nil, err
 	}
 
 	client.GroupService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupReadonlyScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupReadonlyScope, "group resource synchronization", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.GroupMemberService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupMemberReadonlyScope, "group membership synchronization", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.GroupMemberProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupMemberScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupMemberScope, "group membership provisioning", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.GroupProvisioningService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryGroupScope)
-	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning"); err != nil {
+	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryGroupScope, "group resource provisioning", &skippedServices); err != nil {
 		return nil, err
 	}
 	client.GroupsSettingsService, err = c.getGroupsSettingsService(ctx)
-	if err := recordServiceInit(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings"); err != nil {
+	if err := recordServiceInit(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings", &skippedServices); err != nil {
 		return nil, err
 	}
 
 	client.DataTransferService, err = c.getDataTransferService(ctx, datatransferAdmin.AdminDatatransferScope)
-	if err := recordServiceInit(l, err, datatransferAdmin.AdminDatatransferScope, "data transfer service"); err != nil {
+	if err := recordServiceInit(l, err, datatransferAdmin.AdminDatatransferScope, "data transfer service", &skippedServices); err != nil {
 		return nil, err
 	}
 
 	client.ReportService, err = c.getReportService(ctx)
-	if err := recordServiceInit(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "report service"); err != nil {
+	if err := recordServiceInit(l, err, reportsAdmin.AdminReportsAuditReadonlyScope, "report service", &skippedServices); err != nil {
 		return nil, err
 	}
 
 	client.CloudIdentityService, err = getService(ctx, c, cloudidentity.CloudIdentityInboundssoReadonlyScope, cloudidentity.NewService)
-	if err := recordServiceInit(l, err, cloudidentity.CloudIdentityInboundssoReadonlyScope, "SAML/OIDC app discovery"); err != nil {
+	if err := recordServiceInit(l, err, cloudidentity.CloudIdentityInboundssoReadonlyScope, "SAML/OIDC app discovery", &skippedServices); err != nil {
 		return nil, err
 	}
 
+	// Visible at the default log level (unlike the per-service Debug log in
+	// recordServiceInit above), so a tenant whose granted scopes don't match
+	// what this connector actually needs - whether from misconfiguration or
+	// a connector bug under-declaring a required scope - has at least one
+	// indication a sync "succeeded" with functionality missing, instead of
+	// only discovering it when something fails later. Split into two
+	// messages rather than one generic "actions will fail": this
+	// connector's own docs use "action" specifically for the named custom
+	// operations (update_user_profile, modify_group_settings, etc.), so
+	// reusing that word for a missing resourceTypeSynchronizationScope
+	// service - which instead makes a whole resource type silently absent
+	// from ResourceSyncers() below, not merely fail an invocation - would
+	// misdirect an operator's troubleshooting.
+	if len(skippedServices) > 0 {
+		var missingResourceTypes, degradedOther []string
+		for _, purpose := range skippedServices {
+			if syncGatingPurposes[purpose] {
+				missingResourceTypes = append(missingResourceTypes, purpose)
+			} else {
+				degradedOther = append(degradedOther, purpose)
+			}
+		}
+		if len(missingResourceTypes) > 0 {
+			l.Info("google-workspace: some resource types will be entirely absent from sync due to a missing OAuth scope; run with --log-level=debug for the specific scopes",
+				zap.Strings("missing_resource_types", missingResourceTypes))
+		}
+		if len(degradedOther) > 0 {
+			l.Info("google-workspace: some provisioning operations, actions, or optional sync "+
+				"enrichment are unavailable due to a missing OAuth scope; run with --log-level=debug "+
+				"for the specific scopes",
+				zap.Strings("degraded_features", degradedOther))
+		}
+	}
+
 	return client, nil
+}
+
+// runtimeOAuthScopes are every distinct OAuth scope newClient above actually
+// requests (plus the local groupsSettingsScope constant in
+// getGroupsSettingsService, which has no exported equivalent in the
+// groupssettings package) - consumed by resource_types_test.go's
+// TestBatonCapabilitiesDeclareEveryRuntimeScope to catch a scope requested
+// here with no matching entry in any resourceType's capabilityPermissions().
+// Kept in this file, next to the calls it describes, specifically so a
+// future edit to newClient's scope wiring is more likely to get this list
+// updated in the same change - update this list whenever a getXxxService
+// call above is added, removed, or changes scope.
+var runtimeOAuthScopes = []string{
+	directoryAdmin.AdminDirectoryDomainReadonlyScope,
+	directoryAdmin.AdminDirectoryRolemanagementReadonlyScope,
+	directoryAdmin.AdminDirectoryRolemanagementScope,
+	directoryAdmin.AdminDirectoryUserReadonlyScope,
+	directoryAdmin.AdminDirectoryUserScope,
+	directoryAdmin.AdminDirectoryUserSecurityScope,
+	directoryAdmin.AdminDirectoryGroupReadonlyScope,
+	directoryAdmin.AdminDirectoryGroupMemberReadonlyScope,
+	directoryAdmin.AdminDirectoryGroupMemberScope,
+	directoryAdmin.AdminDirectoryGroupScope,
+	"https://www.googleapis.com/auth/apps.groups.settings", // groupsSettingsScope, getGroupsSettingsService above
+	datatransferAdmin.AdminDatatransferScope,
+	reportsAdmin.AdminReportsAuditReadonlyScope,
+	cloudidentity.CloudIdentityInboundssoReadonlyScope,
+}
+
+// subsumedByBroaderScope documents the runtimeOAuthScopes entries that are
+// intentionally absent from their own declared permission string in
+// baton_capabilities.json because a broader scope already declared elsewhere
+// covers the same access (see the "write scope subsumes read" comment on
+// resourceTypeUser in resource_types.go) - the readonly variant is still
+// requested at runtime (a separate *Service is constructed for it), but the
+// declared capability set only lists the write scope once. Anything not
+// listed here must be declared under its own exact permission string.
+var subsumedByBroaderScope = map[string]string{
+	directoryAdmin.AdminDirectoryUserReadonlyScope:           "admin.directory.user",
+	directoryAdmin.AdminDirectoryGroupReadonlyScope:          "admin.directory.group",
+	directoryAdmin.AdminDirectoryGroupMemberReadonlyScope:    "admin.directory.group.member",
+	directoryAdmin.AdminDirectoryRolemanagementReadonlyScope: "admin.directory.rolemanagement",
+}
+
+// syncGatingPurposes are the recordServiceInit "purpose" strings whose
+// underlying service, per ResourceSyncers() below, gates whether a resource
+// type is registered as a syncer at all - as opposed to every other purpose,
+// whose service backs provisioning, a named connector action, or optional
+// sync-time enrichment (e.g. SAML app ID resolution), which fails per
+// invocation rather than silently dropping a resource type from sync.
+var syncGatingPurposes = map[string]bool{
+	"role resource synchronization":    true,
+	"user resource synchronization":    true,
+	"group resource synchronization":   true,
+	"group membership synchronization": true,
+	"user security operations":         true,
+	"report service":                   true,
 }
 
 func (c *GoogleWorkspace) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {

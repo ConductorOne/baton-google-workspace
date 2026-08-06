@@ -4,7 +4,7 @@
    - **Users** (`user`) — All Google Workspace users via the Admin SDK Directory API (`users.list`, projection `full`), including status (active/suspended), primary and alias emails, name, organizational unit, manager relation, recovery email/phone, and custom-schema attribute values.
    - **Groups** (`group`) — All Google Groups via the Directory API (`groups.list`, `members.list`). Each group exposes a `member` entitlement representing membership (granted to users and nested groups).
    - **Roles** (`role`) — All admin roles via the Directory API role-management endpoints (`roles.list`, `roleAssignments.list`). Each role exposes a `member` entitlement representing role assignment (granted to users and groups).
-   - **Enterprise Applications** (`application`) — SAML/OIDC apps discovered via the Cloud Identity API and OAuth apps discovered via per-user token listing (`tokens.list`). Each application exposes an assignment entitlement granted to users. **Read-only** (no provisioning).
+   - **Enterprise Applications** (`enterprise_application`) — SAML/OIDC apps discovered via the Cloud Identity API and OAuth apps discovered via per-user token listing (`tokens.list`). Each application exposes an assignment entitlement granted to users. **Read-only** (no provisioning).
 
 2. Can the connector provision any resources? If so, which ones?
 
@@ -12,15 +12,15 @@
    - **Create/Delete user accounts** — via Directory API `users.insert` and `users.delete`. New accounts are created with a generated random password.
    - **Grant/Revoke group membership** — via Directory API `members.insert` and `members.delete`.
    - **Grant/Revoke role assignment** — via Directory API `roleAssignments.insert` and `roleAssignments.delete`.
-   - **Create groups** — via the `create_group` connector action (Directory API `groups.insert`).
+   - **Create/Delete groups** — creation via the `create_group` connector action (Directory API `groups.insert`); deletion via Directory API `groups.delete`.
 
    In addition, the connector ships a set of **connector actions** (custom operations invoked on demand from C1 automations):
 
    | Action | API endpoint(s) | Purpose |
    | --- | --- | --- |
    | `update_user_status` / `disable_user` / `enable_user` | `users.update` | Suspend / activate a user (idempotent) |
-   | `update_user_profile` | `users.patch` | Partial profile update (name, recovery details, custom-schema values) with patch semantics |
-   | `update_user` | `users.patch` | Profile update from a `user_profile` JSON object; consumed by C1 push rules for automated profile sync |
+   | `update_user_profile` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Partial profile update: name, recovery details, Employee Information (department, job title, cost center, employee ID, employee type), manager relation, custom-schema values |
+   | `update_user` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Profile update from a `user_profile` JSON object (same fields as `update_user_profile`); consumed by C1 push rules for automated profile sync |
    | `update_user_manager` | `users.update` | Set the user's `manager` relation |
    | `make_admin` | `users.makeAdmin` | Promote/demote a user to/from super administrator |
    | `change_user_org_unit` | `users.update` | Move a user to a different organizational unit |
@@ -124,4 +124,4 @@
 
    ### Rate limits
 
-   The Admin SDK Directory API enforces per-project and per-user quotas (default ~2,400 queries/minute/project for the Directory API). The connector relies on the Baton SDK's HTTP client for retry/backoff on `429`/`5xx` responses.
+   The Admin SDK Directory API enforces per-project and per-user quotas (default ~2,400 queries/minute/project for the Directory API). Throttling can arrive as `429`, or as `403` with a rate-limit reason (`userRateLimitExceeded`/`quotaExceeded`); the connector classifies both, along with `5xx` responses, as retryable, and the Baton SDK's sync-phase retryer backs off and retries.

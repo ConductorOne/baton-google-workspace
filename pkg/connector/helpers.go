@@ -123,16 +123,24 @@ func getBoolField(args *structpb.Struct, fieldName string) (bool, bool) {
 // optionalStringField returns a pointer to the trimmed value of an optional
 // string arg, or nil when the arg is absent. Presence (not emptiness) decides:
 // a present empty string yields a pointer to "" so callers can distinguish
-// "clear this field" from "leave untouched".
-func optionalStringField(args *structpb.Struct, fieldName string) *string {
+// "clear this field" from "leave untouched". Returns an error if the arg is
+// present but its value is not a string, rather than silently treating a
+// wrong-typed value the same as a present empty string (which several
+// callers interpret as an explicit clear instruction).
+func optionalStringField(args *structpb.Struct, fieldName string) (*string, error) {
 	if args == nil || args.Fields == nil {
-		return nil
+		return nil, nil
 	}
-	if _, ok := args.Fields[fieldName]; !ok {
-		return nil
+	field, ok := args.Fields[fieldName]
+	if !ok {
+		return nil, nil
 	}
-	v := getStringField(args, fieldName)
-	return &v
+	strVal, ok := field.GetKind().(*structpb.Value_StringValue)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a string", fieldName)
+	}
+	v := strings.TrimSpace(strVal.StringValue)
+	return &v, nil
 }
 
 // applyBooleanGroupSetting applies a boolean group setting and returns the update result.

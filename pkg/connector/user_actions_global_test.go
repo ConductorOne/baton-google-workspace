@@ -145,6 +145,21 @@ func TestProfileFromJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, patch.customSchemas)
 	})
+
+	t.Run("a non-string value for a string field is rejected, not silently dropped", func(t *testing.T) {
+		_, err := profileFromJSON(map[string]any{"employee_id": 12345})
+		require.Error(t, err, "a JSON number for employee_id must be rejected, not silently ignored")
+	})
+
+	t.Run("a non-string value does not prevent other valid fields from erroring loudly, not silently applying a partial patch", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{"department": "Sales", "employee_id": 12345})
+		require.Error(t, err)
+		// profileFromJSON stops at the first error; department may or may not
+		// have been set on patch depending on map iteration order, but the
+		// caller (updateUserActionHandler) must see a non-nil error either
+		// way and not report success.
+		_ = patch
+	})
 }
 
 func newTestGlobalConnector(t *testing.T, dir *directoryAdmin.Service) *GoogleWorkspace {
