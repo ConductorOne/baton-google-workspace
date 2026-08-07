@@ -119,11 +119,10 @@ func TestWithRetryConfigValue(t *testing.T) {
 }
 
 func TestNewRetryLoopSharesRetryerAcrossCalls(t *testing.T) {
-	t.Run("retries an earlier item needed still count against a later item's budget", func(t *testing.T) {
+	t.Run("a success resets the shared budget for the next item", func(t *testing.T) {
 		loop := newRetryLoop(t.Context(), fastRetryConfig) // MaxAttempts: 3
 
-		// Item 1: throttled twice, then succeeds on the 3rd try - spends 2
-		// of the shared retryer's 3 attempts.
+		// Item 1: throttled twice, then succeeds on the 3rd try.
 		calls := 0
 		err := loop(func() error {
 			calls++
@@ -135,20 +134,22 @@ func TestNewRetryLoopSharesRetryerAcrossCalls(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 3, calls)
 
-		// Item 2: only 1 attempt of budget remains. A fresh per-item
-		// retryer (what withActionRetry would give this item on its own)
-		// would allow 3 more retries; the shared retryer allows only 1
-		// before giving up, since item 1's spend carried over.
+		// Item 2: gets a fresh budget, since item 1's success reset the
+		// shared retryer's attempt count - a few transient failures earlier
+		// in the loop must not permanently poison every later item.
 		calls = 0
 		err = loop(func() error {
 			calls++
-			return status.Error(codes.Unavailable, "still throttled")
+			if calls < 3 {
+				return status.Error(codes.Unavailable, "throttled")
+			}
+			return nil
 		})
-		require.Error(t, err)
-		require.Equal(t, 2, calls, "only 1 more retry should remain from the shared budget, not a fresh 3")
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
 	})
 
-	t.Run("a shared retryer's attempt count carries across items when items fail without succeeding in between", func(t *testing.T) {
+	t.Run("a sustained throttle across items with no success in between exhausts the shared budget", func(t *testing.T) {
 		loop := newRetryLoop(t.Context(), fastRetryConfig)
 
 		totalCalls := 0
@@ -160,11 +161,9 @@ func TestNewRetryLoopSharesRetryerAcrossCalls(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, fastRetryConfig.MaxAttempts+1, uint(totalCalls))
 
-		// Item 2, same loop, same never-reset retryer: with a fresh
-		// per-item retryer (the withActionRetry behavior this loop replaces
-		// for multi-item calls) this would get its own full budget again.
-		// With the shared retryer, the exhausted budget carries over and
-		// this call gets zero additional retries.
+		// Item 2, same loop: since item 1 never succeeded, nothing reset
+		// the shared retryer's attempt count, so this call gets zero
+		// additional retries instead of a fresh per-item budget.
 		beforeItem2 := totalCalls
 		err = loop(func() error {
 			totalCalls++
@@ -172,6 +171,56 @@ func TestNewRetryLoopSharesRetryerAcrossCalls(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.Equal(t, 1, totalCalls-beforeItem2, "a shared retryer with an already-exhausted budget should not retry the next item either")
+	})
+}
+
+func TestNewRetryLoopValueSharesRetryerAcrossCalls(t *testing.T) {
+	t.Run("a success resets the shared budget for the next call", func(t *testing.T) {
+		loop := newRetryLoopValue[int](t.Context(), fastRetryConfig)
+
+		calls := 0
+		v, err := loop(func() (int, error) {
+			calls++
+			if calls < 3 {
+				return 0, status.Error(codes.Unavailable, "throttled")
+			}
+			return 42, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 42, v)
+		require.Equal(t, 3, calls)
+
+		calls = 0
+		v, err = loop(func() (int, error) {
+			calls++
+			if calls < 3 {
+				return 0, status.Error(codes.Unavailable, "throttled")
+			}
+			return 7, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 7, v)
+		require.Equal(t, 3, calls, "should get a fresh budget after the prior call's success")
+	})
+
+	t.Run("a sustained throttle across calls with no success in between exhausts the shared budget", func(t *testing.T) {
+		loop := newRetryLoopValue[int](t.Context(), fastRetryConfig)
+
+		totalCalls := 0
+		_, err := loop(func() (int, error) {
+			totalCalls++
+			return 0, status.Error(codes.Unavailable, "throttled")
+		})
+		require.Error(t, err)
+		require.Equal(t, fastRetryConfig.MaxAttempts+1, uint(totalCalls))
+
+		beforeCall2 := totalCalls
+		_, err = loop(func() (int, error) {
+			totalCalls++
+			return 0, status.Error(codes.Unavailable, "still throttled")
+		})
+		require.Error(t, err)
+		require.Equal(t, 1, totalCalls-beforeCall2)
 	})
 }
 

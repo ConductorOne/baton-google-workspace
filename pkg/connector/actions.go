@@ -535,10 +535,11 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	}
 
 	pageToken := ""
+	retryListTransfers := newActionRetryLoopValue[*datatransferAdmin.DataTransfersListResponse](ctx)
 	for {
 		// Go through the transfers list and check if there is a transfer in progress for the given appID, source and target users.
 		// If there is, return the transfer ID and status.
-		transfers, err := withActionRetryValue(ctx, func() (*datatransferAdmin.DataTransfersListResponse, error) {
+		transfers, err := retryListTransfers(func() (*datatransferAdmin.DataTransfersListResponse, error) {
 			return client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
 		})
 		if err != nil {

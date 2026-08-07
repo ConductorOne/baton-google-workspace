@@ -44,12 +44,26 @@ func newActionRetryLoop(ctx context.Context) func(fn func() error) error {
 	return newRetryLoop(ctx, actionRetryConfig)
 }
 
-// newRetryLoop is newActionRetryLoop parametrized by config, so tests can use
-// a fast config instead of actionRetryConfig's real 15s/60s delays.
+// newActionRetryLoopValue is newActionRetryLoop for calls that also return a
+// value (e.g. a paginated list call looped over multiple pages).
+func newActionRetryLoopValue[T any](ctx context.Context) func(fn func() (T, error)) (T, error) {
+	return newRetryLoopValue[T](ctx, actionRetryConfig)
+}
+
+// newRetryLoop and newRetryLoopValue are the above parametrized by config, so
+// tests can use a fast config instead of actionRetryConfig's real 15s/60s
+// delays.
 func newRetryLoop(ctx context.Context, cfg retry.RetryConfig) func(fn func() error) error {
 	retryer := retry.NewRetryer(ctx, cfg)
 	return func(fn func() error) error {
 		return withRetryer(ctx, retryer, fn)
+	}
+}
+
+func newRetryLoopValue[T any](ctx context.Context, cfg retry.RetryConfig) func(fn func() (T, error)) (T, error) {
+	retryer := retry.NewRetryer(ctx, cfg)
+	return func(fn func() (T, error)) (T, error) {
+		return withRetryerValue(ctx, retryer, fn)
 	}
 }
 
@@ -61,10 +75,23 @@ func withRetryConfig(ctx context.Context, cfg retry.RetryConfig, fn func() error
 	return withRetryer(ctx, retry.NewRetryer(ctx, cfg), fn)
 }
 
+func withRetryConfigValue[T any](ctx context.Context, cfg retry.RetryConfig, fn func() (T, error)) (T, error) {
+	return withRetryerValue(ctx, retry.NewRetryer(ctx, cfg), fn)
+}
+
+// withRetryer and withRetryerValue loop fn against an existing retryer rather
+// than constructing one, so newActionRetryLoop/newActionRetryLoopValue can
+// share a single retryer's budget across many calls. Each resets the
+// retryer's attempt count on success (retryer.ShouldWaitAndRetry(ctx, nil)),
+// matching retry.Retryer's own semantics: a shared retryer's budget is
+// amortized across a *sustained* throttle, but a success still gives the
+// next call in the loop a clean slate rather than leaving it permanently
+// poisoned by a few transient failures earlier in the loop.
 func withRetryer(ctx context.Context, retryer *retry.Retryer, fn func() error) error {
 	for {
 		err := fn()
 		if err == nil {
+			retryer.ShouldWaitAndRetry(ctx, nil)
 			return nil
 		}
 		if retryer.ShouldWaitAndRetry(ctx, err) {
@@ -74,11 +101,11 @@ func withRetryer(ctx context.Context, retryer *retry.Retryer, fn func() error) e
 	}
 }
 
-func withRetryConfigValue[T any](ctx context.Context, cfg retry.RetryConfig, fn func() (T, error)) (T, error) {
-	retryer := retry.NewRetryer(ctx, cfg)
+func withRetryerValue[T any](ctx context.Context, retryer *retry.Retryer, fn func() (T, error)) (T, error) {
 	for {
 		v, err := fn()
 		if err == nil {
+			retryer.ShouldWaitAndRetry(ctx, nil)
 			return v, nil
 		}
 		if retryer.ShouldWaitAndRetry(ctx, err) {
