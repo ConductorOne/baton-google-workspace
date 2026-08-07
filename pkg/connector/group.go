@@ -19,6 +19,7 @@ import (
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
@@ -282,9 +283,12 @@ func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceI
 				// Group already deleted, return success (idempotent).
 				return nil, nil
 			}
-			if gerr.Code == http.StatusForbidden {
-				// Keep the gRPC PermissionDenied code from the wrapped error but
-				// add the actionable scope hint operators need to troubleshoot.
+			// Only add the scope hint for a genuine permissions failure - the
+			// client layer already reclassifies a throttled 403 (e.g.
+			// userRateLimitExceeded) to codes.Unavailable so it rides the
+			// SDK's retry-with-backoff, and rewriting it to PermissionDenied
+			// here would silently undo that.
+			if gerr.Code == http.StatusForbidden && status.Code(err) == codes.PermissionDenied {
 				return nil, uhttp.WrapErrors(codes.PermissionDenied,
 					fmt.Sprintf("google-workspace: failed to delete group (403 Forbidden) - check the %s scope and admin permissions", admin.AdminDirectoryGroupScope),
 					err)

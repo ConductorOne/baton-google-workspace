@@ -1020,6 +1020,12 @@ func applyUserProfilePatch(
 	forceSend := make([]string, 0)
 	var skippedFields []string
 
+	// Shared across every API call in this function (the initial GET below
+	// and whichever branch the final switch takes, including its own no-op
+	// re-fetch) so a throttled call doesn't get its own independent wait
+	// budget on top of another call's within the same invocation.
+	waitLoop := newRateLimitWaitLoopValue[*admin.User](ctx)
+
 	// Name fields. A patch replaces the whole "name" object, so read-modify-write
 	// to avoid clearing the sibling field the caller did not set. Unlike the
 	// recovery fields (where empty means "clear"), an empty name value is treated
@@ -1055,7 +1061,7 @@ func applyUserProfilePatch(
 	var current *admin.User
 	if needCurrent {
 		var err error
-		current, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
+		current, err = waitLoop(func() (*admin.User, error) {
 			return client.GetUserFullForProvisioning(ctx, userId)
 		})
 		if err != nil {
@@ -1252,15 +1258,15 @@ func applyUserProfilePatch(
 		// True no-op: re-fetch instead of an empty-body write (still an
 		// audited write) and to avoid returning the possibly-stale `current`
 		// snapshot fetched earlier in this call.
-		updatedUser, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
+		updatedUser, err = waitLoop(func() (*admin.User, error) {
 			return client.GetUserFullForProvisioning(ctx, userId)
 		})
 	case usePut:
-		updatedUser, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
+		updatedUser, err = waitLoop(func() (*admin.User, error) {
 			return client.UpdateUser(ctx, userId, update)
 		})
 	default:
-		updatedUser, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
+		updatedUser, err = waitLoop(func() (*admin.User, error) {
 			return client.PatchUser(ctx, userId, update)
 		})
 	}
