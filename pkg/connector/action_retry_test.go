@@ -76,7 +76,7 @@ func TestWithRetryConfig(t *testing.T) {
 			return wantErr
 		})
 		require.Equal(t, wantErr, err)
-		require.Equal(t, int(fastRetryConfig.MaxAttempts)+1, calls)
+		require.Equal(t, fastRetryConfig.MaxAttempts+1, uint(calls))
 	})
 
 	t.Run("a plain (non-gRPC-status) error is not retried", func(t *testing.T) {
