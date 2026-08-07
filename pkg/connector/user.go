@@ -294,9 +294,14 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	traitOpts := []rs.UserTraitOption{
 		rs.WithEmail(user.PrimaryEmail, true),
 	}
-	initialStatus, initialStatusDetails := o.userStatus(user)
+
+	// Profile, icon, status, and created_at have moved from UserTrait to attributes on the
+	// Resource itself (rs.WithDetailedStatus/WithStatus/WithUserIcon/WithCreatedAt/WithUserProfile
+	// are deprecated) — collected here and applied as ResourceOptions below.
+	statusValue, statusDetails := o.userStatus(user)
 	resourceOpts := []rs.ResourceOption{
-		rs.WithResourceStatus(v2.Status_ResourceStatus(initialStatus), initialStatusDetails),
+		// UserTrait_Status_Status and Status_ResourceStatus enum values are identical.
+		rs.WithResourceStatus(v2.Status_ResourceStatus(statusValue), statusDetails),
 	}
 
 	if user.ThumbnailPhotoUrl != "" {
@@ -411,13 +416,11 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 	)
 	resourceOpts = append(resourceOpts, rs.WithResourceProfile(profile))
 
-	resourceOpts = append(resourceOpts,
-		rs.WithAnnotation(
-			&v2.V1Identifier{
-				Id: user.Id,
-			},
-		),
-	)
+	resourceOpts = append(resourceOpts, rs.WithAnnotation(
+		&v2.V1Identifier{
+			Id: user.Id,
+		},
+	))
 
 	userResource, err := rs.NewUserResource(
 		user.Name.FullName,

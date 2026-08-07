@@ -8,7 +8,6 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"golang.org/x/sync/semaphore"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/option"
 
@@ -91,35 +90,34 @@ func TestRoleListPropagatesAPIErrors(t *testing.T) {
 	}
 }
 
-// TestFetchUserTokensSurfacesTransientErrors guards the OAuth-app discovery fix: a transient/auth
-// failure listing one user's tokens must abort discovery rather than silently skipping the user
-// (which under-reports app-access grants and can drop apps entirely -> c1 prunes them).
-func TestFetchUserTokensSurfacesTransientErrors(t *testing.T) {
+// TestFetchUserOAuthAppsSurfacesTransientErrors guards the OAuth-app discovery fix: a
+// transient/auth failure listing one user's tokens must abort discovery rather than silently
+// skipping the user (which under-reports app-access grants and can drop apps entirely -> c1
+// prunes them).
+func TestFetchUserOAuthAppsSurfacesTransientErrors(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
 		status := status
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			client := &gwclient.GoogleWorkspaceClient{UserSecurityService: newStatusDirectoryService(t, status)}
-			sem := semaphore.NewWeighted(appDiscoveryWorkers)
 
-			_, err := fetchUserTokens(context.Background(), sem, client, []*directoryAdmin.User{{Id: "user-1"}})
+			_, err := fetchUserOAuthApps(context.Background(), client, pendingUser{ID: "user-1", Email: "user-1@example.com"})
 			if err == nil {
-				t.Fatalf("status %d: expected fetchUserTokens to surface the error, got nil (prune risk)", status)
+				t.Fatalf("status %d: expected fetchUserOAuthApps to surface the error, got nil (prune risk)", status)
 			}
 		})
 	}
 }
 
-// TestFetchUserTokensToleratesUserDeletedMidSync confirms the one intentionally-benign case: a 404
-// (user deleted between listing and token fetch) skips that user without failing discovery.
-func TestFetchUserTokensToleratesUserDeletedMidSync(t *testing.T) {
+// TestFetchUserOAuthAppsToleratesUserDeletedMidSync confirms the one intentionally-benign case: a
+// 404 (user deleted between listing and token fetch) skips that user without failing discovery.
+func TestFetchUserOAuthAppsToleratesUserDeletedMidSync(t *testing.T) {
 	client := &gwclient.GoogleWorkspaceClient{UserSecurityService: newStatusDirectoryService(t, http.StatusNotFound)}
-	sem := semaphore.NewWeighted(appDiscoveryWorkers)
 
-	results, err := fetchUserTokens(context.Background(), sem, client, []*directoryAdmin.User{{Id: "deleted-user"}})
+	apps, err := fetchUserOAuthApps(context.Background(), client, pendingUser{ID: "deleted-user", Email: "deleted-user@example.com"})
 	if err != nil {
 		t.Fatalf("expected 404 (deleted user) to be tolerated, got error: %v", err)
 	}
-	if len(results) != 1 || len(results[0].apps) != 0 {
-		t.Fatalf("expected the deleted user to be skipped with no apps, got %+v", results)
+	if len(apps) != 0 {
+		t.Fatalf("expected the deleted user to be skipped with no apps, got %+v", apps)
 	}
 }

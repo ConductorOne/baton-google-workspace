@@ -576,13 +576,13 @@ func (c *GoogleWorkspace) EventFeeds(ctx context.Context) []connectorbuilder.Eve
 	}
 
 	feeds := []connectorbuilder.EventFeed{
-		newUsageEventFeed(client),
+		newUsageEventFeed(client, c.customerID, c.domain),
 		newAdminEventFeed(client),
 	}
 
 	if client.ReportService != nil {
-		feeds = append(feeds, newSamlEventFeed(client, c.customerID))
-		feeds = append(feeds, newGoogleLoginEventFeed(client))
+		feeds = append(feeds, newSamlEventFeed(client, c.customerID, c.domain))
+		feeds = append(feeds, newGoogleLoginEventFeed(client, c.customerID, c.domain))
 	}
 
 	return feeds
@@ -595,10 +595,10 @@ type failedEventFeed struct {
 
 func failedEventFeeds(err error) []connectorbuilder.EventFeed {
 	return []connectorbuilder.EventFeed{
-		&failedEventFeed{metadata: newUsageEventFeed(nil).EventFeedMetadata(context.Background()), err: err},
+		&failedEventFeed{metadata: newUsageEventFeed(nil, "", "").EventFeedMetadata(context.Background()), err: err},
 		&failedEventFeed{metadata: newAdminEventFeed(nil).EventFeedMetadata(context.Background()), err: err},
-		&failedEventFeed{metadata: newSamlEventFeed(nil, "").EventFeedMetadata(context.Background()), err: err},
-		&failedEventFeed{metadata: newGoogleLoginEventFeed(nil).EventFeedMetadata(context.Background()), err: err},
+		&failedEventFeed{metadata: newSamlEventFeed(nil, "", "").EventFeedMetadata(context.Background()), err: err},
+		&failedEventFeed{metadata: newGoogleLoginEventFeed(nil, "", "").EventFeedMetadata(context.Background()), err: err},
 	}
 }
 
@@ -665,9 +665,9 @@ func (d *defaultCapabilitiesBuilder) ResourceSyncers(_ context.Context) []connec
 
 func (d *defaultCapabilitiesBuilder) EventFeeds(_ context.Context) []connectorbuilder.EventFeed {
 	return []connectorbuilder.EventFeed{
-		newUsageEventFeed(nil),
+		newUsageEventFeed(nil, "", ""),
 		newAdminEventFeed(nil),
-		newSamlEventFeed(nil, ""),
-		newGoogleLoginEventFeed(nil),
+		newSamlEventFeed(nil, "", ""),
+		newGoogleLoginEventFeed(nil, "", ""),
 	}
 }

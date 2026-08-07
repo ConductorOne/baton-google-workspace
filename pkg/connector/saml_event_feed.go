@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -16,14 +15,21 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
+// samlAppLookupMaxResults bounds the per-user Reports API lookup for SAML app logins. A single
+// user can have logged into multiple distinct SAML apps, and activities.list cannot filter by a
+// specific app within applicationName="saml", so a small recent window is fetched and grouped
+// by resolved app ID, keeping only the newest event per app.
+const samlAppLookupMaxResults = 50
+
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
 type samlEventFeed struct {
 	client     *gwclient.GoogleWorkspaceClient
 	customerID string
+	domain     string
 }
 
-func newSamlEventFeed(client *gwclient.GoogleWorkspaceClient, customerID string) *samlEventFeed {
-	return &samlEventFeed{client: client, customerID: customerID}
+func newSamlEventFeed(client *gwclient.GoogleWorkspaceClient, customerID, domain string) *samlEventFeed {
+	return &samlEventFeed{client: client, customerID: customerID, domain: domain}
 }
 
 func (f *samlEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFeedMetadata {
@@ -35,116 +41,104 @@ func (f *samlEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFeedMetada
 	}
 }
 
-// ListEvents tracks SAML app usage via Google's "saml" audit log.
+type samlAppActivity struct {
+	activity   *reportsAdmin.Activity
+	event      *reportsAdmin.ActivityEvents
+	occurredAt *timestamppb.Timestamp
+	appName    string
+}
+
+// lookupUser tracks SAML app usage via Google's "saml" audit log.
 //
-// Unlike OAuth apps (see usage_event_feed.go), SAML "login_success" fires on every SSO authentication,
-// so last login timestamps are accurate. SAML apps are identified by app name (no numeric client_id).
-func (f *samlEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+// Unlike OAuth apps (see usage_event_feed.go), SAML "login_success" fires on every SSO
+// authentication, so last login timestamps are accurate. SAML apps are identified by app name
+// (no numeric client_id).
+func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string, user pendingUser) ([]*v2.Event, error) {
+	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppSAML, "login_success", "", "", samlAppLookupMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace-connector: failed to list saml login activities for %s: %w", user.Email, err)
+	}
+
+	best := map[string]*samlAppActivity{}
+	for _, activity := range r.Items {
+		if activity.Actor.ProfileId == "" {
+			continue
+		}
+		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
+		if occurredAt == nil {
+			continue
+		}
+		for _, e := range activity.Events {
+			appName := getValueFromParameters("application_name", e.Parameters)
+			if appName == "" {
+				continue
+			}
+			appID := appName
+			if profileName, ok := samlProfileMap[appName]; ok {
+				appID = profileName
+			}
+
+			existing, ok := best[appID]
+			if ok && !occurredAt.AsTime().After(existing.occurredAt.AsTime()) {
+				continue
+			}
+			best[appID] = &samlAppActivity{activity: activity, event: e, occurredAt: occurredAt, appName: appName}
+		}
+	}
+
+	events := make([]*v2.Event, 0, len(best))
+	for appID, b := range best {
+		userTrait, err := resource.NewUserTrait(
+			resource.WithEmail(b.activity.Actor.Email, true),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("google-workspace-connector: failed to create user trait in saml event feed: %w", err)
+		}
+
+		events = append(events, &v2.Event{
+			Id:         strconv.FormatInt(b.activity.Id.UniqueQualifier, 10),
+			OccurredAt: b.occurredAt,
+			Event: &v2.Event_UsageEvent{
+				UsageEvent: &v2.UsageEvent{
+					TargetResource: &v2.Resource{
+						Id: &v2.ResourceId{
+							ResourceType: resourceTypeEnterpriseApplication.Id,
+							Resource:     samlAppIDPrefix + appID,
+						},
+						DisplayName: b.appName,
+					},
+					ActorResource: &v2.Resource{
+						Id: &v2.ResourceId{
+							ResourceType: resourceTypeUser.Id,
+							Resource:     b.activity.Actor.ProfileId,
+						},
+						DisplayName: b.activity.Actor.Email,
+						Status:      &v2.Status{Status: v2.Status_RESOURCE_STATUS_ENABLED},
+						Annotations: annotations.New(userTrait),
+					},
+				},
+			},
+		})
+	}
+
+	return events, nil
+}
+
+func (f *samlEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	// Resolved once per call (not once per user): it lists every SAML profile for the whole
+	// customer, so looking it up per-user in the batch would multiply Cloud Identity calls
+	// unnecessarily.
 	samlProfileMap, err := loadSAMLProfileMap(ctx, f.client, f.customerID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	cursor, err := unmarshalPageToken(pToken, startAt)
+	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken,
+		func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
+			return f.lookupUser(ctx, client, samlProfileMap, user)
+		})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to unmarshal page token in saml event feed: %w", err)
+		return nil, nil, nil, err
 	}
-
-	r, err := f.client.ListActivities(ctx, reportsUserAll, reportsAppSAML, "login_success", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to list saml login activities: %w", err)
-	}
-
-	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
-	if err != nil {
-		latestEvent = time.Unix(0, 0)
-	}
-
-	events := []*v2.Event{}
-	for _, activity := range r.Items {
-		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
-		if occurredAt == nil {
-			occurredAt = timestamppb.New(time.Unix(0, 0))
-		}
-		if occurredAt.AsTime().After(latestEvent) {
-			cursor.LatestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
-			latestEvent = occurredAt.AsTime()
-		}
-
-		for _, e := range activity.Events {
-			// NewUserTrait defaults to STATUS_ENABLED when no status option is given.
-			userTrait, err := resource.NewUserTrait(
-				resource.WithEmail(activity.Actor.Email, true),
-			)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to create user trait in saml event feed: %w", err)
-			}
-
-			if event := newSamlV2Event(activity, occurredAt, e, userTrait, samlProfileMap); event != nil {
-				events = append(events, event)
-			}
-		}
-	}
-
-	cursor.NextPageToken = r.NextPageToken
-	if r.NextPageToken == "" {
-		cursor.StartAt = cursor.LatestEventSeen
-		cursor.LatestEventSeen = ""
-	}
-
-	cursorToken, err := cursor.marshal()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to marshal cursor token in saml event feed: %w", err)
-	}
-
-	streamState := &pagination.StreamState{
-		Cursor:  cursorToken,
-		HasMore: r.NextPageToken != "",
-	}
-
 	return events, streamState, nil, nil
-}
-
-func newSamlV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait, samlProfileMap map[string]string) *v2.Event {
-	appName := getValueFromParameters("application_name", e.Parameters)
-	if appName == "" {
-		return nil
-	}
-
-	actorID := activity.Actor.ProfileId
-	if actorID == "" {
-		return nil
-	}
-
-	appID := appName
-	if profileName, ok := samlProfileMap[appName]; ok {
-		appID = profileName
-	}
-
-	return &v2.Event{
-		Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
-		OccurredAt: occurredAt,
-		Event: &v2.Event_UsageEvent{
-			UsageEvent: &v2.UsageEvent{
-				TargetResource: &v2.Resource{
-					Id: &v2.ResourceId{
-						ResourceType: resourceTypeEnterpriseApplication.Id,
-						Resource:     samlAppIDPrefix + appID,
-					},
-					DisplayName: appName,
-				},
-				ActorResource: &v2.Resource{
-					Id: &v2.ResourceId{
-						ResourceType: resourceTypeUser.Id,
-						Resource:     actorID,
-					},
-					DisplayName: activity.Actor.Email,
-					Annotations: annotations.New(userTrait),
-					Status: v2.Status_builder{
-						Status: v2.Status_RESOURCE_STATUS_ENABLED,
-					}.Build(),
-				},
-			},
-		},
-	}
 }

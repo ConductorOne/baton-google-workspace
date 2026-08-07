@@ -2,9 +2,9 @@ package connector
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strconv"
 	"time"
@@ -13,9 +13,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
@@ -23,16 +22,17 @@ import (
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
-// maxEventFeedLookback caps how far back event feeds query the Google Reports API.
-// Google page tokens expire after ~24h, so a cursor left mid-pagination (e.g. after
-// a connector restart or a transient timeout) would otherwise keep requesting the
-// full historical window on every retry, causing HTTP timeout death spirals on large
-// orgs. 90 days balances sufficient event history against query size; Google retains
-// Reports data for 6 months so there is headroom if the window needs to grow.
-const maxEventFeedLookback = 90 * 24 * time.Hour
+// oauthAppLookupMaxResults bounds each per-(user, app) Reports API lookup. Since the query is
+// now scoped to one specific client_id via the `filters` param, there's no cross-app crowding to
+// worry about — this only needs to cover the "does maxResults=1 return newest-first?" ordering
+// assumption from the acceptance criteria: with a >1 window, the true latest is picked
+// client-side regardless of Google's actual ordering.
+const oauthAppLookupMaxResults = 5
 
 type usageEventFeed struct {
-	c *gwclient.GoogleWorkspaceClient
+	c          *gwclient.GoogleWorkspaceClient
+	customerID string
+	domain     string
 }
 
 func rfc3339ToTimestamp(s string) *timestamppb.Timestamp {
@@ -63,174 +63,114 @@ func convertIdTimeToTimestamp(s string) *timestamppb.Timestamp {
 
 func getValueFromParameters(name string, parameters []*reportsAdmin.ActivityEventsParameters) string {
 	for _, p := range parameters {
-		p := p
 		if p.Name == name {
 			return p.Value
 		}
 	}
 	return ""
 }
-func hasParameter(name string, parameters []*reportsAdmin.ActivityEventsParameters) bool {
-	for _, p := range parameters {
-		p := p
-		if p.Name == name {
-			return true
+
+// oauthAppActivity is the best (most recent) activity/event seen so far for one OAuth app
+// (keyed by client_id) within a user's lookup window.
+type oauthAppActivity struct {
+	activity   *reportsAdmin.Activity
+	event      *reportsAdmin.ActivityEvents
+	occurredAt *timestamppb.Timestamp
+	appName    string
+}
+
+// lookupUser enumerates the OAuth apps this user has authorized via Directory API Tokens.list
+// (Reports API has no endpoint for "which apps has this user used" — Tokens.list is the cheap,
+// Directory-quota source of truth for that), then issues one Reports API lookup per app,
+// scoped with filters=client_id==<id>. This trades "1 Reports call per user" (old per-app-type
+// window, prone to one app's activity crowding another out of a shared count-bounded window) for
+// "1 Directory call + N Reports calls per user" (N = apps that user has authorized) — each app's
+// freshness is queried independently, so it can never be crowded out by another app's activity.
+func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
+	tokenResp, err := client.ListTokens(ctx, user.ID)
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// Benign: the user was deleted between the directory listing and this lookup.
+			return nil, nil
 		}
+		return nil, fmt.Errorf("google-workspace: failed to list oauth tokens for %s: %w", user.Email, err)
 	}
-	return false
-}
+	// Tokens.list can return multiple Token entries for the same client_id — e.g. a user
+	// granting a different scope set to the same app at different times. Dedupe here so each
+	// distinct app only ever triggers one Reports API lookup, never repeated ones.
+	seenClientIDs := make(map[string]struct{}, len(tokenResp.Items))
 
-type pageToken struct {
-	LatestEventSeen string `json:"latest_event_seen,omitempty"`
-	NextPageToken   string `json:"next_page_token,omitempty"`
-	StartAt         string `json:"start_at,omitempty"`
-	PageSize        int    `json:"page_size,omitempty"`
-}
+	events := make([]*v2.Event, 0, len(tokenResp.Items))
+	for _, t := range tokenResp.Items {
+		if t.ClientId == "" || t.DisplayText == "" {
+			continue
+		}
+		if t.ClientId == t.DisplayText && privateAppIDRegex.MatchString(t.ClientId) {
+			// Private app; not reported on.
+			continue
+		}
+		if _, dup := seenClientIDs[t.ClientId]; dup {
+			continue
+		}
+		seenClientIDs[t.ClientId] = struct{}{}
 
-func unmarshalPageToken(token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*pageToken, error) {
-	pt := &pageToken{}
-	if token != nil && token.Cursor != "" {
-		data, err := base64.StdEncoding.DecodeString(token.Cursor)
+		event, err := f.lookupAppLogin(ctx, client, user, t.ClientId, t.DisplayText)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode page token: %w", err)
+			return nil, err
 		}
-
-		if err := json.Unmarshal(data, pt); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal page token JSON: %w", err)
-		}
-
-		pt.PageSize = token.Size
-	}
-
-	// Enforce the lookback cap regardless of what the caller passes as defaultStart.
-	// This prevents stale cursors (e.g. from an expired mid-pagination pageToken) from
-	// requesting years of data and timing out on every retry.
-	cutoff := time.Now().Add(-maxEventFeedLookback)
-	if defaultStart == nil || defaultStart.AsTime().Before(cutoff) {
-		// There's lag on these events, so we're going to start roughly when google says events should come in
-		// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
-		defaultStart = timestamppb.New(cutoff)
-	}
-
-	if pt.StartAt == "" {
-		pt.StartAt = defaultStart.AsTime().Format(time.RFC3339)
-	} else {
-		cursorStart, err := time.Parse(time.RFC3339, pt.StartAt)
-		if err != nil || cursorStart.Before(cutoff) {
-			pt.StartAt = cutoff.Format(time.RFC3339)
-			pt.NextPageToken = ""
-			pt.LatestEventSeen = ""
-		}
-	}
-
-	if pt.LatestEventSeen == "" {
-		pt.LatestEventSeen = pt.StartAt
-	}
-
-	return pt, nil
-}
-
-func (pt *pageToken) marshal() (string, error) {
-	data, err := json.Marshal(pt)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal page token: %w", err)
-	}
-
-	basedToken := base64.StdEncoding.EncodeToString(data)
-
-	return basedToken, nil
-}
-
-func (f *usageEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-
-	var streamState *pagination.StreamState
-
-	cursor, err := unmarshalPageToken(pToken, startAt)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token in usage event feed: %w", err)
-	}
-
-	r, err := f.c.ListActivities(ctx, "all", "token", "authorize", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list token activities: %w", err)
-	}
-
-	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse latest event time in usage event feed: %w", err)
-	}
-	events := []*v2.Event{}
-	for _, activity := range r.Items {
-		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
-		if occurredAt == nil {
-			// Set occurred at to epoch so that it should never be after the latest event
-			// Unless latest event is before epoch for some reason
-			occurredAt = timestamppb.New(time.Unix(0, 0))
-		}
-		if occurredAt.AsTime().After(latestEvent) {
-			cursor.LatestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
-			latestEvent = occurredAt.AsTime()
-		}
-		// There can be multiple events, have not found an example of this yet
-		for _, e := range activity.Events {
-			// NewUserTrait defaults to STATUS_ENABLED when no status option is given.
-			userTrait, err := resource.NewUserTrait(
-				resource.WithEmail(activity.Actor.Email, true),
-			)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to create user trait: %w", err)
-			}
-			event, err := newV2Event(activity, occurredAt, e, userTrait)
-			if err != nil {
-				l.Error("google-workspace-event-feed: failed to create event", zap.Error(err))
-				// Let's not bail the whole feed because of one bad event
-				continue
-			}
-			if event == nil {
-				continue
-			}
-
+		if event != nil {
 			events = append(events, event)
 		}
 	}
 
-	cursor.NextPageToken = r.NextPageToken
-	if r.NextPageToken == "" {
-		cursor.StartAt = cursor.LatestEventSeen
-		cursor.LatestEventSeen = ""
-	}
-
-	cursorToken, err := cursor.marshal()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to marshal cursor token in usage event feed: %w", err)
-	}
-	streamState = &pagination.StreamState{
-		Cursor:  cursorToken,
-		HasMore: r.NextPageToken != "",
-	}
-	return events, streamState, nil, nil
+	return events, nil
 }
 
-func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timestamp, e *reportsAdmin.ActivityEvents, userTrait *v2.UserTrait) (*v2.Event, error) {
-	if !hasParameter("client_id", e.Parameters) {
-		return nil, fmt.Errorf("no client_id in event parameters")
-	}
-	if !hasParameter("app_name", e.Parameters) {
-		return nil, fmt.Errorf("no app_name in event parameters")
+// lookupAppLogin fetches this user's most recent "authorize" activity for one specific OAuth
+// app (client_id), returning nil if there is no such activity within the lookup window.
+func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, clientID, displayName string) (*v2.Event, error) {
+	filters := "client_id==" + clientID
+	r, err := listActivitiesFilteredRateLimited(ctx, client, user.Email, "token", "authorize", "", "", filters, oauthAppLookupMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace: failed to list token activities for %s app %s: %w", user.Email, clientID, err)
 	}
 
-	clientID := getValueFromParameters("client_id", e.Parameters)
-	appName := getValueFromParameters("app_name", e.Parameters)
-
-	if clientID == appName && privateAppIDRegex.MatchString(clientID) {
-		// This is a private app, we don't want to report on these
+	var best *oauthAppActivity
+	for _, activity := range r.Items {
+		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
+		if occurredAt == nil {
+			continue
+		}
+		for _, e := range activity.Events {
+			// Defensive: confirm the filter actually matched this app, in case Google ever
+			// returns extra parameters/events beyond what was requested.
+			if getValueFromParameters("client_id", e.Parameters) != clientID {
+				continue
+			}
+			if best == nil || occurredAt.AsTime().After(best.occurredAt.AsTime()) {
+				appName := getValueFromParameters("app_name", e.Parameters)
+				if appName == "" {
+					appName = displayName
+				}
+				best = &oauthAppActivity{activity: activity, event: e, occurredAt: occurredAt, appName: appName}
+			}
+		}
+	}
+	if best == nil {
 		return nil, nil
 	}
 
-	event := &v2.Event{
-		Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
-		OccurredAt: occurredAt,
+	userTrait, err := resource.NewUserTrait(
+		resource.WithEmail(best.activity.Actor.Email, true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user trait: %w", err)
+	}
+
+	return &v2.Event{
+		Id:         strconv.FormatInt(best.activity.Id.UniqueQualifier, 10),
+		OccurredAt: best.occurredAt,
 		Event: &v2.Event_UsageEvent{
 			UsageEvent: &v2.UsageEvent{
 				TargetResource: &v2.Resource{
@@ -238,23 +178,28 @@ func newV2Event(activity *reportsAdmin.Activity, occurredAt *timestamppb.Timesta
 						ResourceType: resourceTypeEnterpriseApplication.Id,
 						Resource:     clientID,
 					},
-					DisplayName: appName,
+					DisplayName: best.appName,
 				},
 				ActorResource: &v2.Resource{
 					Id: &v2.ResourceId{
 						ResourceType: resourceTypeUser.Id,
-						Resource:     activity.Actor.ProfileId,
+						Resource:     best.activity.Actor.ProfileId,
 					},
-					DisplayName: activity.Actor.Email,
+					DisplayName: best.activity.Actor.Email,
+					Status:      &v2.Status{Status: v2.Status_RESOURCE_STATUS_ENABLED},
 					Annotations: annotations.New(userTrait),
-					Status: v2.Status_builder{
-						Status: v2.Status_RESOURCE_STATUS_ENABLED,
-					}.Build(),
 				},
 			},
 		},
+	}, nil
+}
+
+func (f *usageEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	events, streamState, err := scanUsersForEvents(ctx, f.c, f.customerID, f.domain, earliestEvent, pToken, f.lookupUser)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return event, nil
+	return events, streamState, nil, nil
 }
 
 func (f *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
@@ -266,8 +211,10 @@ func (f *usageEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMet
 	}
 }
 
-func newUsageEventFeed(client *gwclient.GoogleWorkspaceClient) *usageEventFeed {
+func newUsageEventFeed(client *gwclient.GoogleWorkspaceClient, customerID, domain string) *usageEventFeed {
 	return &usageEventFeed{
-		c: client,
+		c:          client,
+		customerID: customerID,
+		domain:     domain,
 	}
 }
