@@ -449,7 +449,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Get current user to check current org unit
-	currentUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+	currentUser, err := withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 		return o.client.GetUserForProvisioning(ctx, userId)
 	})
 	if err != nil {
@@ -473,7 +473,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Update the user's organizational unit
-	updatedUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+	updatedUser, err := withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 		return o.client.UpdateUser(ctx, userId, &admin.User{
 			OrgUnitPath:     orgUnitPath,
 			ForceSendFields: []string{"OrgUnitPath"},
@@ -562,7 +562,7 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 	// 4. Optionally archive the account
 	// The client wraps the Google API error (gRPC code + context + rate-limit
 	// info) via wrapGoogleApiErrorWithContext, so pass it through unchanged.
-	err = withActionRetry(ctx, func() error {
+	err = withRateLimitWait(ctx, func() error {
 		_, err := o.client.UpdateUser(ctx, userId, updateUser)
 		return err
 	})
@@ -613,7 +613,7 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 	}
 
 	// Sign out the user
-	err = withActionRetry(ctx, func() error {
+	err = withRateLimitWait(ctx, func() error {
 		return o.client.SignOutUser(ctx, userId)
 	})
 	if err != nil {
@@ -639,7 +639,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	}
 
 	// List all tokens for the user
-	tokens, err := withActionRetryValue(ctx, func() (*admin.Tokens, error) {
+	tokens, err := withRateLimitWaitValue(ctx, func() (*admin.Tokens, error) {
 		return o.client.ListTokens(ctx, userId)
 	})
 	if err != nil {
@@ -655,7 +655,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	// Delete each token
 	tokensDeleted := 0
 	var lastErr error
-	retryLoop := newActionRetryLoop(ctx)
+	waitLoop := newRateLimitWaitLoop(ctx)
 	for _, token := range tokens.Items {
 		if token.ClientId == "" {
 			l.Debug("google-workspace: skipping token with empty client ID",
@@ -664,7 +664,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 			continue
 		}
 
-		err := retryLoop(func() error {
+		err := waitLoop(func() error {
 			return o.client.DeleteToken(ctx, userId, token.ClientId)
 		})
 		if err != nil {
@@ -717,7 +717,7 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	}
 
 	// List all application-specific passwords (ASPs) for the user
-	asps, err := withActionRetryValue(ctx, func() (*admin.Asps, error) {
+	asps, err := withRateLimitWaitValue(ctx, func() (*admin.Asps, error) {
 		return o.client.ListAsps(ctx, userId)
 	})
 	if err != nil {
@@ -733,9 +733,9 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	// Delete each application password
 	passwordsDeleted := 0
 	var lastErr error
-	retryLoop := newActionRetryLoop(ctx)
+	waitLoop := newRateLimitWaitLoop(ctx)
 	for _, asp := range asps.Items {
-		err := retryLoop(func() error {
+		err := waitLoop(func() error {
 			return o.client.DeleteAsp(ctx, userId, asp.CodeId)
 		})
 		if err != nil {
@@ -810,7 +810,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	// Get current user to check current manager
-	currentUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+	currentUser, err := withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 		return o.client.GetUserFullForProvisioning(ctx, userId)
 	})
 	if err != nil {
@@ -838,7 +838,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	updatedRelations := buildManagerRelations(currentRelations, managerEmail)
 
 	// Update the user's relations
-	updatedUser, err := withActionRetryValue(ctx, func() (*admin.User, error) {
+	updatedUser, err := withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 		return o.client.UpdateUser(ctx, userId, &admin.User{
 			Relations:       updatedRelations,
 			ForceSendFields: []string{"Relations"},
@@ -970,7 +970,7 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: make_admin: missing status argument")
 	}
 
-	err = withActionRetry(ctx, func() error {
+	err = withRateLimitWait(ctx, func() error {
 		return o.client.MakeAdmin(ctx, userId, status)
 	})
 	if err != nil {
@@ -1055,7 +1055,7 @@ func applyUserProfilePatch(
 	var current *admin.User
 	if needCurrent {
 		var err error
-		current, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+		current, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 			return client.GetUserFullForProvisioning(ctx, userId)
 		})
 		if err != nil {
@@ -1252,15 +1252,15 @@ func applyUserProfilePatch(
 		// True no-op: re-fetch instead of an empty-body write (still an
 		// audited write) and to avoid returning the possibly-stale `current`
 		// snapshot fetched earlier in this call.
-		updatedUser, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+		updatedUser, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 			return client.GetUserFullForProvisioning(ctx, userId)
 		})
 	case usePut:
-		updatedUser, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+		updatedUser, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 			return client.UpdateUser(ctx, userId, update)
 		})
 	default:
-		updatedUser, err = withActionRetryValue(ctx, func() (*admin.User, error) {
+		updatedUser, err = withRateLimitWaitValue(ctx, func() (*admin.User, error) {
 			return client.PatchUser(ctx, userId, update)
 		})
 	}
