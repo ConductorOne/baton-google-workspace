@@ -136,23 +136,38 @@ if [ ${ACTION_EXIT_CODE} -ne 0 ]; then
     exit 1
 fi
 
-# Wait for changes to propagate
-echo -e "${YELLOW}Waiting for changes to propagate...${NC}"
-sleep 40
+# Step 4: Sync again to verify the changes, retrying if GAL removal hasn't
+# propagated yet. GAL visibility syncs through a slower directory-wide
+# pipeline than most profile fields in this API and has been observed to take
+# longer than a single 40s wait under load - poll instead of trusting one
+# fixed sleep to always be enough.
+echo -e "${YELLOW}Step 4: Syncing to verify offboarding changes (with retry for GAL propagation)...${NC}"
 
-# Step 4: Sync again to verify the changes
-echo -e "${YELLOW}Step 4: Syncing to verify offboarding changes...${NC}"
-"${CONNECTOR_BINARY}" --file "${SYNC_FILE}"
+MAX_ATTEMPTS=4
+SLEEP_SECONDS=40
+INCLUDE_IN_GAL=""
+for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+    echo -e "${YELLOW}Waiting for changes to propagate (attempt ${attempt}/${MAX_ATTEMPTS})...${NC}"
+    sleep "${SLEEP_SECONDS}"
 
-# Verify that IncludeInGlobalAddressList is false
-echo "Verifying user was removed from GAL..."
-INCLUDE_IN_GAL=$(baton resources -f "${SYNC_FILE}" -t user -o json 2>/dev/null | \
-    jq -r --arg user_id "${CREATED_USER_ID}" \
-    '.resources[] | select(.resource.id.resource == $user_id) | .resource.profile.include_in_global_address_list' | \
-    head -1)
+    "${CONNECTOR_BINARY}" --file "${SYNC_FILE}"
 
-# Debug output
-echo "Extracted include_in_global_address_list value: '${INCLUDE_IN_GAL}'"
+    echo "Verifying user was removed from GAL..."
+    INCLUDE_IN_GAL=$(baton resources -f "${SYNC_FILE}" -t user -o json 2>/dev/null | \
+        jq -r --arg user_id "${CREATED_USER_ID}" \
+        '.resources[] | select(.resource.id.resource == $user_id) | .resource.profile.include_in_global_address_list' | \
+        head -1)
+
+    echo "Extracted include_in_global_address_list value: '${INCLUDE_IN_GAL}'"
+
+    if [ "${INCLUDE_IN_GAL}" = "false" ]; then
+        break
+    fi
+
+    if [ "${attempt}" -lt "${MAX_ATTEMPTS}" ]; then
+        echo -e "${YELLOW}Not propagated yet, retrying...${NC}"
+    fi
+done
 
 if [ -z "${INCLUDE_IN_GAL}" ] || [ "${INCLUDE_IN_GAL}" = "null" ]; then
     # If not found, try to get the full user resource for debugging
@@ -165,7 +180,7 @@ fi
 
 # Convert boolean to string for comparison (jq returns true/false as strings)
 if [ "${INCLUDE_IN_GAL}" = "true" ]; then
-    echo -e "${RED}ERROR: User is still in Global Address List (include_in_global_address_list: ${INCLUDE_IN_GAL})${NC}"
+    echo -e "${RED}ERROR: User is still in Global Address List after ${MAX_ATTEMPTS} attempts (include_in_global_address_list: ${INCLUDE_IN_GAL})${NC}"
     echo "Expected: false"
     exit 1
 fi

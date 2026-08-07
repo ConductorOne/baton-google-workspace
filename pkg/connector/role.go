@@ -216,7 +216,7 @@ func (o *roleResourceType) Revoke(ctx context.Context, grant *v2.Grant) (annotat
 			// This should only hit if someone double-revokes, but I'd rather we log something about it
 			l.Info("google-workspace-v2: role member is being deleted but doesn't exist",
 				zap.String("group_id", grant.Entitlement.Resource.Id.Resource),
-				zap.String("user_id", grant.Principal.GetId().GetResource()))
+				zap.String(argUserID, grant.Principal.GetId().GetResource()))
 			return nil, nil
 		}
 		return nil, err

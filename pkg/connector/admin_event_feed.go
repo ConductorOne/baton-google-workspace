@@ -109,6 +109,10 @@ func (pt *adminEventFeedPageToken) marshal() (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
+// eventTypeGroupSettings is the Directory API activity event Type for group
+// settings changes (extracted to satisfy goconst).
+const eventTypeGroupSettings = "GROUP_SETTINGS"
+
 type cacheEntry struct {
 	Id          string
 	DisplayName string
@@ -161,7 +165,7 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 		// There can be multiple events, have not found an example of this yet
 		for _, evt := range activity.Events {
 			switch evt.Type {
-			case "GROUP_SETTINGS":
+			case eventTypeGroupSettings:
 				changeEvents, err := f.handleGroupEvent(ctx, activity.Id.UniqueQualifier, occurredAt, evt)
 				if err != nil {
 					l.Error("failed to handle group event", zap.Error(err))

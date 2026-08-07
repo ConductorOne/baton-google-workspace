@@ -60,6 +60,51 @@ func TestProfileFromJSON(t *testing.T) {
 		require.Equal(t, "+14155550111", *patch.recoveryPhone)
 	})
 
+	t.Run("employee information keys", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{
+			"department":    "Engineering",
+			"job_title":     "Staff Engineer",
+			"cost_center":   "CC-42",
+			"employee_type": "Full-time",
+			"employee_id":   "E12345",
+			"manager_email": "manager@example.com",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, patch.department)
+		require.Equal(t, "Engineering", *patch.department)
+		require.NotNil(t, patch.jobTitle)
+		require.Equal(t, "Staff Engineer", *patch.jobTitle)
+		require.NotNil(t, patch.costCenter)
+		require.Equal(t, "CC-42", *patch.costCenter)
+		require.NotNil(t, patch.employeeType)
+		require.Equal(t, "Full-time", *patch.employeeType)
+		require.NotNil(t, patch.employeeID)
+		require.Equal(t, "E12345", *patch.employeeID)
+		require.NotNil(t, patch.managerEmail)
+		require.Equal(t, "manager@example.com", *patch.managerEmail)
+	})
+
+	t.Run("employee information camelCase aliases", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{
+			"jobTitle":     "Director",
+			"costCenter":   "CC-99",
+			"employeeType": "Intern",
+			"employeeId":   "E99999",
+			"managerEmail": "boss@example.com",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, patch.jobTitle)
+		require.Equal(t, "Director", *patch.jobTitle)
+		require.NotNil(t, patch.costCenter)
+		require.Equal(t, "CC-99", *patch.costCenter)
+		require.NotNil(t, patch.employeeType)
+		require.Equal(t, "Intern", *patch.employeeType)
+		require.NotNil(t, patch.employeeID)
+		require.Equal(t, "E99999", *patch.employeeID)
+		require.NotNil(t, patch.managerEmail)
+		require.Equal(t, "boss@example.com", *patch.managerEmail)
+	})
+
 	t.Run("empty object yields empty patch", func(t *testing.T) {
 		patch, err := profileFromJSON(map[string]any{})
 		require.NoError(t, err)
@@ -130,7 +175,7 @@ func TestUpdateUserGlobal_PatchesProfile(t *testing.T) {
 	c := newTestGlobalConnector(t, dir)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":      resourceIDArg("user", "user123"),
+		argUserID:      resourceIDArg("user", "user123"),
 		"user_profile": strArg(`{"family_name":"New"}`),
 	}}
 
@@ -141,6 +186,53 @@ func TestUpdateUserGlobal_PatchesProfile(t *testing.T) {
 	// read-modify-write of Name: family_name changed, given_name preserved.
 	require.Equal(t, "New", state.lastPatchBody.Name.FamilyName)
 	require.Equal(t, "Old", state.lastPatchBody.Name.GivenName)
+}
+
+func TestUpdateUserGlobal_EmployeeInfoAndManagerViaProfile(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "t@example.com",
+				Organizations: []directoryAdmin.UserOrganization{
+					{Primary: true, Title: "Old Title"},
+				},
+				Relations: []directoryAdmin.UserRelation{
+					{Type: "manager", Value: "old-manager@example.com"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestGlobalConnector(t, dir)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:      resourceIDArg("user", "user123"),
+		"user_profile": strArg(`{"department":"Engineering","manager_email":"new-manager@example.com"}`),
+	}}
+
+	resp, _, err := c.updateUserActionHandler(context.Background(), args)
+	require.NoError(t, err)
+	require.True(t, resp.GetFields()["success"].GetBoolValue())
+	require.Equal(t, 1, state.patchCount)
+	// Both department and manager_email need a read-modify-write GET; this
+	// must be a single shared GET, not one per field.
+	require.Equal(t, 1, state.getCount)
+
+	orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
+	require.NoError(t, err)
+	require.Len(t, orgs, 1)
+	require.Equal(t, "Engineering", orgs[0].Department)
+	require.Equal(t, "Old Title", orgs[0].Title, "sibling org field must be preserved")
+
+	rels, err := extractFromInterface[*directoryAdmin.UserRelation](state.lastPatchBody.Relations)
+	require.NoError(t, err)
+	require.Len(t, rels, 1)
+	require.Equal(t, "manager", rels[0].Type)
+	require.Equal(t, "new-manager@example.com", rels[0].Value)
 }
 
 func TestUpdateUserGlobal_CustomSchemasViaProfile(t *testing.T) {
@@ -156,7 +248,7 @@ func TestUpdateUserGlobal_CustomSchemasViaProfile(t *testing.T) {
 	c := newTestGlobalConnector(t, dir)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id":      resourceIDArg("user", "user123"),
+		argUserID:      resourceIDArg("user", "user123"),
 		"user_profile": strArg(`{"custom_schemas":{"EmployeeInfo":{"region":"emea"}}}`),
 	}}
 
@@ -179,7 +271,7 @@ func TestUpdateUserGlobal_MissingUserProfile(t *testing.T) {
 	c := newTestGlobalConnector(t, dir)
 
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
-		"user_id": resourceIDArg("user", "user123"),
+		argUserID: resourceIDArg("user", "user123"),
 	}}
 
 	_, _, err := c.updateUserActionHandler(context.Background(), args)

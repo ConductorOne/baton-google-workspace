@@ -18,6 +18,10 @@ import (
 
 const applicationAccessEntitlement = "access"
 
+// errorReasonAccessNotConfigured is the legacy googleapi.ErrorItem.Reason value
+// for a disabled API (extracted to satisfy goconst).
+const errorReasonAccessNotConfigured = "accessNotConfigured"
+
 type applicationResource struct {
 	client     *gwclient.GoogleWorkspaceClient
 	customerID string
@@ -207,7 +211,7 @@ func isCloudIdentityAPIDisabledError(err error) bool {
 	}
 	// Legacy error items (e.g. {"reason": "accessNotConfigured"}).
 	for _, item := range ge.Errors {
-		if item.Reason == "accessNotConfigured" {
+		if item.Reason == errorReasonAccessNotConfigured {
 			return true
 		}
 	}

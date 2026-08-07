@@ -35,14 +35,14 @@ var (
 		Description: "Moves a user to a different organizational unit in Google Workspace.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose organizational unit should be changed.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
 			{
-				Name:        "org_unit_path",
+				Name:        argOrgUnitPath,
 				DisplayName: "Organizational Unit Path",
 				Description: "The full path to the organizational unit (e.g., '/corp/sales' or '/engineering'). Must start with '/'.",
 				Field:       &config.Field_StringField{},
@@ -51,14 +51,14 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's organizational unit was changed successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
-				DisplayName: "Updated User",
+				Name:        fieldResource,
+				DisplayName: displayUpdatedUser,
 				Description: "The updated user resource with the new organizational unit.",
 				Field:       &config.Field_ResourceField{},
 			},
@@ -74,8 +74,8 @@ var (
 			"and optionally archives the account.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user to perform offboarding profile updates on.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -90,8 +90,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the offboarding profile updates were successfully applied.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -105,8 +105,8 @@ var (
 		Description: "Signs a user out of all web and device sessions and resets their sign-in cookies. The user will have to sign in by authenticating again.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user to sign out.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -114,8 +114,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user was signed out successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -129,8 +129,8 @@ var (
 		Description: "Deletes all OAuth access tokens issued by a user for third-party applications. This revokes access for all applications the user has authorized.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose OAuth tokens should be deleted.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -138,8 +138,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether all OAuth tokens were deleted successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -159,14 +159,14 @@ var (
 		Description: "Updates the manager relation for a user in Google Workspace. Updates the 'manager' entry in the user's Relations field.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose manager should be changed.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
 			},
 			{
-				Name:        "manager_email",
+				Name:        argManagerEmail,
 				DisplayName: "Manager Email",
 				Description: "The email address of the new manager.",
 				Field:       &config.Field_StringField{},
@@ -175,14 +175,14 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's manager was changed successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
-				DisplayName: "Updated User",
+				Name:        fieldResource,
+				DisplayName: displayUpdatedUser,
 				Description: "The updated user resource with the new manager.",
 				Field:       &config.Field_ResourceField{},
 			},
@@ -198,8 +198,8 @@ var (
 			" This action deletes all ASPs for the user, including those created by the user themselves.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
-				DisplayName: "User ID",
+				Name:        argUserID,
+				DisplayName: displayUserID,
 				Description: "The resource ID of the user whose application passwords should be deleted.",
 				Field:       &config.Field_StringField{},
 				IsRequired:  true,
@@ -207,8 +207,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether all application passwords were deleted successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -227,11 +227,12 @@ var (
 		DisplayName: "Update User Profile",
 		Description: "Applies a partial update to a user's profile using patch semantics " +
 			"(only the provided fields are modified, so unrelated server-side state is preserved). " +
-			"Supports name fields, recovery details, and custom-schema attribute values. " +
-			"At least one updatable field must be provided.",
+			"Supports name fields, recovery details, Employee Information attributes " +
+			"(department, job title, cost center, employee ID, employee type), the manager relation, " +
+			"and custom-schema attribute values. At least one updatable field must be provided.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
+				Name:        argUserID,
 				DisplayName: displayUser,
 				Description: "The user to update.",
 				IsRequired:  true,
@@ -272,6 +273,49 @@ var (
 				IsRequired:  false,
 			},
 			{
+				Name:        argDepartment,
+				DisplayName: "Department",
+				Description: "New department. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argJobTitle,
+				DisplayName: "Job Title",
+				Description: "New job title. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argCostCenter,
+				DisplayName: "Cost Center",
+				Description: "New cost center. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argEmployeeType,
+				DisplayName: "Employee Type",
+				Description: "New employee type. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argEmployeeID,
+				DisplayName: "Employee ID",
+				Description: "New employee ID. Send an empty string to clear it.",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
+			},
+			{
+				Name:        argManagerEmail,
+				DisplayName: "Manager Email",
+				Description: "The email address of the new manager. An empty value is rejected; " +
+					"clearing the manager relation is not currently supported by this connector.",
+				Field:      &config.Field_StringField{},
+				IsRequired: false,
+			},
+			{
 				Name:        argCustomSchemas,
 				DisplayName: "Custom Schemas",
 				Description: "JSON object mapping schema name to its field values, e.g. " +
@@ -283,14 +327,14 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's profile was updated successfully.",
 				Field:       &config.Field_BoolField{},
 			},
 			{
-				Name:        "resource",
-				DisplayName: "Updated User",
+				Name:        fieldResource,
+				DisplayName: displayUpdatedUser,
 				Description: "The updated user resource.",
 				Field:       &config.Field_ResourceField{},
 			},
@@ -304,7 +348,7 @@ var (
 		Description: "Promotes (status=true) or demotes (status=false) a user to/from super administrator in Google Workspace.",
 		Arguments: []*config.Field{
 			{
-				Name:        "user_id",
+				Name:        argUserID,
 				DisplayName: displayUser,
 				Description: "The user whose super-admin status should be changed.",
 				IsRequired:  true,
@@ -326,8 +370,8 @@ var (
 		},
 		ReturnTypes: []*config.Field{
 			{
-				Name:        "success",
-				DisplayName: "Success",
+				Name:        fieldSuccess,
+				DisplayName: displaySuccess,
 				Description: "Whether the user's super-admin status was updated successfully.",
 				Field:       &config.Field_BoolField{},
 			},
@@ -382,7 +426,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	// Extract org_unit_path argument
-	orgUnitPathValue, ok := args.Fields["org_unit_path"]
+	orgUnitPathValue, ok := args.Fields[argOrgUnitPath]
 	if !ok || orgUnitPathValue == nil {
 		l.Debug("google-workspace: user action handler: missing org_unit_path argument", zap.Any("args", args))
 		return nil, nil, fmt.Errorf("missing org_unit_path argument")
@@ -412,7 +456,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 			return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 		}
 
-		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+		resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
@@ -443,7 +487,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 	}
 
 	l.Debug("google-workspace: user action handler: changed org unit",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.String("old_org_unit", currentUser.OrgUnitPath),
 		zap.String("new_org_unit", orgUnitPath))
 
@@ -453,7 +497,7 @@ func (o *userResourceType) changeUserOrgUnitActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
@@ -525,7 +569,7 @@ func (o *userResourceType) offboardingProfileUpdateActionHandler(ctx context.Con
 	}
 
 	l.Debug("google-workspace: user action handler: updated offboarding profile",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.String("actions", actionsList))
 
 	return actions.NewReturnValues(true), nil, nil
@@ -562,7 +606,7 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 	}
 
 	l.Debug("google-workspace: user action handler: signed out user",
-		zap.String("user_id", userId))
+		zap.String(argUserID, userId))
 
 	return actions.NewReturnValues(true), nil, nil
 }
@@ -597,7 +641,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	for _, token := range tokens.Items {
 		if token.ClientId == "" {
 			l.Debug("google-workspace: skipping token with empty client ID",
-				zap.String("user_id", userId),
+				zap.String(argUserID, userId),
 				zap.String("display_text", token.DisplayText))
 			continue
 		}
@@ -609,14 +653,14 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 				// If token was already deleted (404), continue
 				if gerr.Code == http.StatusNotFound {
 					l.Debug("google-workspace: token already deleted",
-						zap.String("user_id", userId),
+						zap.String(argUserID, userId),
 						zap.String("client_id", token.ClientId))
 					tokensDeleted++
 					continue
 				}
 			}
 			l.Error("google-workspace: failed to delete token",
-				zap.String("user_id", userId),
+				zap.String(argUserID, userId),
 				zap.String("client_id", token.ClientId),
 				zap.Error(err))
 			lastErr = err
@@ -632,7 +676,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	}
 
 	l.Debug("google-workspace: user action handler: deleted all OAuth tokens",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Int("tokens_deleted", tokensDeleted))
 
 	tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", float64(tokensDeleted))
@@ -675,14 +719,14 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 				// If ASP was already deleted (404), continue
 				if gerr.Code == http.StatusNotFound {
 					l.Debug("google-workspace: application password already deleted",
-						zap.String("user_id", userId),
+						zap.String(argUserID, userId),
 						zap.Int64("code_id", asp.CodeId))
 					passwordsDeleted++
 					continue
 				}
 			}
 			l.Error("google-workspace: failed to delete application password",
-				zap.String("user_id", userId),
+				zap.String(argUserID, userId),
 				zap.Int64("code_id", asp.CodeId),
 				zap.String("name", asp.Name),
 				zap.Error(err))
@@ -699,7 +743,7 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	}
 
 	l.Debug("google-workspace: user action handler: deleted all application passwords",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Int("passwords_deleted", passwordsDeleted))
 
 	passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", float64(passwordsDeleted))
@@ -724,7 +768,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	// Extract manager_email argument
-	managerEmailValue, ok := args.Fields["manager_email"]
+	managerEmailValue, ok := args.Fields[argManagerEmail]
 	if !ok || managerEmailValue == nil {
 		l.Debug("google-workspace: user action handler: missing manager_email argument", zap.Any("args", args))
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing manager_email argument")
@@ -754,7 +798,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 			return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 		}
 
-		resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+		resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 		}
@@ -764,17 +808,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 
 	// Build updated relations: keep all non-manager relations, replace/add manager
 	currentRelations := extractRelations(currentUser)
-	updatedRelations := make([]admin.UserRelation, 0, len(currentRelations)+1)
-	for _, rel := range currentRelations {
-		if rel.Type != relTypeManager {
-			updatedRelations = append(updatedRelations, *rel)
-		}
-	}
-	// Add the new manager relation
-	updatedRelations = append(updatedRelations, admin.UserRelation{
-		Type:  relTypeManager,
-		Value: managerEmail,
-	})
+	updatedRelations := buildManagerRelations(currentRelations, managerEmail)
 
 	// Update the user's relations
 	updatedUser, err := o.client.UpdateUser(ctx, userId, &admin.User{
@@ -786,7 +820,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 	}
 
 	l.Debug("google-workspace: user action handler: changed manager",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.String("old_manager", currentManagerEmail),
 		zap.String("new_manager", managerEmail))
 
@@ -796,7 +830,7 @@ func (o *userResourceType) updateUserManagerActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
@@ -825,6 +859,12 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		familyName:    optionalStringField(args, argFamilyName),
 		recoveryEmail: optionalStringField(args, argRecoveryEmail),
 		recoveryPhone: optionalStringField(args, argRecoveryPhone),
+		department:    optionalStringField(args, argDepartment),
+		jobTitle:      optionalStringField(args, argJobTitle),
+		costCenter:    optionalStringField(args, argCostCenter),
+		employeeType:  optionalStringField(args, argEmployeeType),
+		employeeID:    optionalStringField(args, argEmployeeID),
+		managerEmail:  optionalStringField(args, argManagerEmail),
 	}
 
 	// Custom schemas: raw JSON object mapping schemaName -> { fieldName: value },
@@ -844,7 +884,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 	}
 
 	l.Debug("google-workspace: user action handler: updated user profile",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Strings("fields", updatedFields))
 
 	userResource, err := o.userResource(ctx, updatedUser)
@@ -852,7 +892,7 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		return nil, nil, fmt.Errorf("google-workspace: failed to create user resource: %w", err)
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", userResource)
+	resourceRv, err := actions.NewResourceReturnField(fieldResource, userResource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to build resource return field: %w", err)
 	}
@@ -894,7 +934,7 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 	}
 
 	l.Debug("google-workspace: user action handler: updated admin status",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Bool(fieldStatus, status))
 
 	return actions.NewReturnValues(true), nil, nil
@@ -903,27 +943,44 @@ func (o *userResourceType) makeAdminActionHandler(ctx context.Context, args *str
 // userProfilePatch holds the optional profile fields to apply with patch
 // semantics. A nil pointer leaves the field untouched; a non-nil pointer
 // (including a pointer to the empty string) is sent to the API so callers can
-// clear a value. Exception: the name fields (givenName/familyName) ignore empty
-// strings — Google rejects empty names and blanking a name is never intended.
+// clear a value. Exceptions: the name fields (givenName/familyName) ignore
+// empty strings and are treated as "not provided", since Google rejects empty
+// names. managerEmail is stricter still: present-but-empty is rejected
+// outright (InvalidArgument) rather than silently ignored, matching the
+// standalone update_user_manager action, which has never supported clearing
+// the manager relation - CXH-2153 asks this path to write "the same relation
+// the existing update_user_manager action writes", and that action requires
+// a non-empty, valid manager email.
 type userProfilePatch struct {
 	givenName     *string
 	familyName    *string
 	recoveryEmail *string
 	recoveryPhone *string
+	department    *string
+	jobTitle      *string
+	costCenter    *string
+	employeeType  *string
+	employeeID    *string
+	managerEmail  *string
 	customSchemas map[string]googleapi.RawMessage
 }
 
-// applyUserProfilePatch applies a partial profile update with patch semantics and
-// returns the updated user plus the list of changed fields. Shared by the
-// resource-scoped update_user_profile action and the global update_user action
-// consumed by ConductorOne push rules.
+// applyUserProfilePatch applies a partial profile update and returns the
+// updated user plus the list of changed fields. Shared by the resource-scoped
+// update_user_profile action and the global update_user action consumed by
+// ConductorOne push rules. Despite the name, this issues a Users.Update (PUT)
+// instead of Users.Patch only in the one case Patch is confirmed not to
+// handle - see the `usePut` comment below for why - so most fields (name,
+// recovery, Employee Information, manager) keep pure patch semantics; only
+// setting employee_id in a way that shrinks the ExternalIds array (any
+// decrease in entry count - not just clearing it to empty, see the
+// `externalIDsWillShrink` comment below) forces a full PUT.
 func applyUserProfilePatch(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
 	userId string,
 	patch userProfilePatch,
 ) (*admin.User, []string, error) {
-	update := &admin.User{}
 	forceSend := make([]string, 0)
 
 	// Name fields. A patch replaces the whole "name" object, so read-modify-write
@@ -933,20 +990,102 @@ func applyUserProfilePatch(
 	// name is never an intended outcome, so empty values are ignored.
 	setGiven := patch.givenName != nil && *patch.givenName != ""
 	setFamily := patch.familyName != nil && *patch.familyName != ""
+	setOrg := patch.department != nil || patch.jobTitle != nil || patch.costCenter != nil || patch.employeeType != nil
+	// manager_email has no clear path through this action - see the Relations
+	// block below - matching the standalone update_user_manager action, which
+	// has never accepted an empty manager_email either. So unlike the recovery
+	// fields (empty means "clear") and unlike the name fields (empty means
+	// "not provided", silently skipped), a present-but-empty manager_email is
+	// rejected outright: silently no-op'ing it would leave a caller asking to
+	// drop a manager with a false "success" and no indication anything was
+	// skipped.
+	setManagerEmail := patch.managerEmail != nil
+	// Validate before the read-modify-write GET below so an invalid value
+	// fails fast without burning an API call.
+	if setManagerEmail {
+		if *patch.managerEmail == "" {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				"google-workspace: invalid manager_email: manager_email cannot be cleared through this action")
+		}
+		if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
+		}
+	}
+
+	// Organizations, ExternalIds, and Relations are array fields, so a GET is
+	// required first to preserve sibling entries (other organizations, other
+	// external-ID types, other relation types) the caller did not set. Fetch
+	// once and reuse across all three blocks below, plus the Name block,
+	// instead of issuing a GET per field.
+	needCurrent := (setGiven != setFamily) || setOrg || patch.employeeID != nil || setManagerEmail
+	var current *admin.User
+	if needCurrent {
+		var err error
+		current, err = client.GetUserFullForProvisioning(ctx, userId)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// Employee ID: the Admin console's "Employee ID" is the ExternalIds entry
+	// with Type "organization" (an oddly-named but stable API mapping). Preserve
+	// any other ExternalIds entries (account/login_id/network, etc.). Computed
+	// up front (rather than inline further down) because whether this shrinks
+	// the array decides usePut below. Note this can fire even when employeeID
+	// is non-empty: buildUpdatedExternalIDs always collapses down to at most
+	// one "organization" entry, so a tenant that already had 2+ duplicate
+	// organization entries (see the lossy multi-value note on
+	// profile[argEmployeeID] in user.go) shrinks the array here too, not just
+	// the empty-string clear case.
+	var updatedExternalIDs []admin.UserExternalId
+	externalIDsWillShrink := false
+	if patch.employeeID != nil {
+		currentExtIDs, err := extractFromInterface[*admin.UserExternalId](current.ExternalIds)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
+		}
+		updatedExternalIDs = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
+		externalIDsWillShrink = len(updatedExternalIDs) < len(currentExtIDs)
+	}
+
+	// Users.Patch does not reliably shrink a repeated field down to empty:
+	// confirmed against a live tenant that clearing the sole ExternalIds entry
+	// via Patch (empty slice, with or without ForceSendFields/NullFields)
+	// silently leaves the existing entry in place, even though the same patch
+	// correctly overwrites a *sub-field* of a retained Organizations entry (and
+	// Organizations/Relations never shrink here - buildUpdatedOrganizations only
+	// ever preserves or appends, buildManagerRelations only ever appends the
+	// manager entry - so neither needs this workaround). A *sparse* Update
+	// (PUT) has the same problem - also confirmed live - so Update only clears
+	// it when given the genuinely complete object. So whenever ExternalIds is
+	// actually shrinking - per externalIDsWillShrink above, which is not
+	// limited to the empty-clear case - start from a full copy of `current` and
+	// send the result via Update instead of Patch: `update` begins as an exact copy of
+	// `current` with only the fields below overwritten, so nothing this
+	// function doesn't touch changes - modulo the accepted tradeoff that a
+	// full-object Update widens the read-modify-write race window to every
+	// field on the user (not just the ones this call touches) versus Patch's
+	// narrower one, since anything changed on the server between this GET and
+	// the Update below would be silently reverted to the value captured here.
+	// Every other case (name, recovery, Employee Information, manager) keeps
+	// the narrower, cheaper Patch.
+	usePut := externalIDsWillShrink
+	var update *admin.User
+	if usePut {
+		full := *current
+		update = &full
+	} else {
+		update = &admin.User{}
+	}
+
 	if setGiven || setFamily {
 		name := &admin.UserName{}
 		// Read-modify-write only when exactly one name field is provided, to
 		// preserve the sibling field the caller did not set. When both are
-		// supplied the whole name object is overwritten, so the GET would be a
-		// wasted API call (doubling per-user quota on bulk push rules).
-		if setGiven != setFamily {
-			current, err := client.GetUserFullForProvisioning(ctx, userId)
-			if err != nil {
-				return nil, nil, err
-			}
-			if current.Name != nil {
-				*name = *current.Name
-			}
+		// supplied the whole name object is overwritten.
+		if setGiven != setFamily && current.Name != nil {
+			*name = *current.Name
 		}
 		if setGiven {
 			name.GivenName = *patch.givenName
@@ -975,30 +1114,208 @@ func applyUserProfilePatch(
 		update.RecoveryPhone = *patch.recoveryPhone
 		forceSend = append(forceSend, "RecoveryPhone")
 	}
+
+	// Employee Information: Department, Job title, and Cost center live on the
+	// primary entry of the Organizations array; Employee type maps to that same
+	// entry's Description field (per Admin console mapping). Preserve secondary
+	// organizations and any sibling fields on the primary entry the caller did
+	// not set. buildUpdatedOrganizations reports whether it actually changed
+	// anything (it's a no-op when every provided field is an empty "clear" and
+	// no organization exists to persist it on) so a no-op doesn't get reported
+	// as "Organizations" changed or send empty wire noise.
+	if setOrg {
+		orgs, err := extractFromInterface[*admin.UserOrganization](current.Organizations)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
+		}
+		updatedOrgs, changed := buildUpdatedOrganizations(orgs, patch)
+		update.Organizations = updatedOrgs
+		if changed {
+			forceSend = append(forceSend, "Organizations")
+		}
+	}
+
+	if patch.employeeID != nil {
+		update.ExternalIds = updatedExternalIDs
+		forceSend = append(forceSend, "ExternalIds")
+	}
+
+	// Manager: same "manager" Relations entry the standalone update_user_manager
+	// action writes - buildManagerRelations is shared with that handler so the
+	// two stay behaviorally identical, including rejecting empty values above;
+	// clearing the manager relation is out of scope for both paths.
+	if setManagerEmail {
+		currentRelations, err := extractFromInterface[*admin.UserRelation](current.Relations)
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to parse relations: %w", err)
+		}
+		update.Relations = buildManagerRelations(currentRelations, *patch.managerEmail)
+		forceSend = append(forceSend, "Relations")
+	}
+
 	// Only treat custom schemas as a real update when non-empty. An empty object
 	// ("{}") unmarshals to a non-nil empty map; assigning it would pass the
 	// "at least one updatable field" guard and issue a no-op patch that falsely
-	// reports CustomSchemas as changed.
-	if len(patch.customSchemas) > 0 {
+	// reports CustomSchemas as changed. Tracked as its own bool rather than
+	// testing update.CustomSchemas != nil below: when usePut, update.CustomSchemas
+	// starts out already non-nil for any user with pre-existing custom schemas
+	// (inherited from the `current` copy above), which would otherwise falsely
+	// report CustomSchemas as touched on every such call regardless of patch.
+	//
+	// Deliberately overwrites rather than merging with the inherited current
+	// map (unlike Organizations/ExternalIds/Relations above, which all read-
+	// modify-write to preserve siblings): confirmed against a live tenant that,
+	// unlike those repeated/array fields (which Google replaces wholesale, the
+	// original bug this file works around), custom schema fields merge at the
+	// schema level server-side - sending only {"SchemaA":{"region":"apac"}}
+	// left a sibling field on the SAME schema ("costCenter") untouched even
+	// over Update/PUT. No local merge needed here.
+	customSchemasSet := len(patch.customSchemas) > 0
+	if customSchemasSet {
 		update.CustomSchemas = patch.customSchemas
 	}
 
-	if len(forceSend) == 0 && update.CustomSchemas == nil {
+	if len(forceSend) == 0 && !customSchemasSet {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
 	}
 
 	update.ForceSendFields = forceSend
 
-	updatedUser, err := client.PatchUser(ctx, userId, update)
+	var updatedUser *admin.User
+	var err error
+	if usePut {
+		updatedUser, err = client.UpdateUser(ctx, userId, update)
+	} else {
+		updatedUser, err = client.PatchUser(ctx, userId, update)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 
 	updatedFields := append([]string{}, forceSend...)
-	if update.CustomSchemas != nil {
+	if customSchemasSet {
 		updatedFields = append(updatedFields, "CustomSchemas")
 	}
 	return updatedUser, updatedFields, nil
+}
+
+// buildUpdatedOrganizations merges the requested department/job title/cost
+// center/employee type changes into the current primary organization,
+// preserving secondary organizations and any sibling fields on the primary
+// entry the caller did not set. Google does not guarantee a Primary flag is
+// set (e.g. accounts provisioned via GCDS or third-party sync); this mirrors
+// the read path's extractPrimaryOrganizations fallback of orgs[0] to pick
+// which existing organization to edit in place (instead of appending a second
+// one that silently orphans its sibling fields) - but persisting a Primary
+// flag Google never set is a separate decision from choosing the entry, so
+// the chosen entry's own Primary value is left untouched; only a brand-new
+// entry (no organizations existed at all) is created already flagged Primary.
+// The second return value reports whether anything was actually changed, so
+// a caller-provided patch that resolves to a no-op (every field is an empty
+// "clear" and no organization exists to persist it on) can be told apart from
+// a genuine change.
+func buildUpdatedOrganizations(orgs []*admin.UserOrganization, patch userProfilePatch) ([]admin.UserOrganization, bool) {
+	primaryIdx := -1
+	for i, org := range orgs {
+		if org.Primary {
+			primaryIdx = i
+			break
+		}
+	}
+	if primaryIdx < 0 && len(orgs) > 0 {
+		primaryIdx = 0
+	}
+	if primaryIdx < 0 && !hasNonEmptyOrgField(patch) {
+		// No existing organization to update, and every provided field is an
+		// empty-string "clear" request: there is nothing to persist. Skip
+		// creating a spurious empty primary organization, which would read
+		// back as a phantom organization on the next sync.
+		return []admin.UserOrganization{}, false
+	}
+	primary := &admin.UserOrganization{}
+	if primaryIdx >= 0 {
+		*primary = *orgs[primaryIdx]
+	} else {
+		primary.Primary = true
+	}
+	if patch.department != nil {
+		primary.Department = *patch.department
+		primary.ForceSendFields = append(primary.ForceSendFields, "Department")
+	}
+	if patch.jobTitle != nil {
+		primary.Title = *patch.jobTitle
+		primary.ForceSendFields = append(primary.ForceSendFields, "Title")
+	}
+	if patch.costCenter != nil {
+		primary.CostCenter = *patch.costCenter
+		primary.ForceSendFields = append(primary.ForceSendFields, "CostCenter")
+	}
+	if patch.employeeType != nil {
+		primary.Description = *patch.employeeType
+		primary.ForceSendFields = append(primary.ForceSendFields, "Description")
+	}
+	updatedOrgs := make([]admin.UserOrganization, 0, len(orgs)+1)
+	for i, org := range orgs {
+		if i == primaryIdx {
+			updatedOrgs = append(updatedOrgs, *primary)
+		} else {
+			updatedOrgs = append(updatedOrgs, *org)
+		}
+	}
+	if primaryIdx < 0 {
+		updatedOrgs = append(updatedOrgs, *primary)
+	}
+	return updatedOrgs, true
+}
+
+// hasNonEmptyOrgField reports whether the patch sets at least one Employee
+// Information field to a genuine (non-empty) value, as opposed to only
+// requesting empty-string clears.
+func hasNonEmptyOrgField(patch userProfilePatch) bool {
+	return (patch.department != nil && *patch.department != "") ||
+		(patch.jobTitle != nil && *patch.jobTitle != "") ||
+		(patch.costCenter != nil && *patch.costCenter != "") ||
+		(patch.employeeType != nil && *patch.employeeType != "")
+}
+
+// buildUpdatedExternalIDs sets the ExternalIds entry with Type "organization"
+// (the Admin console's "Employee ID") to employeeID, removing it entirely when
+// employeeID is empty. Other ExternalIds entries (account/login_id/network,
+// etc.) are preserved. Always writes at most one "organization" entry - see
+// the comment on profile[argEmployeeID] in user.go for the one edge case
+// where that's lossy against a tenant that already has more than one.
+func buildUpdatedExternalIDs(ids []*admin.UserExternalId, employeeID string) []admin.UserExternalId {
+	updated := make([]admin.UserExternalId, 0, len(ids)+1)
+	for _, id := range ids {
+		if id.Type != externalIDTypeOrganization {
+			updated = append(updated, *id)
+		}
+	}
+	if employeeID != "" {
+		updated = append(updated, admin.UserExternalId{
+			Type:  externalIDTypeOrganization,
+			Value: employeeID,
+		})
+	}
+	return updated
+}
+
+// buildManagerRelations sets the "manager" Relations entry to managerEmail,
+// preserving any other relation types. Shared by the standalone
+// update_user_manager action and the bulk profile-patch path so the two stay
+// behaviorally identical.
+func buildManagerRelations(relations []*admin.UserRelation, managerEmail string) []admin.UserRelation {
+	updated := make([]admin.UserRelation, 0, len(relations)+1)
+	for _, rel := range relations {
+		if rel.Type != relTypeManager {
+			updated = append(updated, *rel)
+		}
+	}
+	updated = append(updated, admin.UserRelation{
+		Type:  relTypeManager,
+		Value: managerEmail,
+	})
+	return updated
 }
 
 const (
@@ -1011,7 +1328,26 @@ const (
 	argRecoveryEmail = "recovery_email"
 	argRecoveryPhone = "recovery_phone"
 	argCustomSchemas = "custom_schemas"
+	argDepartment    = "department"
+	argJobTitle      = "job_title"
+	argCostCenter    = "cost_center"
+	argEmployeeType  = "employee_type"
+	argEmployeeID    = "employee_id"
+	argManagerEmail  = "manager_email"
 	displayUser      = "User"
+
+	// externalIDTypeOrganization is the admin.UserExternalId.Type value the
+	// Admin console's "Employee ID" field is stored under.
+	externalIDTypeOrganization = "organization"
+	// externalIDTypeLoginID is one of the ExternalId types read as an
+	// additional login during sync (see userResource in user.go).
+	externalIDTypeLoginID = "login_id"
+
+	// displayUserID, argOrgUnitPath, and displayUpdatedUser are shared across
+	// several action schemas (extracted to satisfy goconst).
+	displayUserID      = "User ID"
+	argOrgUnitPath     = "org_unit_path"
+	displayUpdatedUser = "Updated User"
 )
 
 // updateUserGlobalActionSchema is the global (account-level) profile-update
@@ -1024,7 +1360,8 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 	DisplayName: "Update User",
 	Description: "Updates a user's profile from a user_profile JSON object. " +
 		"Consumed by ConductorOne push rules for automated profile sync. " +
-		"Supported keys: given_name, family_name, recovery_email, recovery_phone, custom_schemas.",
+		"Supported keys: given_name, family_name, recovery_email, recovery_phone, department, job_title, " +
+		"cost_center, employee_type, employee_id, manager_email, custom_schemas.",
 	Arguments: []*config.Field{
 		{
 			Name:        argUserID,
@@ -1042,15 +1379,16 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 		{
 			Name:        argUserProfile,
 			DisplayName: "User Profile Data",
-			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, custom_schemas.",
-			IsRequired:  true,
-			Field:       &config.Field_StringField{},
+			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, " +
+				"department, job_title, cost_center, employee_type, employee_id, manager_email, custom_schemas.",
+			IsRequired: true,
+			Field:      &config.Field_StringField{},
 		},
 	},
 	ReturnTypes: []*config.Field{
 		{
-			Name:        "success",
-			DisplayName: "Success",
+			Name:        fieldSuccess,
+			DisplayName: displaySuccess,
 			Description: "Whether the user's profile was updated successfully.",
 			Field:       &config.Field_BoolField{},
 		},
@@ -1110,11 +1448,11 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 	}
 
 	l.Debug("google-workspace: update_user: updated user profile",
-		zap.String("user_id", userId),
+		zap.String(argUserID, userId),
 		zap.Strings("fields", updatedFields))
 
 	result, err := structpb.NewStruct(map[string]any{
-		"success":        true,
+		fieldSuccess:     true,
 		"updated_fields": strings.Join(updatedFields, ", "),
 	})
 	if err != nil {
@@ -1139,6 +1477,24 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 	}
 	if v, ok := stringFromJSON(profile, argRecoveryPhone, "recoveryPhone"); ok {
 		patch.recoveryPhone = &v
+	}
+	if v, ok := stringFromJSON(profile, argDepartment, "department"); ok {
+		patch.department = &v
+	}
+	if v, ok := stringFromJSON(profile, argJobTitle, "jobTitle"); ok {
+		patch.jobTitle = &v
+	}
+	if v, ok := stringFromJSON(profile, argCostCenter, "costCenter"); ok {
+		patch.costCenter = &v
+	}
+	if v, ok := stringFromJSON(profile, argEmployeeType, "employeeType"); ok {
+		patch.employeeType = &v
+	}
+	if v, ok := stringFromJSON(profile, argEmployeeID, "employeeId"); ok {
+		patch.employeeID = &v
+	}
+	if v, ok := stringFromJSON(profile, argManagerEmail, "managerEmail"); ok {
+		patch.managerEmail = &v
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)

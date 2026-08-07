@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC.
+// Copyright 2026 Google LLC.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -1156,6 +1156,31 @@ func (s BatchDeletePrintersResponse) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// BluetoothAdapterInfo: Information about a device's Bluetooth adapter.
+type BluetoothAdapterInfo struct {
+	// Address: Output only. The MAC address of the adapter.
+	Address string `json:"address,omitempty"`
+	// NumConnectedDevices: Output only. The number of devices connected to this
+	// adapter.
+	NumConnectedDevices int64 `json:"numConnectedDevices,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Address") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Address") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s BluetoothAdapterInfo) MarshalJSON() ([]byte, error) {
+	type NoMethod BluetoothAdapterInfo
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // Building: Public API: Resources.buildings
 type Building struct {
 	// Address: The postal address of the building. See `PostalAddress`
@@ -1545,6 +1570,9 @@ type ChromeOsDevice struct {
 	AutoUpdateThrough string `json:"autoUpdateThrough,omitempty"`
 	// BacklightInfo: Output only. Contains backlight information for the device.
 	BacklightInfo []*BacklightInfo `json:"backlightInfo,omitempty"`
+	// BluetoothAdapterInfo: Output only. Information about Bluetooth adapters of
+	// the device.
+	BluetoothAdapterInfo []*BluetoothAdapterInfo `json:"bluetoothAdapterInfo,omitempty"`
 	// BootMode: The boot mode for the device. The possible values are: *
 	// `Verified`: The device is running a valid version of the Chrome OS. * `Dev`:
 	// The devices's developer hardware switch is enabled. When booted, the device
@@ -1719,7 +1747,8 @@ type ChromeOsDevice struct {
 	OsUpdateStatus *OsUpdateStatus `json:"osUpdateStatus,omitempty"`
 	// OsVersion: The Chrome device's operating system version.
 	OsVersion string `json:"osVersion,omitempty"`
-	// OsVersionCompliance: Output only. Compliance status of the OS version.
+	// OsVersionCompliance: Output only. Device policy compliance status of the OS
+	// version.
 	//
 	// Possible values:
 	//   "complianceUnspecified" - Compliance status unspecified.
@@ -2609,6 +2638,32 @@ func (s DirectoryChromeosdevicesIssueCommandResponse) MarshalJSON() ([]byte, err
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// DirectoryUsersCreateGuestRequest: Directory users guest creation request
+// message.
+type DirectoryUsersCreateGuestRequest struct {
+	// Customer: Optional. Immutable ID of the Google Workspace account.
+	Customer string `json:"customer,omitempty"`
+	// PrimaryGuestEmail: Immutable. External email of the guest user being
+	// created.
+	PrimaryGuestEmail string `json:"primaryGuestEmail,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Customer") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Customer") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s DirectoryUsersCreateGuestRequest) MarshalJSON() ([]byte, error) {
+	type NoMethod DirectoryUsersCreateGuestRequest
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 type DomainAlias struct {
 	// CreationTime: The creation time of the domain alias. (Read-only).
 	CreationTime int64 `json:"creationTime,omitempty,string"`
@@ -3114,6 +3169,28 @@ type Groups struct {
 
 func (s Groups) MarshalJSON() ([]byte, error) {
 	type NoMethod Groups
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// GuestAccountInfo: Account info specific to Guest users.
+type GuestAccountInfo struct {
+	// PrimaryGuestEmail: Immutable. The guest's external email.
+	PrimaryGuestEmail string `json:"primaryGuestEmail,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "PrimaryGuestEmail") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "PrimaryGuestEmail") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s GuestAccountInfo) MarshalJSON() ([]byte, error) {
+	type NoMethod GuestAccountInfo
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -4499,6 +4576,8 @@ type User struct {
 	// Gender: The user's gender. The maximum allowed data size for this field is
 	// 1KB.
 	Gender interface{} `json:"gender,omitempty"`
+	// GuestAccountInfo: Immutable. Additional guest-related metadata fields
+	GuestAccountInfo *GuestAccountInfo `json:"guestAccountInfo,omitempty"`
 	// HashFunction: Stores the hash format of the `password` property. The
 	// following `hashFunction` values are allowed: * `MD5` - Accepts simple
 	// hex-encoded values. * `SHA-1` - Accepts simple hex-encoded values. * `crypt`
@@ -4549,6 +4628,8 @@ type User struct {
 	IsEnforcedIn2Sv bool `json:"isEnforcedIn2Sv,omitempty"`
 	// IsEnrolledIn2Sv: Output only. Is enrolled in 2-step verification (Read-only)
 	IsEnrolledIn2Sv bool `json:"isEnrolledIn2Sv,omitempty"`
+	// IsGuestUser: Immutable. Indicates if the inserted user is a guest.
+	IsGuestUser bool `json:"isGuestUser,omitempty"`
 	// IsMailboxSetup: Output only. Indicates if the user's Google mailbox is
 	// created. This property is only applicable if the user has been assigned a
 	// Gmail license.
@@ -10236,9 +10317,10 @@ func (c *GroupsListCall) PageToken(pageToken string) *GroupsListCall {
 	return c
 }
 
-// Query sets the optional parameter "query": Query string search. Should be of
-// the form "". Complete documentation is at https:
-// //developers.google.com/admin-sdk/directory/v1/guides/search-groups
+// Query sets the optional parameter "query": Query string search. Contains one
+// or more search clauses, each with a field, operator, and value. For complete
+// documentation, go to Search for groups
+// (https://developers.google.com/workspace/admin/directory/v1/guides/search-groups).
 func (c *GroupsListCall) Query(query string) *GroupsListCall {
 	c.urlParams_.Set("query", query)
 	return c
@@ -14058,13 +14140,13 @@ func (c *ResourcesCalendarsListCall) PageToken(pageToken string) *ResourcesCalen
 }
 
 // Query sets the optional parameter "query": String query used to filter
-// results. Should be of the form "field operator value" where field can be any
-// of supported fields and operators can be any of supported operations.
-// Operators include '=' for exact match, '!=' for mismatch and ':' for prefix
-// match or HAS match where applicable. For prefix match, the value should
-// always be followed by a *. Logical operators NOT and AND are supported (in
-// this order of precedence). Supported fields include `generatedResourceName`,
-// `name`, `buildingId`, `floor_name`, `capacity`,
+// results. Contains one or more search clauses, each with a field, operator,
+// and value. A field can be any of supported fields and operators can be any
+// of supported operations. Operators include '=' for exact match, '!=' for
+// mismatch and ':' for prefix match or HAS match where applicable. For prefix
+// match, the value should always be followed by a *. Logical operators NOT and
+// AND are supported (in this order of precedence). Supported fields include
+// `generatedResourceName`, `name`, `buildingId`, `floor_name`, `capacity`,
 // `featureInstances.feature.name`, `resourceEmail`, `resourceCategory`. For
 // example `buildingId=US-NYC-9TH AND featureInstances.feature.name:Phone`.
 func (c *ResourcesCalendarsListCall) Query(query string) *ResourcesCalendarsListCall {
@@ -17305,6 +17387,105 @@ func (c *TwoStepVerificationTurnOffCall) Do(opts ...googleapi.CallOption) error 
 	return nil
 }
 
+type UsersCreateGuestCall struct {
+	s                                *Service
+	directoryuserscreateguestrequest *DirectoryUsersCreateGuestRequest
+	urlParams_                       gensupport.URLParams
+	ctx_                             context.Context
+	header_                          http.Header
+}
+
+// CreateGuest: Create a guest user with access to a subset of Workspace
+// capabilities (https://support.google.com/a/answer/16558545?hl=en). This
+// feature is currently in Alpha. Please reach out to support if you are
+// interested in trying this feature.
+func (r *UsersService) CreateGuest(directoryuserscreateguestrequest *DirectoryUsersCreateGuestRequest) *UsersCreateGuestCall {
+	c := &UsersCreateGuestCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.directoryuserscreateguestrequest = directoryuserscreateguestrequest
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *UsersCreateGuestCall) Fields(s ...googleapi.Field) *UsersCreateGuestCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *UsersCreateGuestCall) Context(ctx context.Context) *UsersCreateGuestCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *UsersCreateGuestCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *UsersCreateGuestCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.directoryuserscreateguestrequest)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "admin/directory/v1/users:createGuest")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "directory.users.createGuest", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "directory.users.createGuest" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *User.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *UsersCreateGuestCall) Do(opts ...googleapi.CallOption) (*User, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &User{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "directory.users.createGuest", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
 type UsersDeleteCall struct {
 	s          *Service
 	userKey    string
@@ -18455,9 +18636,10 @@ func (c *UsersWatchCall) Projection(projection string) *UsersWatchCall {
 	return c
 }
 
-// Query sets the optional parameter "query": Query string search. Should be of
-// the form "". Complete documentation is at https:
-// //developers.google.com/admin-sdk/directory/v1/guides/search-users
+// Query sets the optional parameter "query": Query string search. Contains one
+// or more search clauses, each with a field, operator, and value. For complete
+// documentation, go to Search for users
+// (https://developers.google.com/workspace/admin/directory/v1/guides/search-users).
 func (c *UsersWatchCall) Query(query string) *UsersWatchCall {
 	c.urlParams_.Set("query", query)
 	return c
