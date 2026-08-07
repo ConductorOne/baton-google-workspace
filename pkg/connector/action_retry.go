@@ -33,12 +33,35 @@ func withActionRetryValue[T any](ctx context.Context, fn func() (T, error)) (T, 
 	return withRetryConfigValue(ctx, actionRetryConfig, fn)
 }
 
+// newActionRetryLoop returns a retry function bound to a single shared
+// retry.Retryer using actionRetryConfig. Use this instead of withActionRetry
+// when looping over multiple items (e.g. deleting each of a user's OAuth
+// tokens): a fresh retryer per item would give every item its own
+// independent attempt budget, so a sustained throttle could stretch an
+// N-item loop to N times the single-call worst case. A shared retryer
+// amortizes the budget across the whole loop instead.
+func newActionRetryLoop(ctx context.Context) func(fn func() error) error {
+	return newRetryLoop(ctx, actionRetryConfig)
+}
+
+// newRetryLoop is newActionRetryLoop parametrized by config, so tests can use
+// a fast config instead of actionRetryConfig's real 15s/60s delays.
+func newRetryLoop(ctx context.Context, cfg retry.RetryConfig) func(fn func() error) error {
+	retryer := retry.NewRetryer(ctx, cfg)
+	return func(fn func() error) error {
+		return withRetryer(ctx, retryer, fn)
+	}
+}
+
 // withRetryConfig and withRetryConfigValue do the actual retry looping for a
 // given retry.RetryConfig. Split out from withActionRetry/withActionRetryValue
 // so tests can exercise the retry behavior with a fast config instead of
 // actionRetryConfig's real 15s/60s delays.
 func withRetryConfig(ctx context.Context, cfg retry.RetryConfig, fn func() error) error {
-	retryer := retry.NewRetryer(ctx, cfg)
+	return withRetryer(ctx, retry.NewRetryer(ctx, cfg), fn)
+}
+
+func withRetryer(ctx context.Context, retryer *retry.Retryer, fn func() error) error {
 	for {
 		err := fn()
 		if err == nil {

@@ -118,6 +118,63 @@ func TestWithRetryConfigValue(t *testing.T) {
 	})
 }
 
+func TestNewRetryLoopSharesRetryerAcrossCalls(t *testing.T) {
+	t.Run("retries an earlier item needed still count against a later item's budget", func(t *testing.T) {
+		loop := newRetryLoop(t.Context(), fastRetryConfig) // MaxAttempts: 3
+
+		// Item 1: throttled twice, then succeeds on the 3rd try - spends 2
+		// of the shared retryer's 3 attempts.
+		calls := 0
+		err := loop(func() error {
+			calls++
+			if calls < 3 {
+				return status.Error(codes.Unavailable, "throttled")
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
+
+		// Item 2: only 1 attempt of budget remains. A fresh per-item
+		// retryer (what withActionRetry would give this item on its own)
+		// would allow 3 more retries; the shared retryer allows only 1
+		// before giving up, since item 1's spend carried over.
+		calls = 0
+		err = loop(func() error {
+			calls++
+			return status.Error(codes.Unavailable, "still throttled")
+		})
+		require.Error(t, err)
+		require.Equal(t, 2, calls, "only 1 more retry should remain from the shared budget, not a fresh 3")
+	})
+
+	t.Run("a shared retryer's attempt count carries across items when items fail without succeeding in between", func(t *testing.T) {
+		loop := newRetryLoop(t.Context(), fastRetryConfig)
+
+		totalCalls := 0
+		// Item 1: always throttled, exhausts the shared budget.
+		err := loop(func() error {
+			totalCalls++
+			return status.Error(codes.Unavailable, "throttled")
+		})
+		require.Error(t, err)
+		require.Equal(t, fastRetryConfig.MaxAttempts+1, uint(totalCalls))
+
+		// Item 2, same loop, same never-reset retryer: with a fresh
+		// per-item retryer (the withActionRetry behavior this loop replaces
+		// for multi-item calls) this would get its own full budget again.
+		// With the shared retryer, the exhausted budget carries over and
+		// this call gets zero additional retries.
+		beforeItem2 := totalCalls
+		err = loop(func() error {
+			totalCalls++
+			return status.Error(codes.Unavailable, "still throttled")
+		})
+		require.Error(t, err)
+		require.Equal(t, 1, totalCalls-beforeItem2, "a shared retryer with an already-exhausted budget should not retry the next item either")
+	})
+}
+
 func TestWithActionRetryUsesActionRetryConfig(t *testing.T) {
 	// Sanity check that the production-facing helpers are wired to
 	// actionRetryConfig (not left pointing at a zero-value RetryConfig,

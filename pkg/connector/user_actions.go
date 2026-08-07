@@ -655,6 +655,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 	// Delete each token
 	tokensDeleted := 0
 	var lastErr error
+	retryLoop := newActionRetryLoop(ctx)
 	for _, token := range tokens.Items {
 		if token.ClientId == "" {
 			l.Debug("google-workspace: skipping token with empty client ID",
@@ -663,7 +664,7 @@ func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context
 			continue
 		}
 
-		err := withActionRetry(ctx, func() error {
+		err := retryLoop(func() error {
 			return o.client.DeleteToken(ctx, userId, token.ClientId)
 		})
 		if err != nil {
@@ -732,8 +733,9 @@ func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx contex
 	// Delete each application password
 	passwordsDeleted := 0
 	var lastErr error
+	retryLoop := newActionRetryLoop(ctx)
 	for _, asp := range asps.Items {
-		err := withActionRetry(ctx, func() error {
+		err := retryLoop(func() error {
 			return o.client.DeleteAsp(ctx, userId, asp.CodeId)
 		})
 		if err != nil {

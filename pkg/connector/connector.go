@@ -336,7 +336,7 @@ func isAuthorizationError(err error) bool {
 // Authorization errors are logged at debug level as they are expected when scopes are not available.
 // Other errors (network, context cancellation, etc.) are fatal so the sync cannot persist a partial c1z.
 // skipped, when non-nil, collects the purpose of each skipped service so
-// newClient can log one Info-level summary after wiring completes.
+// newClient can log one categorized Debug-level summary after wiring completes.
 func recordServiceInit(l *zap.Logger, err error, scope, purpose string, skipped *[]string) error {
 	if err == nil {
 		return nil
