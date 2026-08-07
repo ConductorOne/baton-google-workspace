@@ -8,8 +8,8 @@ import (
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	cloudidentity "google.golang.org/api/cloudidentity/v1"
-	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/googleapi"
+	groupssettings "google.golang.org/api/groupssettings/v1"
 )
 
 // errServiceNotAvailable returns a standardised error for when a required Google
@@ -601,10 +601,17 @@ func (c *GoogleWorkspaceClient) ListInboundSamlProfiles(ctx context.Context, cus
 		return errServiceNotAvailable("cloud identity service")
 	}
 	customerFilter := fmt.Sprintf(`customer=="customers/%s"`, customerID)
-	return c.CloudIdentityService.InboundSamlSsoProfiles.List().
+	err := c.CloudIdentityService.InboundSamlSsoProfiles.List().
 		Filter(customerFilter).
 		PageSize(100).
 		Pages(ctx, fn)
+	if err != nil {
+		// Unlike every other client method, .Pages() errors would otherwise
+		// bypass wrapGoogleApiErrorWithContext entirely, leaving this path
+		// with no gRPC status classification or rate-limit detail at all.
+		return wrapGoogleApiErrorWithContext(err, "failed to list inbound SAML profiles")
+	}
+	return nil
 }
 
 // BuildSAMLProfileMap returns a displayName → profile.Name mapping for all Cloud Identity SAML

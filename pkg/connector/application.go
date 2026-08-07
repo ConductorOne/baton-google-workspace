@@ -195,18 +195,11 @@ func isCloudIdentityAPIDisabledError(err error) bool {
 	if ge.Code != http.StatusForbidden {
 		return false
 	}
-	// Legacy error items (e.g. {"reason": "accessNotConfigured"}).
-	for _, item := range ge.Errors {
-		if item.Reason == errorReasonAccessNotConfigured {
+	// Covers both the legacy error item (e.g. {"reason": "accessNotConfigured"})
+	// and the structured google.rpc.ErrorInfo{reason: "SERVICE_DISABLED"} shape.
+	for _, reason := range gwclient.GoogleAPIErrorReasons(ge) {
+		if reason == errorReasonAccessNotConfigured || reason == "SERVICE_DISABLED" {
 			return true
-		}
-	}
-	// Structured details carrying google.rpc.ErrorInfo{reason: "SERVICE_DISABLED"}.
-	for _, detail := range ge.Details {
-		if m, ok := detail.(map[string]interface{}); ok {
-			if reason, _ := m["reason"].(string); reason == "SERVICE_DISABLED" {
-				return true
-			}
 		}
 	}
 	return false

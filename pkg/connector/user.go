@@ -130,6 +130,11 @@ func userBuilder(client *gwclient.GoogleWorkspaceClient, customerId string, doma
 // future argument rename silently change the profile schema too.
 const profileKeyUserID = "user_id"
 
+// profileKeyOrgUnitPath is the synced profile's "org_unit_path" key, kept
+// separate from argOrgUnitPath since a profile key is permanent API surface
+// while an action-argument name can evolve independently.
+const profileKeyOrgUnitPath = "org_unit_path"
+
 func userProfile(user *admin.User) map[string]interface{} {
 	profile := make(map[string]interface{})
 	if user.Name != nil {
@@ -141,7 +146,7 @@ func userProfile(user *admin.User) map[string]interface{} {
 	}
 
 	profile[profileKeyUserID] = user.Id
-	profile[argOrgUnitPath] = user.OrgUnitPath
+	profile[profileKeyOrgUnitPath] = user.OrgUnitPath
 	profile["include_in_global_address_list"] = user.IncludeInGlobalAddressList
 
 	primaryOrg := extractPrimaryOrganizations(user)
@@ -149,11 +154,13 @@ func userProfile(user *admin.User) map[string]interface{} {
 		// add all org[0] fields to the profile
 		profile["organization"] = primaryOrg.Name
 		profile["department"] = primaryOrg.Department
-		profile["title"] = primaryOrg.Title
+		profile[profileKeyTitle] = primaryOrg.Title
 		// job_title aliases "title" under the same name update_user_profile's
 		// job_title argument writes, so a push rule can observe the value it
 		// wrote back on the next sync (the write side added job_title/
 		// employee_type/employee_id without a matching read-side key).
+		// profileFromJSON also accepts "title" itself as a third write-side
+		// alias for job_title (see profileKeyTitle), so both round-trip.
 		profile[argJobTitle] = primaryOrg.Title
 		profile["location"] = primaryOrg.Location
 		profile["cost_center"] = primaryOrg.CostCenter

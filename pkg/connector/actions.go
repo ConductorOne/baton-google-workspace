@@ -40,8 +40,13 @@ const (
 	// happens to match, since the two can diverge independently - a struct
 	// field rename would need to update this constant, but should never
 	// accidentally affect display text (or vice versa).
-	fieldSuspended = "Suspended"
-	fieldResource  = "resource"
+	fieldSuspended     = "Suspended"
+	fieldResource      = "resource"
+	fieldSkippedFields = "skipped_fields"
+	// descriptionSkippedFields is shared by update_user_profile and
+	// update_user's skipped_fields return field, both backed by the same
+	// applyUserProfilePatch.
+	descriptionSkippedFields = "Comma-separated list of provided fields that were not applied, with the reason why (e.g. an invalid manager_email)."
 )
 
 // Global (account-level) connector action schemas. Their handlers live in this
@@ -283,9 +288,12 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 	}
 
 	// update user.isSuspended state
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		Suspended:       isSuspended,
-		ForceSendFields: []string{fieldSuspended},
+	err = withRateLimitWait(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			Suspended:       isSuspended,
+			ForceSendFields: []string{fieldSuspended},
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to update user status: %w", err)
@@ -316,7 +324,9 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 	}
 
 	// fetch current to ensure idempotency
-	u, err := client.GetUserForProvisioning(ctx, userId)
+	u, err := withRateLimitWaitValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for disableUser: %w", userId, err)
 	}
@@ -327,9 +337,12 @@ func (c *GoogleWorkspace) disableUserActionHandler(ctx context.Context, args *st
 		return &response, nil, nil
 	}
 
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		Suspended:       true,
-		ForceSendFields: []string{fieldSuspended},
+	err = withRateLimitWait(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			Suspended:       true,
+			ForceSendFields: []string{fieldSuspended},
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to suspend user %s: %w", userId, err)
@@ -355,7 +368,9 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 	}
 
 	// fetch current to ensure idempotency
-	u, err := client.GetUserForProvisioning(ctx, userId)
+	u, err := withRateLimitWaitValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for enableUser: %w", userId, err)
 	}
@@ -366,9 +381,12 @@ func (c *GoogleWorkspace) enableUserActionHandler(ctx context.Context, args *str
 		return &response, nil, nil
 	}
 
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		Suspended:       false,
-		ForceSendFields: []string{fieldSuspended}, // This is needed because the SDK would omit any field that has the field type default value (false).
+	err = withRateLimitWait(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			Suspended:       false,
+			ForceSendFields: []string{fieldSuspended}, // This is needed because the SDK would omit any field that has the field type default value (false).
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to unsuspend user %s: %w", userId, err)
@@ -405,7 +423,9 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 	}
 
 	// fetch current for return payload
-	u, err := client.GetUserForProvisioning(ctx, userId)
+	u, err := withRateLimitWaitValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for changeUserPrimaryEmail: %w", userId, err)
 	}
@@ -419,9 +439,12 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 		return &response, nil, nil
 	}
 
-	_, err = client.UpdateUser(ctx, userId, &directoryAdmin.User{
-		PrimaryEmail:    newPrimary,
-		ForceSendFields: []string{"PrimaryEmail"},
+	err = withRateLimitWait(ctx, func() error {
+		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
+			PrimaryEmail:    newPrimary,
+			ForceSendFields: []string{"PrimaryEmail"},
+		})
+		return err
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to update primary email for user %s: %w", userId, err)
@@ -512,10 +535,13 @@ func (c *GoogleWorkspace) dataTransferInsert(
 	}
 
 	pageToken := ""
+	waitLoopListTransfers := newRateLimitWaitLoopValue[*datatransferAdmin.DataTransfersListResponse](ctx)
 	for {
 		// Go through the transfers list and check if there is a transfer in progress for the given appID, source and target users.
 		// If there is, return the transfer ID and status.
-		transfers, err := client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
+		transfers, err := waitLoopListTransfers(func() (*datatransferAdmin.DataTransfersListResponse, error) {
+			return client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
+		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace: failed to list data transfers: %w", err)
 		}
@@ -554,7 +580,9 @@ func (c *GoogleWorkspace) dataTransferInsert(
 		},
 	}
 
-	created, err := client.InsertDataTransfer(ctx, transfer)
+	created, err := withRateLimitWaitValue(ctx, func() (*datatransferAdmin.DataTransfer, error) {
+		return client.InsertDataTransfer(ctx, transfer)
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to create data transfer: %w", err)
 	}

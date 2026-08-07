@@ -5,9 +5,54 @@ import (
 
 	"github.com/stretchr/testify/require"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func strPtr(s string) *string { return &s }
+
+func TestOptionalStringField(t *testing.T) {
+	t.Run("absent field returns nil, nil", func(t *testing.T) {
+		v, err := optionalStringField(&structpb.Struct{Fields: map[string]*structpb.Value{}}, "department")
+		require.NoError(t, err)
+		require.Nil(t, v)
+	})
+
+	t.Run("present string field returns a pointer to the trimmed value", func(t *testing.T) {
+		args := &structpb.Struct{Fields: map[string]*structpb.Value{"department": structpb.NewStringValue(" Sales ")}}
+		v, err := optionalStringField(args, "department")
+		require.NoError(t, err)
+		require.NotNil(t, v)
+		require.Equal(t, "Sales", *v)
+	})
+
+	t.Run("present empty string is preserved (clear intent), not an error", func(t *testing.T) {
+		args := &structpb.Struct{Fields: map[string]*structpb.Value{"department": structpb.NewStringValue("")}}
+		v, err := optionalStringField(args, "department")
+		require.NoError(t, err)
+		require.NotNil(t, v)
+		require.Equal(t, "", *v)
+	})
+
+	t.Run("a wrong-typed value (e.g. a number) is rejected, not silently coerced into a clear", func(t *testing.T) {
+		args := &structpb.Struct{Fields: map[string]*structpb.Value{"employee_id": structpb.NewNumberValue(12345)}}
+		v, err := optionalStringField(args, "employee_id")
+		require.Error(t, err, "a JSON number must not silently become a pointer to \"\" (which the caller treats as an explicit clear)")
+		require.Nil(t, v)
+	})
+
+	t.Run("a wrong-typed bool value is rejected", func(t *testing.T) {
+		args := &structpb.Struct{Fields: map[string]*structpb.Value{"employee_type": structpb.NewBoolValue(true)}}
+		_, err := optionalStringField(args, "employee_type")
+		require.Error(t, err)
+	})
+
+	t.Run("an explicit JSON null is treated as absent, not as a wrong-typed error", func(t *testing.T) {
+		args := &structpb.Struct{Fields: map[string]*structpb.Value{"employee_id": structpb.NewNullValue()}}
+		v, err := optionalStringField(args, "employee_id")
+		require.NoError(t, err, "a JSON null represents \"no value,\" not a malformed one - it must not fail the whole call")
+		require.Nil(t, v)
+	})
+}
 
 func TestBuildUpdatedOrganizations(t *testing.T) {
 	t.Run("updates primary in place, preserves siblings and secondary orgs", func(t *testing.T) {
@@ -112,8 +157,9 @@ func TestBuildUpdatedExternalIDs(t *testing.T) {
 			{Type: "organization", Value: "E-OLD"},
 			{Type: "login_id", Value: "alogin"},
 		}
-		updated := buildUpdatedExternalIDs(ids, "E-NEW")
+		updated, changed := buildUpdatedExternalIDs(ids, "E-NEW")
 
+		require.True(t, changed)
 		require.Len(t, updated, 2)
 		byType := map[string]string{}
 		for _, id := range updated {
@@ -125,10 +171,27 @@ func TestBuildUpdatedExternalIDs(t *testing.T) {
 
 	t.Run("empty employeeID removes the organization entry entirely", func(t *testing.T) {
 		ids := []*directoryAdmin.UserExternalId{{Type: "organization", Value: "E-OLD"}}
-		updated := buildUpdatedExternalIDs(ids, "")
+		updated, changed := buildUpdatedExternalIDs(ids, "")
 
+		require.True(t, changed)
 		require.NotNil(t, updated, "must be non-nil so the clear is actually sent on the wire")
 		require.Len(t, updated, 0)
+	})
+
+	t.Run("re-sending the same employeeID is not reported as changed", func(t *testing.T) {
+		ids := []*directoryAdmin.UserExternalId{{Type: "organization", Value: "E-SAME"}}
+		updated, changed := buildUpdatedExternalIDs(ids, "E-SAME")
+
+		require.False(t, changed, "an idempotent employee_id re-send must not be reported as a change")
+		require.Len(t, updated, 1)
+	})
+
+	t.Run("clearing an already-absent organization entry is not reported as changed", func(t *testing.T) {
+		ids := []*directoryAdmin.UserExternalId{{Type: "login_id", Value: "alogin"}}
+		updated, changed := buildUpdatedExternalIDs(ids, "")
+
+		require.False(t, changed, "clearing a field that was never set must not be reported as a change")
+		require.Len(t, updated, 1)
 	})
 }
 

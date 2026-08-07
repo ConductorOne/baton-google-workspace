@@ -328,7 +328,7 @@ func TestUpdateUserProfile_DepartmentOnly_UsesPatchAndOmitsCustomSchemas(t *test
 	userRT := newTestUserResourceType(t, server)
 
 	patch := userProfilePatch{department: strPtr("New Dept")}
-	_, updatedFields, err := applyUserProfilePatch(context.Background(), userRT.client, "user123", patch)
+	_, updatedFields, _, err := applyUserProfilePatch(context.Background(), userRT.client, "user123", patch)
 	if err != nil {
 		t.Fatalf("applyUserProfilePatch: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestUpdateUserProfile_CustomSchemas_SendsVerbatimNotMerged(t *testing.T) {
 		department:    strPtr("New Dept"),
 		customSchemas: map[string]googleapi.RawMessage{"QATestSchema": googleapi.RawMessage(`{"region":"apac"}`)},
 	}
-	_, _, err := applyUserProfilePatch(context.Background(), userRT.client, "user123", patch)
+	_, _, _, err := applyUserProfilePatch(context.Background(), userRT.client, "user123", patch)
 	if err != nil {
 		t.Fatalf("applyUserProfilePatch: %v", err)
 	}
@@ -425,6 +425,47 @@ func TestUpdateUserProfile_NoUpdatableFields(t *testing.T) {
 	}
 	if state.patchCount != 0 {
 		t.Fatalf("expected 0 PATCH on validation failure, got %d", state.patchCount)
+	}
+}
+
+// Regression guard: clearing Employee Information with no existing
+// Organizations entry must succeed as a no-op, not "nothing provided".
+func TestUpdateUserProfile_EmployeeInfoAllEmptyClears_NoExistingOrg_SucceedsAsNoOp(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:       strArg("user123"),
+		"department":    strArg(""),
+		"job_title":     strArg(""),
+		"cost_center":   strArg(""),
+		"employee_type": strArg(""),
+	}}
+
+	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected a satisfied no-op, not an error: %v", err)
+	}
+	if got := state.users["user123"].Organizations; got != nil {
+		t.Fatalf("expected no phantom organization to be created, got %+v", got)
+	}
+	// A true no-op re-fetches instead of issuing an empty-body write.
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH/PUT for a true no-op, got %d", state.patchCount)
+	}
+	if state.getCount != 2 {
+		t.Fatalf("expected 2 GETs (initial read-modify-write, then a fresh re-fetch instead of a no-op write), got %d", state.getCount)
 	}
 }
 
@@ -775,6 +816,45 @@ func TestUpdateUserProfile_EmployeeID_PreservesOtherExternalIds(t *testing.T) {
 	}
 }
 
+// Regression guard: resending the same employee_id with no other field must
+// succeed as a no-op, not "nothing provided".
+func TestUpdateUserProfile_EmployeeID_IdempotentResend_SucceedsAsNoOp(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{
+			"user123": {
+				Id:           "user123",
+				PrimaryEmail: "test@example.com",
+				Name:         &directoryAdmin.UserName{GivenName: "Test", FamilyName: "User", FullName: "Test User"},
+				ExternalIds: []directoryAdmin.UserExternalId{
+					{Type: "organization", Value: "E-SAME"},
+				},
+			},
+		},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:     strArg("user123"),
+		"employee_id": strArg("E-SAME"),
+	}}
+
+	if _, _, err := userRT.updateUserProfileActionHandler(context.Background(), args); err != nil {
+		t.Fatalf("expected a satisfied no-op, not an error: %v", err)
+	}
+	// A true no-op re-fetches instead of issuing an empty-body write: no
+	// PATCH/PUT call happens at all, only the initial read-modify-write GET
+	// plus one more GET in place of the write.
+	if state.patchCount != 0 {
+		t.Fatalf("expected 0 PATCH/PUT for a true no-op, got %d", state.patchCount)
+	}
+	if state.getCount != 2 {
+		t.Fatalf("expected 2 GETs (initial read-modify-write, then a fresh re-fetch instead of a no-op write), got %d", state.getCount)
+	}
+}
+
 func TestUpdateUserProfile_EmployeeID_EmptyClears(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
@@ -907,9 +987,16 @@ func TestUpdateUserProfile_ManagerEmail_EmptyIsNotProvided(t *testing.T) {
 	if state.patchCount != 0 {
 		t.Fatalf("expected 0 PATCH on empty manager_email, got %d", state.patchCount)
 	}
+	// The only field provided (manager_email) was skipped, not "not
+	// provided" - the error message must say so, not the generic "requires
+	// at least one updatable field" (which would read self-contradictory
+	// alongside a named skipped field).
+	if !strings.Contains(err.Error(), "no updatable field was applied") || !strings.Contains(err.Error(), "manager_email") {
+		t.Fatalf("expected error to explain the skipped field, got: %v", err)
+	}
 }
 
-func TestUpdateUserProfile_ManagerEmail_EmptyRejectedEvenWithOtherFields(t *testing.T) {
+func TestUpdateUserProfile_ManagerEmail_EmptySkippedButOtherFieldsApply(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{
 			"user123": {
@@ -924,26 +1011,33 @@ func TestUpdateUserProfile_ManagerEmail_EmptyRejectedEvenWithOtherFields(t *test
 
 	userRT := newTestUserResourceType(t, server)
 
-	// An empty manager_email must reject the whole request even when another
-	// field is also set - silently no-op'ing it would leave a caller asking to
-	// drop a manager with a false "success" and no indication anything was
-	// skipped. No GET/PATCH should happen: this fails fast on validation,
-	// before the read-modify-write GET.
+	// An empty manager_email is never applied - silently clearing the manager
+	// relation is out of scope for this action - but it must not discard an
+	// independently valid field (recovery_email) in the same payload: the
+	// call should still succeed, apply recovery_email, and report
+	// manager_email in skipped_fields rather than aborting the whole request.
 	args := &structpb.Struct{Fields: map[string]*structpb.Value{
 		argUserID:        strArg("user123"),
 		"manager_email":  strArg(""),
 		"recovery_email": strArg("new@example.com"),
 	}}
 
-	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
-	if err == nil {
-		t.Fatalf("expected error when manager_email is empty, even with recovery_email also set")
+	result, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected recovery_email to apply despite the invalid manager_email in the same payload, got error: %v", err)
 	}
 	if state.getCount != 0 {
-		t.Fatalf("expected 0 GET, got %d", state.getCount)
+		t.Fatalf("expected 0 GET (neither recovery_email nor a skipped manager_email needs the read-modify-write GET), got %d", state.getCount)
 	}
-	if state.patchCount != 0 {
-		t.Fatalf("expected 0 PATCH, got %d", state.patchCount)
+	if state.patchCount != 1 {
+		t.Fatalf("expected 1 PATCH for recovery_email, got %d", state.patchCount)
+	}
+	if state.lastPatchBody.RecoveryEmail != "new@example.com" {
+		t.Fatalf("expected recovery_email to be applied, got %+v", state.lastPatchBody)
+	}
+	skipped := result.Fields["skipped_fields"].GetStringValue()
+	if !strings.Contains(skipped, "manager_email") {
+		t.Fatalf("expected skipped_fields to mention manager_email, got %q", skipped)
 	}
 }
 

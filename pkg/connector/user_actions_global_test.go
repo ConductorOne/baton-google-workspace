@@ -105,6 +105,25 @@ func TestProfileFromJSON(t *testing.T) {
 		require.Equal(t, "boss@example.com", *patch.managerEmail)
 	})
 
+	t.Run("title aliases job_title - closes the read/write round-trip gap", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{
+			"title": "Principal Engineer",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, patch.jobTitle)
+		require.Equal(t, "Principal Engineer", *patch.jobTitle)
+	})
+
+	t.Run("job_title takes precedence over title when both are present", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{
+			"job_title": "Staff Engineer",
+			"title":     "Principal Engineer",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, patch.jobTitle)
+		require.Equal(t, "Staff Engineer", *patch.jobTitle)
+	})
+
 	t.Run("empty object yields empty patch", func(t *testing.T) {
 		patch, err := profileFromJSON(map[string]any{})
 		require.NoError(t, err)
@@ -144,6 +163,29 @@ func TestProfileFromJSON(t *testing.T) {
 		patch, err := profileFromJSON(map[string]any{"custom_schemas": map[string]any{}})
 		require.NoError(t, err)
 		require.Nil(t, patch.customSchemas)
+	})
+
+	t.Run("a non-string value for a string field is rejected, not silently dropped", func(t *testing.T) {
+		_, err := profileFromJSON(map[string]any{"employee_id": 12345})
+		require.Error(t, err, "a JSON number for employee_id must be rejected, not silently ignored")
+	})
+
+	t.Run("a non-string value does not prevent other valid fields from erroring loudly, not silently applying a partial patch", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{"department": "Sales", "employee_id": 12345})
+		require.Error(t, err)
+		// profileFromJSON stops at the first error; department may or may not
+		// have been set on patch depending on map iteration order, but the
+		// caller (updateUserActionHandler) must see a non-nil error either
+		// way and not report success.
+		_ = patch
+	})
+
+	t.Run("an explicit JSON null is treated as absent, not as a wrong-typed error", func(t *testing.T) {
+		patch, err := profileFromJSON(map[string]any{"employee_id": nil, "department": "Sales"})
+		require.NoError(t, err, "a JSON null represents \"no value,\" not a malformed one - it must not fail the whole call")
+		require.Nil(t, patch.employeeID)
+		require.NotNil(t, patch.department)
+		require.Equal(t, "Sales", *patch.department)
 	})
 }
 

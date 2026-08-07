@@ -37,6 +37,10 @@ var (
 			"admin.directory.group",
 			"admin.directory.group.member",
 			"admin.directory.domain.readonly",
+			// Requested at runtime by getGroupsSettingsService for
+			// modify_group_settings; previously undeclared here, causing the
+			// action to fail silently.
+			"apps.groups.settings",
 		)),
 	}
 	resourceTypeUser = &v2.ResourceType{
@@ -50,9 +54,15 @@ var (
 			// and write actions (update_user_profile, update_user, make_admin), so
 			// the declared capability must request admin.directory.user, not the
 			// read-only variant. The write scope subsumes read.
+			//
+			// admin.directory.user.alias.readonly removed: unused, dropped per
+			// least-privilege.
 			"admin.directory.user",
-			"admin.directory.user.alias.readonly",
 			"admin.directory.domain.readonly",
+			// Requested at runtime by getDataTransferService for
+			// transfer_user_drive_files/transfer_user_calendar; previously
+			// undeclared here, causing them to fail silently.
+			"admin.datatransfer",
 		)),
 	}
 	resourceTypeEnterpriseApplication = &v2.ResourceType{
