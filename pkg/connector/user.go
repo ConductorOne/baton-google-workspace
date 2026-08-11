@@ -14,11 +14,9 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
-	"google.golang.org/grpc/codes"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -492,16 +490,23 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	// provisions a fully-populated account in one step instead of needing a
 	// follow-up update_user_profile action. The key aliases accepted here are
 	// the ones the update path accepts (employeeInfoJSONFields), so the same
-	// profile object drives both. Everything is parsed and validated before the
-	// insert below, so a malformed profile fails without leaving a
-	// half-configured account behind.
-	employeeInfo, err := employeeInfoFromProfile(pMap)
-	if err != nil {
-		return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-			"google-workspace: invalid account profile", err)
-	}
-	if err := applyEmployeeInfoToNewUser(user, employeeInfo); err != nil {
-		return nil, nil, nil, err
+	// profile object drives both.
+	//
+	// None of them can fail the create. They enrich an account rather than
+	// define it, and the joiner needs the account far more than it needs a
+	// department: an attribute that is empty, wrong-typed, or (for
+	// manager_email) unusable is dropped and reported below, and the account is
+	// still created. update_user fills in anything that was dropped once the
+	// profile is corrected.
+	employeeInfo, droppedFields := employeeInfoFromProfile(pMap)
+	droppedFields = append(droppedFields, applyEmployeeInfoToNewUser(user, employeeInfo)...)
+	if len(droppedFields) > 0 {
+		// Warn, not Error: this is a misconfigured attribute mapping on the
+		// customer side, not a connector bug, and the operation still succeeds.
+		ctxzap.Extract(ctx).Warn(
+			"google-workspace: dropping unusable Employee Information attributes while creating account",
+			zap.Strings("dropped_fields", droppedFields),
+		)
 	}
 
 	if credentialOptions == nil {
@@ -514,6 +519,7 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 
 	var password string
 	var plaintextData []*v2.PlaintextData
+	var err error
 
 	if credentialOptions.GetRandomPassword() != nil || credentialOptions.GetPlaintextPassword() != nil {
 		password, err = crypto.GeneratePassword(ctx, credentialOptions)

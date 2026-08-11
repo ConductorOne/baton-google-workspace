@@ -109,10 +109,15 @@ subsequent mover (update) flows. Notes:
   value that arrives padded or in display-name form
   (`Jane Doe <jane@example.com>`) still produces a `manager` relation Google can
   resolve.
-- A malformed `manager_email` or a wrong-typed value (e.g. `employee_id` sent as
-  a JSON number) fails the call **before** the account is created, rather than
-  being silently dropped — unlike the update path, account creation has no
-  `skipped_fields` channel to report a partial success on.
+- **None of them can fail account creation.** They enrich an account rather than
+  define it, so a value that is wrong-typed (e.g. `employee_id` sent as a JSON
+  number) or an unusable `manager_email` is dropped and the account is still
+  created. Every dropped attribute is named with a reason in a `Warn` log line
+  (`dropped_fields`). Use `update_user` to apply them once the profile is
+  corrected. Note this is deliberately *less* strict than the update path, which
+  rejects a wrong-typed value outright — there the account already exists, so
+  failing loudly costs nothing, whereas here it would cost the joiner their
+  account.
 - Recovery email/phone and custom-schema attributes are **not** settable at
   creation; they remain available through `update_user_profile` / `update_user`.
 

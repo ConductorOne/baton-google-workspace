@@ -1441,12 +1441,14 @@ func buildManagerRelations(relations []*admin.UserRelation, managerEmail string)
 // to clear, and sending one anyway would create a phantom empty organization
 // that reads back on the next sync.
 //
-// An invalid manager_email is rejected outright instead of being skipped the way
-// the update path skips it. The update path can report a partial success through
-// its skipped_fields return value; CreateAccount has no such channel, so
-// skipping here would silently drop the manager on a joiner - and because this
-// runs before the insert, failing costs nothing but the caller's retry.
-func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) error {
+// Every one of these attributes is optional enrichment, so none of them fails
+// the create: an unusable manager_email is dropped and named in the returned
+// slice for the caller to log, the same way a wrong-typed value is. Failing
+// instead would mean an HRIS-sourced profile carrying a manager's display name,
+// or a manager who has not been provisioned yet, blocks the joiner's account
+// entirely - a far worse outcome than an account that lands without its manager
+// relation, which the mover path (update_user) then fills in.
+func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) []string {
 	for _, dest := range []*(*string){
 		&patch.department, &patch.jobTitle, &patch.costCenter,
 		&patch.employeeType, &patch.employeeID, &patch.managerEmail,
@@ -1461,6 +1463,8 @@ func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) error 
 		}
 	}
 
+	var dropped []string
+
 	if patch.managerEmail != nil {
 		// Store the parsed address rather than the raw input: mail.ParseAddress
 		// also accepts the display-name form ("Jane Doe <jane@example.com>"), but
@@ -1468,11 +1472,14 @@ func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) error 
 		// string would be accepted here, match no user, and read back verbatim on
 		// the next sync.
 		addr, err := mail.ParseAddress(strings.TrimSpace(*patch.managerEmail))
-		if err != nil {
-			return uhttp.WrapErrors(codes.InvalidArgument,
-				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
+		switch {
+		case err != nil:
+			dropped = append(dropped,
+				fmt.Sprintf("%s (not a valid email address: %q)", argManagerEmail, *patch.managerEmail))
+			patch.managerEmail = nil
+		default:
+			user.Relations = buildManagerRelations(nil, addr.Address)
 		}
-		user.Relations = buildManagerRelations(nil, addr.Address)
 	}
 
 	// Both builders report whether they produced anything; assign only when they
@@ -1489,7 +1496,7 @@ func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) error 
 		}
 	}
 
-	return nil
+	return dropped
 }
 
 const (
@@ -1695,17 +1702,71 @@ func applyProfileFields(profile map[string]any, fields []profileFieldBinding) er
 	return nil
 }
 
-// employeeInfoFromProfile maps a ConductorOne account profile to a patch holding
-// only the six Employee Information attributes. Deliberately narrower than
-// profileFromJSON: recovery email/phone and custom schemas stay action-only
-// (out of scope for account provisioning), so reading them here would quietly
-// widen what a create/update through the provisioning path can write.
-func employeeInfoFromProfile(profile map[string]any) (userProfilePatch, error) {
-	var patch userProfilePatch
-	if err := applyProfileFields(profile, employeeInfoJSONFields(&patch)); err != nil {
-		return patch, err
+// stringFromJSONLenient is stringFromJSON's skip-and-continue counterpart: a
+// wrong-typed key is described in the returned slice instead of aborting, and
+// the remaining aliases are still tried, so a numeric "job_title" does not mask
+// a perfectly good "title". Nothing is reported once a value resolves - the
+// alias did its job and there is nothing for an operator to act on.
+func stringFromJSONLenient(profile map[string]any, keys ...string) (string, bool, []string) {
+	var dropped []string
+	for _, k := range keys {
+		v, ok := profile[k]
+		if !ok || v == nil {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf("%s (expected a JSON string, got %s)", k, jsonTypeName(v)))
+			continue
+		}
+		return s, true, nil
 	}
-	return patch, nil
+	return "", false, dropped
+}
+
+// jsonTypeName names a decoded JSON value's type the way the profile author
+// wrote it, rather than the way Go decoded it - structpb decodes every number
+// to float64, and telling someone their employee_id is a "float64" when they
+// wrote 12345 is not actionable.
+func jsonTypeName(v any) string {
+	switch v.(type) {
+	case float64, int, int64, json.Number:
+		return "a number"
+	case bool:
+		return "a boolean"
+	case map[string]any:
+		return "an object"
+	case []any:
+		return "an array"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+// employeeInfoFromProfile maps a ConductorOne account profile to a patch holding
+// only the six Employee Information attributes, returning a description of any
+// attribute it had to drop. Deliberately narrower than profileFromJSON: recovery
+// email/phone and custom schemas stay action-only (out of scope for account
+// provisioning), so reading them here would quietly widen what a create through
+// the provisioning path can write.
+//
+// Unlike profileFromJSON, a wrong-typed value is dropped rather than rejected.
+// All six attributes are optional enrichment on a brand-new account, so none of
+// them may fail the insert: an HRIS-sourced profile routinely carries a numeric
+// employee_id or cost_center, and rejecting one would leave the joiner with no
+// account at all. The update path keeps the strict behaviour - there the account
+// already exists, so failing loudly costs nothing.
+func employeeInfoFromProfile(profile map[string]any) (userProfilePatch, []string) {
+	var patch userProfilePatch
+	var dropped []string
+	for _, f := range employeeInfoJSONFields(&patch) {
+		v, ok, skipped := stringFromJSONLenient(profile, f.keys...)
+		dropped = append(dropped, skipped...)
+		if ok {
+			*f.dest = &v
+		}
+	}
+	return patch, dropped
 }
 
 // profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)

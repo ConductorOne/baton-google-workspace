@@ -264,7 +264,12 @@ func TestCreateAccount_CamelCaseAliases(t *testing.T) {
 	require.Equal(t, "lead@example.com", rels[0].Value)
 }
 
-func TestCreateAccount_InvalidManagerEmail_FailsBeforeInsert(t *testing.T) {
+// TestCreateAccount_InvalidManagerEmail_StillCreatesAccount pins that an
+// unusable manager does not cost the joiner their account. A manager who has not
+// been provisioned yet, or a display name where an address was expected, is a
+// routine state for an HRIS-sourced profile; the account is created without the
+// relation and update_user fills it in later.
+func TestCreateAccount_InvalidManagerEmail_StillCreatesAccount(t *testing.T) {
 	state := &testInsertServerState{}
 	server := newTestInsertServer(state)
 	defer server.Close()
@@ -272,44 +277,103 @@ func TestCreateAccount_InvalidManagerEmail_FailsBeforeInsert(t *testing.T) {
 	userRT := newTestUserResourceType(t, server)
 
 	profile := baseCreateProfile()
+	profile["department"] = "Engineering"
 	profile["manager_email"] = "not-an-email"
 
-	_, _, _, err := userRT.CreateAccount(context.Background(),
+	resp, _, _, err := userRT.CreateAccount(context.Background(),
 		createAccountProfile(t, profile), &v2.LocalCredentialOptions{})
-	require.Error(t, err, "CreateAccount has no skipped_fields channel, so an invalid manager must fail loudly")
-	require.Equal(t, 0, state.insertCount, "validation must happen before the account is created")
+	require.NoError(t, err, "an unusable manager_email must not block account creation")
+	require.NotNil(t, resp)
+	require.Equal(t, 1, state.insertCount)
+
+	require.Nil(t, extractRelations(state.lastInsertBody), "the unusable manager relation is dropped")
+
+	// The valid attributes in the same profile still land.
+	orgs := extractOrganizations(state.lastInsertBody)
+	require.Len(t, orgs, 1)
+	require.Equal(t, "Engineering", orgs[0].Department)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(state.lastInsertRawBody, &raw))
+	require.NotContains(t, raw, "relations")
 }
 
-func TestCreateAccount_WrongTypedAttribute_FailsBeforeInsert(t *testing.T) {
+// TestCreateAccount_WrongTypedAttribute_StillCreatesAccount covers the numeric
+// employee_id / cost_center an HRIS routinely sends. These attributes enrich an
+// account rather than define it, so a type mismatch drops the field instead of
+// failing the insert. The update path stays strict - there the account already
+// exists, so failing loudly costs nothing.
+func TestCreateAccount_WrongTypedAttribute_StillCreatesAccount(t *testing.T) {
 	state := &testInsertServerState{}
 	server := newTestInsertServer(state)
 	defer server.Close()
 
 	userRT := newTestUserResourceType(t, server)
 
-	// A numeric employee_id would otherwise be silently dropped; the update
-	// path rejects it, and so must this one.
 	profile := baseCreateProfile()
 	profile["employee_id"] = 12345
+	profile["cost_center"] = 4200
+	profile["department"] = "Engineering"
 
-	_, _, _, err := userRT.CreateAccount(context.Background(),
+	resp, _, _, err := userRT.CreateAccount(context.Background(),
 		createAccountProfile(t, profile), &v2.LocalCredentialOptions{})
-	require.Error(t, err)
-	require.Equal(t, 0, state.insertCount)
+	require.NoError(t, err, "a wrong-typed enrichment attribute must not block account creation")
+	require.NotNil(t, resp)
+	require.Equal(t, 1, state.insertCount)
+
+	// The wrong-typed fields are dropped; the well-formed one in the same
+	// profile still applies.
+	orgs := extractOrganizations(state.lastInsertBody)
+	require.Len(t, orgs, 1)
+	require.Equal(t, "Engineering", orgs[0].Department)
+	require.Empty(t, orgs[0].CostCenter)
+	require.Nil(t, testExternalIDs(state.lastInsertBody))
+}
+
+// TestEmployeeInfoFromProfile_WrongTypedValuesAreReported pins the descriptions
+// CreateAccount logs, so an operator can tell which attribute was dropped and
+// why rather than discovering a blank field on the next sync.
+func TestEmployeeInfoFromProfile_WrongTypedValuesAreReported(t *testing.T) {
+	patch, dropped := employeeInfoFromProfile(map[string]any{
+		"department":  "Engineering",
+		"employee_id": float64(12345),
+		"cost_center": true,
+	})
+	require.NotNil(t, patch.department)
+	require.Equal(t, "Engineering", *patch.department)
+	require.Nil(t, patch.employeeID)
+	require.Nil(t, patch.costCenter)
+	require.ElementsMatch(t, []string{
+		"cost_center (expected a JSON string, got a boolean)",
+		"employee_id (expected a JSON string, got a number)",
+	}, dropped)
+}
+
+// TestEmployeeInfoFromProfile_WrongTypedAliasDoesNotMaskValidOne covers the
+// skip-and-continue behavior across aliases: job_title and title are the same
+// attribute, so a wrong-typed job_title must not discard a usable title.
+func TestEmployeeInfoFromProfile_WrongTypedAliasDoesNotMaskValidOne(t *testing.T) {
+	patch, dropped := employeeInfoFromProfile(map[string]any{
+		"job_title": float64(7),
+		"title":     "Staff Engineer",
+	})
+	require.NotNil(t, patch.jobTitle)
+	require.Equal(t, "Staff Engineer", *patch.jobTitle)
+	require.Empty(t, dropped, "nothing to report once an alias resolves the attribute")
 }
 
 func TestEmployeeInfoFromProfile_IgnoresOutOfScopeKeys(t *testing.T) {
 	// Recovery details and custom schemas stay action-only (out of scope for
 	// account provisioning); reading them here would quietly widen what the
 	// create path can write.
-	patch, err := employeeInfoFromProfile(map[string]any{
+	patch, dropped := employeeInfoFromProfile(map[string]any{
 		"department":     "Engineering",
 		"recovery_email": "recovery@example.com",
 		"recovery_phone": "+14155550100",
 		"custom_schemas": map[string]any{"MySchema": map[string]any{"region": "emea"}},
 		"given_name":     "New",
 	})
-	require.NoError(t, err)
+	require.Empty(t, dropped)
 	require.NotNil(t, patch.department)
 	require.Equal(t, "Engineering", *patch.department)
 	require.Nil(t, patch.recoveryEmail)
@@ -320,7 +384,7 @@ func TestEmployeeInfoFromProfile_IgnoresOutOfScopeKeys(t *testing.T) {
 
 func TestApplyEmployeeInfoToNewUser_EmptyPatchLeavesUserUntouched(t *testing.T) {
 	user := &directoryAdmin.User{PrimaryEmail: "a@example.com"}
-	require.NoError(t, applyEmployeeInfoToNewUser(user, userProfilePatch{}))
+	require.Empty(t, applyEmployeeInfoToNewUser(user, userProfilePatch{}))
 	require.Nil(t, user.Organizations)
 	require.Nil(t, user.ExternalIds)
 	require.Nil(t, user.Relations)
