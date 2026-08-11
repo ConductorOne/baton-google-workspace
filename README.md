@@ -102,9 +102,13 @@ The Employee Information keys are the same ones `update_user`'s `user_profile`
 object accepts, so a single account profile drives both the joiner (create) and
 subsequent mover (update) flows. Notes:
 
-- All six are optional; keys that are absent or empty are simply not sent (an
-  empty value means "clear" on the update path, but a brand-new account has
-  nothing to clear).
+- All six are optional; keys that are absent, empty, or whitespace-only are
+  simply not sent (an empty value means "clear" on the update path, but a
+  brand-new account has nothing to clear).
+- `manager_email` is normalized to the bare address before it is stored, so a
+  value that arrives padded or in display-name form
+  (`Jane Doe <jane@example.com>`) still produces a `manager` relation Google can
+  resolve.
 - A malformed `manager_email` or a wrong-typed value (e.g. `employee_id` sent as
   a JSON number) fails the call **before** the account is created, rather than
   being silently dropped — unlike the update path, account creation has no

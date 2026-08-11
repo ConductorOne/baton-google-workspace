@@ -1451,17 +1451,28 @@ func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) error 
 		&patch.department, &patch.jobTitle, &patch.costCenter,
 		&patch.employeeType, &patch.employeeID, &patch.managerEmail,
 	} {
-		if *dest != nil && **dest == "" {
+		// Whitespace-only counts as empty. HRIS- and CSV-sourced account profiles
+		// routinely carry "  " for a field nobody filled in; treating that as a
+		// real value would persist blank padding onto the new account and - for
+		// manager_email, which is validated below - fail the entire create on a
+		// profile that simply carries no manager.
+		if *dest != nil && strings.TrimSpace(**dest) == "" {
 			*dest = nil
 		}
 	}
 
 	if patch.managerEmail != nil {
-		if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
+		// Store the parsed address rather than the raw input: mail.ParseAddress
+		// also accepts the display-name form ("Jane Doe <jane@example.com>"), but
+		// Google resolves relations[].value only as a bare email, so the raw
+		// string would be accepted here, match no user, and read back verbatim on
+		// the next sync.
+		addr, err := mail.ParseAddress(strings.TrimSpace(*patch.managerEmail))
+		if err != nil {
 			return uhttp.WrapErrors(codes.InvalidArgument,
 				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
 		}
-		user.Relations = buildManagerRelations(nil, *patch.managerEmail)
+		user.Relations = buildManagerRelations(nil, addr.Address)
 	}
 
 	// Both builders report whether they produced anything; assign only when they

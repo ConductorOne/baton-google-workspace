@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
@@ -379,4 +382,44 @@ func TestUpdateUserGlobal_MissingUserID(t *testing.T) {
 	_, _, err := c.updateUserActionHandler(context.Background(), args)
 	require.Error(t, err)
 	require.Equal(t, 0, state.patchCount)
+}
+
+// TestUpdateUserGlobal_NilArgs pins that an action invoked with no arguments at
+// all returns a clean InvalidArgument rather than panicking. The SDK passes
+// request.GetArgs() straight through, so nil is a reachable input, and
+// extractUserId's plain-string fallback selects args.Fields directly.
+func TestUpdateUserGlobal_NilArgs(t *testing.T) {
+	state := &testProfileServerState{
+		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},
+	}
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestGlobalConnector(t, dir)
+
+	require.NotPanics(t, func() {
+		_, _, err := c.updateUserActionHandler(context.Background(), nil)
+		require.Error(t, err)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+	})
+	require.Equal(t, 0, state.patchCount)
+}
+
+// TestExtractUserId_NilAndEmptyArgs covers the same guard at the helper every
+// user-scoped action shares, so the other eight handlers are pinned too.
+func TestExtractUserId_NilAndEmptyArgs(t *testing.T) {
+	for name, args := range map[string]*structpb.Struct{
+		"nil struct": nil,
+		"nil fields": {},
+		"no user_id": {Fields: map[string]*structpb.Value{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				_, err := extractUserId(args, zap.NewNop(), "update_user")
+				require.Error(t, err)
+				require.Equal(t, codes.InvalidArgument, status.Code(err))
+			})
+		})
+	}
 }

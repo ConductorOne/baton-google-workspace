@@ -325,3 +325,84 @@ func TestApplyEmployeeInfoToNewUser_EmptyPatchLeavesUserUntouched(t *testing.T) 
 	require.Nil(t, user.ExternalIds)
 	require.Nil(t, user.Relations)
 }
+
+// TestCreateAccount_WhitespaceOnlyValues_AreDropped covers the same "empty means
+// absent" rule as the empty-string case, for the padding HRIS- and CSV-sourced
+// account profiles carry in practice. A whitespace-only manager_email is the one
+// that matters most: before it was treated as empty it reached mail.ParseAddress
+// and failed the entire create, so a profile carrying no manager at all produced
+// no account.
+func TestCreateAccount_WhitespaceOnlyValues_AreDropped(t *testing.T) {
+	state := &testInsertServerState{}
+	server := newTestInsertServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	profile := baseCreateProfile()
+	profile["department"] = "   "
+	profile["job_title"] = "\t"
+	profile["cost_center"] = " "
+	profile["employee_type"] = "  "
+	profile["employee_id"] = " \n "
+	profile["manager_email"] = "   "
+
+	_, _, _, err := userRT.CreateAccount(context.Background(),
+		createAccountProfile(t, profile), &v2.LocalCredentialOptions{})
+	require.NoError(t, err, "a whitespace-only value must not fail account creation")
+	require.Equal(t, 1, state.insertCount)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(state.lastInsertRawBody, &raw))
+	require.NotContains(t, raw, "organizations")
+	require.NotContains(t, raw, "externalIds")
+	require.NotContains(t, raw, "relations")
+}
+
+// TestCreateAccount_ManagerEmailDisplayNameForm_StoresBareAddress pins that the
+// manager relation carries the bare address. mail.ParseAddress accepts the
+// display-name form, but Google resolves relations[].value only as an email, so
+// storing the raw input would silently produce a manager relation matching no
+// user.
+func TestCreateAccount_ManagerEmailDisplayNameForm_StoresBareAddress(t *testing.T) {
+	state := &testInsertServerState{}
+	server := newTestInsertServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	profile := baseCreateProfile()
+	profile["manager_email"] = "Jane Doe <jane@example.com>"
+
+	_, _, _, err := userRT.CreateAccount(context.Background(),
+		createAccountProfile(t, profile), &v2.LocalCredentialOptions{})
+	require.NoError(t, err)
+
+	rels := extractRelations(state.lastInsertBody)
+	require.Len(t, rels, 1)
+	require.Equal(t, relTypeManager, rels[0].Type)
+	require.Equal(t, "jane@example.com", rels[0].Value,
+		"the display name must be stripped; Google matches relations[].value as a bare email")
+}
+
+// TestCreateAccount_ManagerEmailSurroundingWhitespace_IsTrimmed guards the same
+// normalization for the far more common case of an otherwise-valid address that
+// arrives padded.
+func TestCreateAccount_ManagerEmailSurroundingWhitespace_IsTrimmed(t *testing.T) {
+	state := &testInsertServerState{}
+	server := newTestInsertServer(state)
+	defer server.Close()
+
+	userRT := newTestUserResourceType(t, server)
+
+	profile := baseCreateProfile()
+	profile["manager_email"] = "  manager@example.com  "
+
+	_, _, _, err := userRT.CreateAccount(context.Background(),
+		createAccountProfile(t, profile), &v2.LocalCredentialOptions{})
+	require.NoError(t, err)
+
+	rels := extractRelations(state.lastInsertBody)
+	require.Len(t, rels, 1)
+	require.Equal(t, "manager@example.com", rels[0].Value)
+}
