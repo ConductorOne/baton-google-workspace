@@ -197,7 +197,7 @@ func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.Go
 func (f *usageEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	events, streamState, err := scanUsersForEvents(ctx, f.c, f.customerID, f.domain, earliestEvent, pToken, f.lookupUser)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, streamState, nil, err
 	}
 	return events, streamState, nil, nil
 }

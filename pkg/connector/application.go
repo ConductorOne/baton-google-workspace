@@ -80,6 +80,12 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 	}
 
 	resources := make([]*v2.Resource, 0, len(newOAuthApps)+len(newSAMLApps)+1)
+	// emittedThisCall accumulates emitted-app markers locally and is only persisted once, right
+	// before the successful return below. Writing markers per-app mid-loop (as before) let an
+	// error on a later app in the same call abort List() with `resources` discarded by the SDK,
+	// while earlier apps' markers were already committed — permanently skipping those apps on
+	// the SDK's retry with the same page token, since they'd read back as already emitted.
+	emittedThisCall := make(map[string]string)
 
 	for appID, displayName := range newOAuthApps {
 		if _, isSAML := newSAMLApps[appID]; isSAML {
@@ -98,9 +104,7 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
-		if err := recordAppEmitted(ctx, attrs.Session, appID); err != nil {
-			return nil, nil, err
-		}
+		emittedThisCall[appID] = "1"
 	}
 
 	for appID, displayName := range newSAMLApps {
@@ -117,9 +121,7 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
-		if err := recordAppEmitted(ctx, attrs.Session, appID); err != nil {
-			return nil, nil, err
-		}
+		emittedThisCall[appID] = "1"
 	}
 
 	if nextPageToken == "" {
@@ -137,9 +139,13 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 				return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", googleWorkspaceAppID, err)
 			}
 			resources = append(resources, r)
-			if err := recordAppEmitted(ctx, attrs.Session, googleWorkspaceAppID); err != nil {
-				return nil, nil, err
-			}
+			emittedThisCall[googleWorkspaceAppID] = "1"
+		}
+	}
+
+	if len(emittedThisCall) > 0 {
+		if err := session.SetManyJSON(ctx, attrs.Session, emittedThisCall, appLoginEmittedAppNamespace); err != nil {
+			return nil, nil, fmt.Errorf("google-workspace-connector: failed to store emitted-app markers: %w", err)
 		}
 	}
 

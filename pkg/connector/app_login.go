@@ -105,7 +105,8 @@ func scanAppLoginsPage(
 		}
 
 		if len(cursor.PendingUsers) == 0 && cursor.DirectoryPageToken == "" {
-			return nil, nil, "", nil
+			// Return empty (not nil) maps: callers range over and write into these.
+			return map[string]string{}, map[string]string{}, "", nil
 		}
 	}
 
@@ -402,27 +403,16 @@ func loadSAMLProfileMapFromSession(ctx context.Context, ss sessions.SessionStore
 }
 
 // isAppEmitted reports whether appID has already been returned as a resource by a prior
-// applicationResource.List() page. Read-only: callers that intend to emit appID this call must
-// pair this with recordAppEmitted, called only once the resource is confirmed part of the
-// returned batch — see recordAppEmitted for why the two must not be collapsed back into one
-// check-and-set call.
+// applicationResource.List() call. Read-only: the caller accumulates newly-emitted app IDs
+// locally and persists them in a single batched write only once the whole List() call has
+// succeeded — see the emittedThisCall handling in applicationResource.List(). Writing markers
+// per-app as soon as each resource is built would leave earlier apps marked emitted even if a
+// later item in the same call aborted List() with an error (the SDK retries with the same page
+// token), silently skipping those apps forever without ever having actually been returned.
 func isAppEmitted(ctx context.Context, ss sessions.SessionStore, appID string) (bool, error) {
 	_, found, err := session.GetJSON[string](ctx, ss, appID, appLoginEmittedAppNamespace)
 	if err != nil {
 		return false, fmt.Errorf("google-workspace-connector: failed to check emitted-app marker for %s: %w", appID, err)
 	}
 	return found, nil
-}
-
-// recordAppEmitted marks appID as emitted, so it is never returned as a resource again across
-// pages. Callers must only call this after the app's resource has been built and appended to the
-// batch that will be returned to the SDK. Marking it earlier (e.g. before building the resource)
-// would leave appID marked emitted even if the resource build failed or a later item in the same
-// call aborted the whole List() call — the SDK retries with the same page token, so appID would
-// then be silently skipped forever without ever having actually been returned as a resource.
-func recordAppEmitted(ctx context.Context, ss sessions.SessionStore, appID string) error {
-	if err := session.SetJSON(ctx, ss, appID, "1", appLoginEmittedAppNamespace); err != nil {
-		return fmt.Errorf("google-workspace-connector: failed to store emitted-app marker for %s: %w", appID, err)
-	}
-	return nil
 }

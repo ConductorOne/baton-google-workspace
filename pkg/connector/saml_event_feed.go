@@ -138,7 +138,7 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamp
 			return f.lookupUser(ctx, client, samlProfileMap, user)
 		})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, streamState, nil, err
 	}
 	return events, streamState, nil, nil
 }

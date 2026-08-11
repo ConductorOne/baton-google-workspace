@@ -110,7 +110,7 @@ func (f *googleLoginEventFeed) ListEvents(
 ) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken, f.lookupUser)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, streamState, nil, err
 	}
 	return events, streamState, nil, nil
 }
