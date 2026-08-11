@@ -302,6 +302,47 @@ func TestUpdateUserGlobal_CustomSchemasViaProfile(t *testing.T) {
 	require.Contains(t, string(raw), "emea")
 }
 
+// TestUpdateUserGlobal_PlainStringUserID covers the identifiers an automation
+// author actually has on hand. Google's userKey accepts the primary email and
+// the Google user ID as well as the synced resource ID, so a plain string must
+// reach the Directory API rather than being rejected up front for not being a
+// ConductorOne resource reference.
+func TestUpdateUserGlobal_PlainStringUserID(t *testing.T) {
+	for _, userKey := range []string{"t@example.com", "user123"} {
+		t.Run(userKey, func(t *testing.T) {
+			state := &testProfileServerState{
+				users: map[string]*directoryAdmin.User{
+					userKey: {
+						Id:           "user123",
+						PrimaryEmail: "t@example.com",
+						Name:         &directoryAdmin.UserName{GivenName: "Old", FamilyName: "Name"},
+					},
+				},
+			}
+			server := newTestProfileServer(state)
+			defer server.Close()
+
+			dir := newTestDirectoryService(t, server.URL, server.Client())
+			c := newTestGlobalConnector(t, dir)
+
+			args := &structpb.Struct{Fields: map[string]*structpb.Value{
+				argUserID:      strArg(userKey),
+				"user_profile": strArg(`{"department":"Engineering"}`),
+			}}
+
+			resp, _, err := c.updateUserActionHandler(context.Background(), args)
+			require.NoError(t, err)
+			require.True(t, resp.GetFields()["success"].GetBoolValue())
+			require.Equal(t, 1, state.patchCount)
+
+			orgs, err := extractFromInterface[*directoryAdmin.UserOrganization](state.lastPatchBody.Organizations)
+			require.NoError(t, err)
+			require.Len(t, orgs, 1)
+			require.Equal(t, "Engineering", orgs[0].Department)
+		})
+	}
+}
+
 func TestUpdateUserGlobal_MissingUserProfile(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},

@@ -14,9 +14,11 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -484,6 +486,24 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		ChangePasswordAtNextLogin: changePasswordAtNextLogin,
 	}
 
+	// Employee Information attributes (department, job title, cost center,
+	// employee type, employee ID, manager email) are optional; any the account
+	// profile carries are applied in the same users.insert call, so a joiner
+	// provisions a fully-populated account in one step instead of needing a
+	// follow-up update_user_profile action. The key aliases accepted here are
+	// the ones the update path accepts (employeeInfoJSONFields), so the same
+	// profile object drives both. Everything is parsed and validated before the
+	// insert below, so a malformed profile fails without leaving a
+	// half-configured account behind.
+	employeeInfo, err := employeeInfoFromProfile(pMap)
+	if err != nil {
+		return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+			"google-workspace: invalid account profile", err)
+	}
+	if err := applyEmployeeInfoToNewUser(user, employeeInfo); err != nil {
+		return nil, nil, nil, err
+	}
+
 	if credentialOptions == nil {
 		return nil, nil, nil, fmt.Errorf("credentialOptions cannot be nil")
 	}
@@ -494,7 +514,6 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 
 	var password string
 	var plaintextData []*v2.PlaintextData
-	var err error
 
 	if credentialOptions.GetRandomPassword() != nil || credentialOptions.GetPlaintextPassword() != nil {
 		password, err = crypto.GeneratePassword(ctx, credentialOptions)

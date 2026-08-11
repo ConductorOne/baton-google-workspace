@@ -1427,6 +1427,60 @@ func buildManagerRelations(relations []*admin.UserRelation, managerEmail string)
 	return updated
 }
 
+// applyEmployeeInfoToNewUser writes the Employee Information attributes from an
+// account profile onto a not-yet-created admin.User: department, job title and
+// cost center onto a new primary Organizations entry, employee type onto that
+// same entry's Description, employee ID as the "organization" ExternalIds entry,
+// and manager email as the "manager" Relations entry. The same builders the
+// update path uses shape each field, so create and update produce identical
+// wire values - here they always start from an empty current state, since a
+// brand-new account has nothing to merge with.
+//
+// Empty values are dropped rather than sent: on the update path an empty string
+// means "clear this", but there is nothing on an account that does not exist yet
+// to clear, and sending one anyway would create a phantom empty organization
+// that reads back on the next sync.
+//
+// An invalid manager_email is rejected outright instead of being skipped the way
+// the update path skips it. The update path can report a partial success through
+// its skipped_fields return value; CreateAccount has no such channel, so
+// skipping here would silently drop the manager on a joiner - and because this
+// runs before the insert, failing costs nothing but the caller's retry.
+func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) error {
+	for _, dest := range []*(*string){
+		&patch.department, &patch.jobTitle, &patch.costCenter,
+		&patch.employeeType, &patch.employeeID, &patch.managerEmail,
+	} {
+		if *dest != nil && **dest == "" {
+			*dest = nil
+		}
+	}
+
+	if patch.managerEmail != nil {
+		if _, err := mail.ParseAddress(*patch.managerEmail); err != nil {
+			return uhttp.WrapErrors(codes.InvalidArgument,
+				fmt.Sprintf("google-workspace: invalid manager_email: %s", *patch.managerEmail), err)
+		}
+		user.Relations = buildManagerRelations(nil, *patch.managerEmail)
+	}
+
+	// Both builders report whether they produced anything; assign only when they
+	// did, since Organizations and ExternalIds are interface{}-typed fields that
+	// Google's generated marshaller serializes whenever they are non-nil - even
+	// an empty slice - which would put "organizations":[] on the wire for every
+	// account created without these attributes.
+	if orgs, changed := buildUpdatedOrganizations(nil, patch); changed {
+		user.Organizations = orgs
+	}
+	if patch.employeeID != nil {
+		if ids, changed := buildUpdatedExternalIDs(nil, *patch.employeeID); changed {
+			user.ExternalIds = ids
+		}
+	}
+
+	return nil
+}
+
 const (
 	actionUpdateUser = "update_user"
 	argUserProfile   = "user_profile"
@@ -1480,8 +1534,9 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 		{
 			Name:        argUserID,
 			DisplayName: displayUser,
-			Description: "The user to update.",
-			IsRequired:  true,
+			Description: "The user to update. Accepts a user resource reference, or - for callers that " +
+				"do not have one - the user's primary email or Google user ID as a plain string.",
+			IsRequired: true,
 			Field: &config.Field_ResourceIdField{
 				ResourceIdField: &config.ResourceIdField{
 					Rules: &config.ResourceIDRules{
@@ -1532,11 +1587,16 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	userRef, ok := actions.GetResourceIDArg(args, argUserID)
-	if !ok || userRef.GetResource() == "" {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: user_id is required")
+	// Accepts either shape: the resource reference the UI's picker and C1 push
+	// rules send, or a plain string. The plain-string path matters because
+	// Google's userKey accepts a primary email or the Google user ID as well as
+	// the synced resource ID, and an automation author who has one of those
+	// (rather than a ConductorOne-internal resource ID) previously had the call
+	// rejected here before it ever reached the Directory API.
+	userId, err := extractUserId(args, l, actionUpdateUser)
+	if err != nil {
+		return nil, nil, err
 	}
-	userId := userRef.GetResource()
 
 	profileJSON, err := actions.RequireStringArg(args, argUserProfile)
 	if err != nil {
@@ -1584,32 +1644,72 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 	return result, nil, nil
 }
 
-// profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)
-// to a userProfilePatch. Only keys present in the object are applied.
-func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
-	var patch userProfilePatch
-	for _, f := range []struct {
-		dest *(*string)
-		keys []string
-	}{
-		{&patch.givenName, []string{argGivenName, "givenName"}},
-		{&patch.familyName, []string{argFamilyName, "familyName"}},
-		{&patch.recoveryEmail, []string{argRecoveryEmail, "recoveryEmail"}},
-		{&patch.recoveryPhone, []string{argRecoveryPhone, "recoveryPhone"}},
+// profileFieldBinding binds one userProfilePatch field to the profile-object
+// keys accepted for it (the canonical snake_case name first, then camelCase and
+// legacy aliases).
+type profileFieldBinding struct {
+	dest *(*string)
+	keys []string
+}
+
+// employeeInfoJSONFields returns the bindings for the six Employee Information
+// attributes. Shared by profileFromJSON (the update path) and the account
+// -creation path in user.go so the two can never drift on which profile keys
+// they accept: a joiner and a subsequent mover both read the same C1 account
+// profile object, and a key that only one side understood would silently apply
+// on create and be dropped on update (or vice versa).
+func employeeInfoJSONFields(patch *userProfilePatch) []profileFieldBinding {
+	return []profileFieldBinding{
 		{&patch.department, []string{argDepartment}},
 		{&patch.jobTitle, []string{argJobTitle, "jobTitle", profileKeyTitle}},
 		{&patch.costCenter, []string{argCostCenter, "costCenter"}},
 		{&patch.employeeType, []string{argEmployeeType, "employeeType"}},
 		{&patch.employeeID, []string{argEmployeeID, "employeeId"}},
 		{&patch.managerEmail, []string{argManagerEmail, "managerEmail"}},
-	} {
+	}
+}
+
+// applyProfileFields reads each binding's keys out of profile, leaving the
+// destination nil when none of them are present.
+func applyProfileFields(profile map[string]any, fields []profileFieldBinding) error {
+	for _, f := range fields {
 		v, ok, err := stringFromJSON(profile, f.keys...)
 		if err != nil {
-			return patch, err
+			return err
 		}
 		if ok {
 			*f.dest = &v
 		}
+	}
+	return nil
+}
+
+// employeeInfoFromProfile maps a ConductorOne account profile to a patch holding
+// only the six Employee Information attributes. Deliberately narrower than
+// profileFromJSON: recovery email/phone and custom schemas stay action-only
+// (out of scope for account provisioning), so reading them here would quietly
+// widen what a create/update through the provisioning path can write.
+func employeeInfoFromProfile(profile map[string]any) (userProfilePatch, error) {
+	var patch userProfilePatch
+	if err := applyProfileFields(profile, employeeInfoJSONFields(&patch)); err != nil {
+		return patch, err
+	}
+	return patch, nil
+}
+
+// profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)
+// to a userProfilePatch. Only keys present in the object are applied.
+func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
+	var patch userProfilePatch
+	fields := []profileFieldBinding{
+		{&patch.givenName, []string{argGivenName, "givenName"}},
+		{&patch.familyName, []string{argFamilyName, "familyName"}},
+		{&patch.recoveryEmail, []string{argRecoveryEmail, "recoveryEmail"}},
+		{&patch.recoveryPhone, []string{argRecoveryPhone, "recoveryPhone"}},
+	}
+	fields = append(fields, employeeInfoJSONFields(&patch)...)
+	if err := applyProfileFields(profile, fields); err != nil {
+		return patch, err
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
