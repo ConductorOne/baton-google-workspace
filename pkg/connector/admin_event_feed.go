@@ -2,6 +2,8 @@ package connector
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +24,90 @@ import (
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
+
+// maxEventFeedLookback caps how far back the admin event feed queries the Google Reports API.
+// Google page tokens expire after ~24h, so a cursor left mid-pagination (e.g. after a connector
+// restart or a transient timeout) would otherwise keep requesting the full historical window on
+// every retry, causing HTTP timeout death spirals on large orgs. 90 days balances sufficient
+// event history against query size; Google retains Reports data for 6 months so there is
+// headroom if the window needs to grow.
+//
+// Note: this cursor/lookback scheme is specific to the admin event feed (resource-change/grant
+// events). The usage-tracking feeds (usage_event_feed.go, google_login_event_feed.go,
+// saml_event_feed.go) no longer replay bulk activity history at all — see event_feed_common.go.
+const maxEventFeedLookback = 90 * 24 * time.Hour
+
+type adminEventFeedPageToken struct {
+	LatestEventSeen string `json:"latest_event_seen,omitempty"`
+	NextPageToken   string `json:"next_page_token,omitempty"`
+	StartAt         string `json:"start_at,omitempty"`
+	PageSize        int    `json:"page_size,omitempty"`
+}
+
+// resolveAdminEventFeedPageToken decodes the incoming page token and applies the admin event
+// feed's lookback/staleness policy: picking a starting point for a fresh cursor, and resetting a
+// resumed cursor's StartAt when it is unparseable or older than maxEventFeedLookback (but only
+// when not mid-pagination — see the pt.NextPageToken == "" case below).
+func resolveAdminEventFeedPageToken(ctx context.Context, token *pagination.StreamToken, defaultStart *timestamppb.Timestamp) (*adminEventFeedPageToken, error) {
+	l := ctxzap.Extract(ctx)
+
+	pt := &adminEventFeedPageToken{}
+	if token != nil && token.Cursor != "" {
+		data, err := base64.StdEncoding.DecodeString(token.Cursor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode page token: %w", err)
+		}
+
+		if err := json.Unmarshal(data, pt); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal page token JSON: %w", err)
+		}
+
+		pt.PageSize = token.Size
+	}
+
+	cutoff := time.Now().Add(-maxEventFeedLookback)
+
+	switch {
+	case pt.StartAt == "":
+		// Fresh cursor: pick a starting point, clamped to the lookback cap.
+		start := defaultStart
+		if start == nil || start.AsTime().Before(cutoff) {
+			// There's lag on these events, so we're going to start roughly when google says events should come in
+			// https://support.google.com/a/answer/7061566?fl=1&sjid=13551023455982018638-NC (Data Retention and Lag Times)
+			start = timestamppb.New(cutoff)
+		}
+		pt.StartAt = start.AsTime().Format(time.RFC3339)
+	case pt.NextPageToken == "":
+		// Not mid-pagination: safe to re-validate staleness (e.g. a cursor left over from a
+		// completed page-walk long ago) against the lookback cap.
+		cursorStart, parseErr := time.Parse(time.RFC3339, pt.StartAt)
+		if parseErr != nil {
+			l.Debug("google-workspace: admin event feed cursor start_at was unparseable, resetting to lookback cutoff",
+				zap.String("start_at", pt.StartAt), zap.Error(parseErr))
+		} else if cursorStart.Before(cutoff) {
+			l.Debug("google-workspace: admin event feed cursor start_at is stale, resetting to lookback cutoff",
+				zap.String("start_at", pt.StartAt))
+		}
+		if parseErr != nil || cursorStart.Before(cutoff) {
+			pt.StartAt = cutoff.Format(time.RFC3339)
+			pt.LatestEventSeen = ""
+		}
+	}
+
+	if pt.LatestEventSeen == "" {
+		pt.LatestEventSeen = pt.StartAt
+	}
+
+	return pt, nil
+}
+
+func (pt *adminEventFeedPageToken) marshal() (string, error) {
+	data, err := json.Marshal(pt)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal page token: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
 
 // eventTypeGroupSettings is the Directory API activity event Type for group
 // settings changes (extracted to satisfy goconst).
@@ -49,12 +135,12 @@ func (f *adminEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Ti
 
 	var streamState *pagination.StreamState
 
-	cursor, err := unmarshalPageToken(pToken, startAt)
+	cursor, err := resolveAdminEventFeedPageToken(ctx, pToken, startAt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to unmarshal page token: %w", err)
 	}
 
-	r, err := f.client.ListActivities(ctx, "all", "admin", "", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
+	r, err := f.client.ListActivities(ctx, "all", "admin", "", cursor.StartAt, cursor.NextPageToken, "", int64(pToken.Size))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: failed to list admin activities: %w", err)
 	}

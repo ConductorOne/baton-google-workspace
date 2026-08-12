@@ -11,8 +11,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	"google.golang.org/api/googleapi"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
@@ -43,6 +41,8 @@ func (ar *applicationResource) ResourceType(_ context.Context) *v2.ResourceType 
 }
 
 func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	isFirstPage := attrs.PageToken.Token == ""
+
 	var samlProfileMap map[string]string
 	if ar.client.CloudIdentityService != nil {
 		// The Cloud Identity service is only non-nil when the inboundsso.readonly scope was
@@ -54,54 +54,48 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 		// resource and all of its access grants — a silent false-revocation on a transient blip.
 		// (When the scope is NOT granted, CloudIdentityService is nil and we consistently use
 		// display-name IDs every sync, so no ID flip occurs.)
+		//
+		// This is only fetched on the first page and cached in session for subsequent pages —
+		// each applicationResource.List() call now covers one bounded batch of users, not the
+		// whole directory, so re-fetching every call would be wasteful and would re-run the
+		// error-handling below on every page.
 		var err error
-		samlProfileMap, err = ar.client.BuildSAMLProfileMap(ctx, ar.customerID)
+		samlProfileMap, err = loadCloudIdentitySAMLProfileMap(ctx, attrs.Session, ar.client, ar.customerID, isFirstPage)
 		if err != nil {
-			// Exception to the above: when the Cloud Identity API is not enabled in the
-			// customer's GCP project, the service still initialises (the scope was granted)
-			// but every call returns a permanent 403 SERVICE_DISABLED. That is a stable
-			// feature-unavailable condition, not a transient blip — such a customer's SAML
-			// apps have ALWAYS been resolved by display name, so there is no profile-name
-			// state to flip and nothing to prune. Treat it like a missing scope: warn and
-			// fall back to display-name IDs instead of failing the whole sync. Any other
-			// failure (transient 5xx/429, network, or a 403 that is NOT "API disabled")
-			// still propagates, preserving the prune-safety guarantee above.
-			if isCloudIdentityAPIDisabledError(err) {
-				// Logged at Info (not Warn) to match the existing soft-failure log in
-				// fetchSAMLProfileMap and the Debug-level missing-scope handling: a
-				// disabled API is an expected, stable customer-config state, not an alert.
-				ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
-					"SAML app IDs will use display names. Enable the Cloud Identity API "+
-					"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
-					zap.Error(err))
-				samlProfileMap = nil
-			} else {
-				return nil, nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
-			}
+			return nil, nil, err
 		}
 	}
 
-	oauthApps, err := discoverOAuthApps(ctx, attrs.Session, ar.client, ar.customerID, ar.domain)
+	newOAuthApps, newSAMLApps, nextPageToken, err := scanAppLoginsPage(ctx, attrs.Session, ar.client, ar.customerID, ar.domain, attrs.PageToken.Token, samlProfileMap)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	samlApps, err := loadLoginEvents(ctx, attrs.Session, ar.client, samlProfileMap)
-	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace-connector: failed to load login events: %w", err)
-	}
 	if samlProfileMap != nil {
 		for appID, name := range discoverSAMLApps(samlProfileMap) {
-			if _, exists := samlApps[appID]; !exists {
-				samlApps[appID] = name
+			if _, exists := newSAMLApps[appID]; !exists {
+				newSAMLApps[appID] = name
 			}
 		}
 	}
 
-	resources := make([]*v2.Resource, 0, len(oauthApps)+len(samlApps)+1)
+	resources := make([]*v2.Resource, 0, len(newOAuthApps)+len(newSAMLApps)+1)
+	// emittedThisCall accumulates emitted-app markers locally and is only persisted once, right
+	// before the successful return below. Writing markers per-app mid-loop (as before) let an
+	// error on a later app in the same call abort List() with `resources` discarded by the SDK,
+	// while earlier apps' markers were already committed — permanently skipping those apps on
+	// the SDK's retry with the same page token, since they'd read back as already emitted.
+	emittedThisCall := make(map[string]string)
 
-	for appID, displayName := range oauthApps {
-		if _, isSAML := samlApps[appID]; isSAML {
+	for appID, displayName := range newOAuthApps {
+		if _, isSAML := newSAMLApps[appID]; isSAML {
+			continue
+		}
+		alreadyEmitted, err := isAppEmitted(ctx, attrs.Session, appID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if alreadyEmitted {
 			continue
 		}
 		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil,
@@ -110,26 +104,52 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
+		emittedThisCall[appID] = "1"
 	}
 
-	for appID, displayName := range samlApps {
+	for appID, displayName := range newSAMLApps {
+		alreadyEmitted, err := isAppEmitted(ctx, attrs.Session, appID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if alreadyEmitted {
+			continue
+		}
 		r, err := rs.NewAppResource(displayName, resourceTypeEnterpriseApplication, appID, nil,
 			rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.saml_app"))
 		if err != nil {
 			return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", appID, err)
 		}
 		resources = append(resources, r)
+		emittedThisCall[appID] = "1"
 	}
 
-	// Google Workspace itself is always an app — sign-in events from googleLoginEventFeed target this resource.
-	r, err := rs.NewAppResource(googleWorkspaceAppDisplayName, resourceTypeEnterpriseApplication, googleWorkspaceAppID, nil,
-		rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.workspace"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", googleWorkspaceAppID, err)
+	if nextPageToken == "" {
+		// Final page of this pass: Google Workspace itself is always an app — sign-in events
+		// from googleLoginEventFeed target this resource. Emit it once, only here, so it is
+		// never returned more than once across pages.
+		alreadyEmitted, err := isAppEmitted(ctx, attrs.Session, googleWorkspaceAppID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !alreadyEmitted {
+			r, err := rs.NewAppResource(googleWorkspaceAppDisplayName, resourceTypeEnterpriseApplication, googleWorkspaceAppID, nil,
+				rs.WithNHIType(v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "gws.workspace"))
+			if err != nil {
+				return nil, nil, fmt.Errorf("google-workspace-connector: failed to create application resource %s: %w", googleWorkspaceAppID, err)
+			}
+			resources = append(resources, r)
+			emittedThisCall[googleWorkspaceAppID] = "1"
+		}
 	}
-	resources = append(resources, r)
 
-	return resources, &rs.SyncOpResults{}, nil
+	if len(emittedThisCall) > 0 {
+		if err := session.SetManyJSON(ctx, attrs.Session, emittedThisCall, appLoginEmittedAppNamespace); err != nil {
+			return nil, nil, fmt.Errorf("google-workspace-connector: failed to store emitted-app markers: %w", err)
+		}
+	}
+
+	return resources, &rs.SyncOpResults{NextPageToken: nextPageToken}, nil
 }
 
 func (ar *applicationResource) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {

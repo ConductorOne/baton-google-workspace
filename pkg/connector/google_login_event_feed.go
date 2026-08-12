@@ -4,25 +4,38 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
+type bestActivity struct {
+	activity   *reportsAdmin.Activity
+	occurredAt *timestamppb.Timestamp
+}
+
+// googleLoginLookupMaxResults bounds the per-user Reports API lookup for Google Workspace
+// sign-in events. There is exactly one target app (Google Workspace itself), so this only
+// needs to cover the "does maxResults=1 return newest-first?" ordering uncertainty: fetch a
+// small window and pick the maximum occurredAt client-side.
+const googleLoginLookupMaxResults = 5
+
 // googleLoginEventFeed emits UsageEvents from Google Workspace sign-in activity.
 // Unlike SAML/OAuth feeds, the target resource is always Google Workspace itself.
 type googleLoginEventFeed struct {
-	client *gwclient.GoogleWorkspaceClient
+	client     *gwclient.GoogleWorkspaceClient
+	customerID string
+	domain     string
 }
 
-func newGoogleLoginEventFeed(client *gwclient.GoogleWorkspaceClient) *googleLoginEventFeed {
-	return &googleLoginEventFeed{client: client}
+func newGoogleLoginEventFeed(client *gwclient.GoogleWorkspaceClient, customerID, domain string) *googleLoginEventFeed {
+	return &googleLoginEventFeed{client: client, customerID: customerID, domain: domain}
 }
 
 func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFeedMetadata {
@@ -34,86 +47,70 @@ func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFee
 	}
 }
 
-func (f *googleLoginEventFeed) ListEvents(ctx context.Context, startAt *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	cursor, err := unmarshalPageToken(pToken, startAt)
+func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
+	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppLogin, "login_success", "", "", googleLoginLookupMaxResults)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to unmarshal page token in google login event feed: %w", err)
+		return nil, fmt.Errorf("google-workspace-connector: failed to list google login activities for %s: %w", user.Email, err)
 	}
 
-	r, err := f.client.ListActivities(ctx, reportsUserAll, reportsAppLogin, "login_success", cursor.StartAt, cursor.NextPageToken, int64(pToken.Size))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to list google login activities: %w", err)
-	}
-
-	latestEvent, err := time.Parse(time.RFC3339, cursor.LatestEventSeen)
-	if err != nil {
-		latestEvent = time.Unix(0, 0)
-	}
-
-	events := []*v2.Event{}
+	var best *bestActivity
 	for _, activity := range r.Items {
 		if activity.Actor.ProfileId == "" {
 			continue
 		}
-
 		occurredAt := convertIdTimeToTimestamp(activity.Id.Time)
 		if occurredAt == nil {
-			occurredAt = timestamppb.New(time.Unix(0, 0))
+			continue
 		}
-		if occurredAt.AsTime().After(latestEvent) {
-			cursor.LatestEventSeen = occurredAt.AsTime().Format(time.RFC3339)
-			latestEvent = occurredAt.AsTime()
+		if best == nil || occurredAt.AsTime().After(best.occurredAt.AsTime()) {
+			best = &bestActivity{activity: activity, occurredAt: occurredAt}
 		}
+	}
+	if best == nil {
+		return nil, nil
+	}
 
-		// NewUserTrait defaults to STATUS_ENABLED when no status option is given.
-		userTrait, err := resource.NewUserTrait(
-			resource.WithEmail(activity.Actor.Email, true),
-		)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to create user trait in google login event feed: %w", err)
-		}
+	userTrait, err := resource.NewUserTrait(
+		resource.WithEmail(best.activity.Actor.Email, true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace-connector: failed to create user trait in google login event feed: %w", err)
+	}
 
-		events = append(events, &v2.Event{
-			Id:         strconv.FormatInt(activity.Id.UniqueQualifier, 10),
-			OccurredAt: occurredAt,
-			Event: &v2.Event_UsageEvent{
-				UsageEvent: &v2.UsageEvent{
-					TargetResource: &v2.Resource{
-						Id: &v2.ResourceId{
-							ResourceType: resourceTypeEnterpriseApplication.Id,
-							Resource:     googleWorkspaceAppID,
-						},
-						DisplayName: googleWorkspaceAppDisplayName,
+	return []*v2.Event{{
+		Id:         strconv.FormatInt(best.activity.Id.UniqueQualifier, 10),
+		OccurredAt: best.occurredAt,
+		Event: &v2.Event_UsageEvent{
+			UsageEvent: &v2.UsageEvent{
+				TargetResource: &v2.Resource{
+					Id: &v2.ResourceId{
+						ResourceType: resourceTypeEnterpriseApplication.Id,
+						Resource:     googleWorkspaceAppID,
 					},
-					ActorResource: &v2.Resource{
-						Id: &v2.ResourceId{
-							ResourceType: resourceTypeUser.Id,
-							Resource:     activity.Actor.ProfileId,
-						},
-						DisplayName: activity.Actor.Email,
-						Annotations: annotations.New(userTrait),
-						Status: v2.Status_builder{
-							Status: v2.Status_RESOURCE_STATUS_ENABLED,
-						}.Build(),
+					DisplayName: googleWorkspaceAppDisplayName,
+				},
+				ActorResource: &v2.Resource{
+					Id: &v2.ResourceId{
+						ResourceType: resourceTypeUser.Id,
+						Resource:     best.activity.Actor.ProfileId,
 					},
+					DisplayName: best.activity.Actor.Email,
+					Status:      &v2.Status{Status: v2.Status_RESOURCE_STATUS_ENABLED},
+					Annotations: annotations.New(userTrait),
 				},
 			},
-		})
-	}
+		},
+	}}, nil
+}
 
-	cursor.NextPageToken = r.NextPageToken
-	if r.NextPageToken == "" {
-		cursor.StartAt = cursor.LatestEventSeen
-		cursor.LatestEventSeen = ""
-	}
-
-	cursorToken, err := cursor.marshal()
+func (f *googleLoginEventFeed) ListEvents(
+	ctx context.Context,
+	earliestEvent *timestamppb.Timestamp,
+	pToken *pagination.StreamToken,
+) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken, f.lookupUser)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("google-workspace-connector: failed to marshal cursor token in google login event feed: %w", err)
+		return nil, streamState, nil, err
 	}
-
-	return events, &pagination.StreamState{
-		Cursor:  cursorToken,
-		HasMore: r.NextPageToken != "",
-	}, nil, nil
+	return events, streamState, nil, nil
 }
