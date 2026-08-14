@@ -77,10 +77,49 @@ baton resources
 
 | Operation                     | Description                                                          |
 | ----------------------------- | ------------------------------------------------------------------- |
-| Create/Delete user            | Directory API `users.insert` / `users.delete`                       |
+| Create/Delete user            | Directory API `users.insert` / `users.delete`. Account creation also applies any Employee Information attributes present on the account profile — see below |
 | Delete group                  | Directory API `groups.delete` (group creation is the `create_group` connector action, below) |
 | Grant/Revoke group membership | Directory API `members.insert` / `members.delete`                   |
 | Grant/Revoke role assignment  | Directory API `roleAssignments.insert` / `roleAssignments.delete`   |
+
+### Account profile attributes at creation
+
+Account creation reads the following keys from the ConductorOne account profile
+and applies them in the same `users.insert` call, so a joiner provisions a
+fully-populated account in one step:
+
+| Profile key | Accepted aliases | Google Directory field |
+| ----------- | ---------------- | ---------------------- |
+| `email`, `given_name`, `family_name` | — | `primaryEmail`, `name.givenName`, `name.familyName` (required) |
+| `department` | — | `organizations[0].department` |
+| `job_title` | `jobTitle`, `title` | `organizations[0].title` |
+| `cost_center` | `costCenter` | `organizations[0].costCenter` |
+| `employee_type` | `employeeType` | `organizations[0].description` (the Admin console's "Employee type") |
+| `employee_id` | `employeeId` | `externalIds[]` entry of type `organization` (the Admin console's "Employee ID") |
+| `manager_email` | `managerEmail` | `relations[]` entry of type `manager` |
+
+The Employee Information keys are the same ones `update_user`'s `user_profile`
+object accepts, so a single account profile drives both the joiner (create) and
+subsequent mover (update) flows. Notes:
+
+- All six are optional; keys that are absent, empty, or whitespace-only are
+  simply not sent (an empty value means "clear" on the update path, but a
+  brand-new account has nothing to clear).
+- `manager_email` is normalized to the bare address before it is stored, so a
+  value that arrives padded or in display-name form
+  (`Jane Doe <jane@example.com>`) still produces a `manager` relation Google can
+  resolve.
+- **None of them can fail account creation.** They enrich an account rather than
+  define it, so a value that is wrong-typed (e.g. `employee_id` sent as a JSON
+  number) or an unusable `manager_email` is dropped and the account is still
+  created. Every dropped attribute is named with a reason in a `Warn` log line
+  (`dropped_fields`). Use `update_user` to apply them once the profile is
+  corrected. Note this is deliberately *less* strict than the update path, which
+  rejects a wrong-typed value outright — there the account already exists, so
+  failing loudly costs nothing, whereas here it would cost the joiner their
+  account.
+- Recovery email/phone and custom-schema attributes are **not** settable at
+  creation; they remain available through `update_user_profile` / `update_user`.
 
 ## Connector actions
 
@@ -90,7 +129,7 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | ------ | ------------- | ----------- |
 | `update_user_status` / `disable_user` / `enable_user` | `user_id` / `is_suspended` | Suspend or activate a user (idempotent) |
 | `update_user_profile` | `user_id`, plus any of `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `department`, `job_title`, `cost_center`, `employee_type`, `employee_id`, `manager_email`, `custom_schemas` | Partial profile update (patch semantics); supports Employee Information attributes and custom-schema attribute values. Exception: an `employee_id` change that reduces the number of external IDs on the account (clearing it, or consolidating duplicate entries down to the new value) uses a full-object update instead, since Google does not reliably shrink a repeated field via patch. An empty or malformed `manager_email` does not fail the whole call — see the partial-success note below. |
-| `update_user` | `user_id` (resource ID), `user_profile` (JSON string; same keys as `update_user_profile` above) | Profile update from a JSON object; consumed by C1 push rules for automated profile sync. Same partial-success behavior as `update_user_profile` for `manager_email`. |
+| `update_user` | `user_id` (user resource reference, or the primary email / Google user ID as a plain string), `user_profile` (JSON string; same keys as `update_user_profile` above) | Profile update from a JSON object; consumed by C1 push rules for automated profile sync. Same partial-success behavior as `update_user_profile` for `manager_email`. |
 | `update_user_manager` | `user_id`, `manager_email` | Set the user's `manager` relation |
 | `make_admin` | `user_id`, `status` (bool) | Promote/demote a user to/from super administrator |
 | `change_user_org_unit` | `user_id`, `org_unit_path` | Move a user to a different organizational unit |
@@ -107,6 +146,8 @@ Connector actions are custom operations invoked on demand from C1 automations:
 > **Custom schemas:** `update_user_profile` and `update_user` can write values into custom-schema attributes (Directory API `customSchemas`). The connector only sets values — the schema **definitions must already exist** in the tenant (the connector does not request the `admin.directory.userschema` scope).
 
 > **Job title round-trip:** the synced user profile exposes the job title under both `title` and `job_title` for backward compatibility. `update_user`'s `user_profile` JSON object accepts any of `job_title`, `jobTitle`, or `title` as the source key. `update_user_profile` has a fixed schema and only exposes `job_title` as an argument name — pass the value under that key.
+
+> **Identifying the user:** the user-scoped actions accept `user_id` either as a user resource reference (what the UI's resource picker and C1 push rules send) or as a plain string. Google's `userKey` accepts a user's primary email or Google user ID as well as the synced resource ID, so any of the three works when the action is wired up by hand.
 
 > **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
 

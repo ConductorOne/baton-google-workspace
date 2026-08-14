@@ -9,7 +9,7 @@
 2. Can the connector provision any resources? If so, which ones?
 
    Yes:
-   - **Create/Delete user accounts** — via Directory API `users.insert` and `users.delete`. New accounts are created with a generated random password.
+   - **Create/Delete user accounts** — via Directory API `users.insert` and `users.delete`. New accounts are created with a generated random password. Creation also applies any Employee Information attributes carried on the ConductorOne account profile in the same `users.insert` call — `department`, `job_title` (also `jobTitle`/`title`), `cost_center`, `employee_type`, `employee_id`, and `manager_email` (each also accepted in camelCase) — mapping to `organizations[0]` (`department`/`title`/`costCenter`/`description`), an `externalIds` entry of type `organization`, and a `relations` entry of type `manager`. All six are optional and never fail account creation: empty, whitespace-only, wrong-typed, and unusable-`manager_email` values are dropped (each named with a reason in a `Warn` log line) and the account is still created, with `update_user` available to apply them afterwards. Recovery email/phone and custom-schema attributes remain action-only.
    - **Grant/Revoke group membership** — via Directory API `members.insert` and `members.delete`.
    - **Grant/Revoke role assignment** — via Directory API `roleAssignments.insert` and `roleAssignments.delete`.
    - **Create/Delete groups** — creation via the `create_group` connector action (Directory API `groups.insert`); deletion via Directory API `groups.delete`.
@@ -20,7 +20,7 @@
    | --- | --- | --- |
    | `update_user_status` / `disable_user` / `enable_user` | `users.update` | Suspend / activate a user (idempotent) |
    | `update_user_profile` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Partial profile update: name, recovery details, Employee Information (department, job title, cost center, employee ID, employee type), manager relation, custom-schema values. An empty/invalid `manager_email` is skipped (not applied, reported via the `skipped_fields` return field) rather than failing the whole call, as long as another provided field is valid. |
-   | `update_user` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Profile update from a `user_profile` JSON object (same fields as `update_user_profile`); consumed by C1 push rules for automated profile sync. Same `manager_email` partial-success behavior as `update_user_profile`. |
+   | `update_user` | `users.patch` (`users.update` when an `employee_id` change reduces the number of external IDs on the account) | Profile update from a `user_profile` JSON object (same fields as `update_user_profile`); consumed by C1 push rules for automated profile sync. `user_id` accepts a user resource reference, or the user's primary email or Google user ID as a plain string. Same `manager_email` partial-success behavior as `update_user_profile`. |
    | `update_user_manager` | `users.update` | Set the user's `manager` relation |
    | `make_admin` | `users.makeAdmin` | Promote/demote a user to/from super administrator |
    | `change_user_org_unit` | `users.update` | Move a user to a different organizational unit |
