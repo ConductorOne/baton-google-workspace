@@ -58,7 +58,9 @@
 
    ### How to obtain the credentials (step by step)
 
-   The connector authenticates as a **Google Cloud service account** with **domain-wide delegation**, impersonating a Workspace super admin. A user with the **Super Admin** role in Google Workspace must perform this setup.
+   The connector authenticates as a **Google Cloud service account** with **domain-wide delegation**, impersonating a Workspace super admin. The Google Cloud steps need Google Cloud permissions; a Workspace **Super Admin** is required only to authorize domain-wide delegation.
+
+   The summary below covers the shape of the setup. `docs/connector.mdx` is the maintained customer-facing procedure, including `gcloud` equivalents and the service account key policies that can block key creation.
 
    **Step 1: Create a Google Cloud project**
 
@@ -67,7 +69,7 @@
    **Step 2: Enable the required APIs**
 
    In **APIs & Services > Library**, enable:
-   - **Admin SDK API** (required — Directory + Reports)
+   - **Admin SDK API** (required — Directory + Reports + Data Transfer)
    - **Cloud Identity API** (used to resolve SAML app IDs to stable identifiers)
    - **Groups Settings API** (optional — only needed for the `modify_group_settings` action)
 
