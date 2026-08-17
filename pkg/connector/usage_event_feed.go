@@ -138,6 +138,9 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 		}
 		startIdx = idx
 	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
 	if startIdx > len(apps) {
 		startIdx = len(apps)
 	}

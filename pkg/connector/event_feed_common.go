@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
@@ -34,10 +35,13 @@ import (
 // below), but keeps the directory-side bookkeeping (ListTokens, cursor size) proportional.
 const usersPerEventFeedCall = 25
 
-// maxLookupCallsPerEventFeedCall caps total Reports API calls issued by one ListEvents
-// invocation, so a call can't blow its RPC deadline (~16s of rate-limiter time at 220/min).
-// A userEventLookup that needs more calls for one user returns a resumeState instead.
+// maxLookupCallsPerEventFeedCall caps Reports API calls per ListEvents invocation. Bounds cost,
+// not time (shared rate limiter, retries with backoff) — see maxEventFeedCallDuration for that.
 const maxLookupCallsPerEventFeedCall = 60
+
+// maxEventFeedCallDuration is a soft wall-clock budget per ListEvents invocation, checked between
+// users, since a call-count budget alone doesn't bound elapsed time.
+const maxEventFeedCallDuration = 45 * time.Second
 
 type pendingUser struct {
 	Email string `json:"email"`
@@ -169,10 +173,11 @@ func scanUsersForEvents(
 	events := []*v2.Event{}
 	budget := maxLookupCallsPerEventFeedCall
 	resumeState := cursor.ResumeState
+	start := time.Now()
 
 	for i, u := range batch {
-		if budget <= 0 {
-			// Budget spent before starting u; resume here fresh next call.
+		if budget <= 0 || time.Since(start) >= maxEventFeedCallDuration {
+			// Budget or time spent before starting u; resume here fresh next call.
 			cursor.PendingUsers = cursor.PendingUsers[i:]
 			cursor.ResumeState = ""
 			return finish(events, true)
@@ -180,10 +185,9 @@ func scanUsersForEvents(
 
 		userEvents, nextResume, consumed, err := lookup(ctx, client, u, resumeState, budget)
 		if err != nil {
-			// Keep u (and the rest) pending with its resume state, so a retry resumes here
-			// instead of restarting the whole batch.
-			cursor.PendingUsers = cursor.PendingUsers[i:]
-			cursor.ResumeState = resumeState
+			// The SDK drops this StreamState on error, so a retry replays the last successful
+			// cursor regardless; return it unchanged (it's untouched at this point) rather than
+			// advancing it for no effect.
 			cursorToken, marshalErr := cursor.marshal()
 			if marshalErr != nil {
 				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)

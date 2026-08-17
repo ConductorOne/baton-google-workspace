@@ -400,10 +400,21 @@ func TestScanUsersForEvents_ResumesWithinUserWhenBudgetExhausted(t *testing.T) {
 	}
 }
 
+// withUnlimitedReportsRateLimiter swaps sharedReportsRateLimiter for a large-capacity one for the
+// test's duration, so tests issuing many real Reports calls aren't order-dependent on other tests.
+func withUnlimitedReportsRateLimiter(t *testing.T) {
+	t.Helper()
+	original := sharedReportsRateLimiter
+	sharedReportsRateLimiter = newReportsRateLimiter(1_000_000)
+	t.Cleanup(func() { sharedReportsRateLimiter = original })
+}
+
 // TestUsageEventFeed_ResumesAcrossManyAuthorizedApps is the end-to-end version of the test above,
 // exercising usage_event_feed's real lookupUser against a user with more authorized apps than
 // maxLookupCallsPerEventFeedCall allows per call.
 func TestUsageEventFeed_ResumesAcrossManyAuthorizedApps(t *testing.T) {
+	withUnlimitedReportsRateLimiter(t)
+
 	const userEmail = "heavy@example.com"
 	const numApps = maxLookupCallsPerEventFeedCall + 15 // forces exactly 2 resumed calls
 
