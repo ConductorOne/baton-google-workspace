@@ -114,8 +114,15 @@ func distinctAuthorizedApps(tokenResp *directoryAdmin.Tokens) []oauthApp {
 }
 
 // lookupUser issues one Reports API lookup per authorized OAuth app, scoped by client_id. A user
-// can have more apps than the per-call budget allows: resumeState is the index into the app list
-// to resume from, and if apps remain after spending budget, nextResumeState carries it forward.
+// can have more apps than the per-call budget allows: resumeState is the client_id of the last
+// app processed on a prior call for this user, and if apps remain after spending budget,
+// nextResumeState carries the new last-processed client_id forward. A client_id (rather than a
+// positional index) is used because Tokens.list is re-fetched fresh on every call and its
+// ordering is not guaranteed stable across calls — a positional index could silently skip or
+// re-visit apps if the set of authorized apps changes between calls. If resumeState's client_id
+// is no longer present (e.g. the app was deauthorized between calls), lookupUser conservatively
+// restarts from the beginning rather than guessing a position, which can revisit already-seen
+// apps (harmless — the lookup is idempotent) but never skips one.
 // Per-app lookups run concurrently (bounded by maxConcurrentAppLookups); the shared rate limiter
 // still caps quota use, so this only overlaps network latency.
 func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int) ([]*v2.Event, string, int, error) {
@@ -132,17 +139,12 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 
 	startIdx := 0
 	if resumeState != "" {
-		idx, parseErr := strconv.Atoi(resumeState)
-		if parseErr != nil {
-			return nil, "", 0, fmt.Errorf("google-workspace: invalid resume state for %s: %w", user.Email, parseErr)
+		for i, app := range apps {
+			if app.ClientID == resumeState {
+				startIdx = i + 1
+				break
+			}
 		}
-		startIdx = idx
-	}
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	if startIdx > len(apps) {
-		startIdx = len(apps)
 	}
 
 	remaining := apps[startIdx:]
@@ -181,7 +183,7 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 	consumed := len(toProcess)
 	nextResume := ""
 	if startIdx+consumed < len(apps) {
-		nextResume = strconv.Itoa(startIdx + consumed)
+		nextResume = toProcess[len(toProcess)-1].ClientID
 	}
 	return events, nextResume, consumed, nil
 }

@@ -494,3 +494,102 @@ func TestUsageEventFeed_ResumesAcrossManyAuthorizedApps(t *testing.T) {
 		}
 	}
 }
+
+// TestUsageEventFeed_ResumeSurvivesAppListShift verifies that resuming a user's authorized-app
+// lookup by client_id (not by positional index) tolerates the app list shifting between the
+// first and second ListEvents call. A revoked app that was already processed disappears from
+// Tokens.list, shifting every later app's position down by one; a positional-index resume would
+// then skip whatever app lands at the old index in the shifted list, silently losing an event.
+// Resuming by client_id instead re-locates the last-processed app in the fresh list (wherever it
+// now sits) and continues right after it, so every not-yet-processed app is still visited exactly
+// once.
+func TestUsageEventFeed_ResumeSurvivesAppListShift(t *testing.T) {
+	withUnlimitedReportsRateLimiter(t)
+
+	const userEmail = "heavy@example.com"
+	const numApps = maxLookupCallsPerEventFeedCall + 15 // forces exactly 2 resumed calls
+	const revokedAfterFirstCall = "client-5"             // processed in call 1, then revoked
+
+	var mu sync.Mutex
+	callCounts := map[string]int{}
+	tokensCalls := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/directory/v1/users", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pageToken") != "" {
+			_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{
+			Users: []*directoryAdmin.User{{Id: "profile-heavy", PrimaryEmail: userEmail}},
+		})
+	})
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tokensCalls++
+		shifted := tokensCalls > 1
+		mu.Unlock()
+
+		tokens := make([]*directoryAdmin.Token, 0, numApps)
+		for i := 0; i < numApps; i++ {
+			clientID := fmt.Sprintf("client-%d", i)
+			if shifted && clientID == revokedAfterFirstCall {
+				// Revoked between calls: every later app's index shifts down by one.
+				continue
+			}
+			tokens = append(tokens, &directoryAdmin.Token{ClientId: clientID, DisplayText: clientID})
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Tokens{Items: tokens})
+	})
+	mux.HandleFunc("/admin/reports/v1/activity/users/", func(w http.ResponseWriter, r *http.Request) {
+		clientID := strings.TrimPrefix(r.URL.Query().Get("filters"), "client_id==")
+		mu.Lock()
+		callCounts[clientID]++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{
+			Items: []*reportsAdmin.Activity{
+				activityItem(1, time.Minute, userEmail, "profile-heavy",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: clientID},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: clientID},
+				),
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+
+	var cursor string
+	calls := 0
+	for {
+		calls++
+		if calls > 10 {
+			t.Fatalf("expected this to resolve in a small, bounded number of calls, got stuck after %d", calls)
+		}
+		_, state, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{Cursor: cursor})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		cursor = state.Cursor
+		if !state.HasMore {
+			break
+		}
+	}
+
+	if calls != 2 {
+		t.Fatalf("expected exactly 2 ListEvents calls, got %d", calls)
+	}
+	// Every app must be queried exactly once, including the ones after the revoked app whose
+	// position shifted. A positional-index resume would skip one of them here.
+	if len(callCounts) != numApps {
+		t.Fatalf("expected %d distinct apps queried, got %d: %v", numApps, len(callCounts), callCounts)
+	}
+	for clientID, n := range callCounts {
+		if n != 1 {
+			t.Fatalf("expected exactly 1 Reports API call for %s, got %d", clientID, n)
+		}
+	}
+}
