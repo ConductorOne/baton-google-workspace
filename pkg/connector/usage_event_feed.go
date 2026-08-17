@@ -31,8 +31,9 @@ var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 // client-side regardless of Google's actual ordering.
 const oauthAppLookupMaxResults = 5
 
-// maxConcurrentAppLookups bounds concurrent per-app Reports lookups for one user. The shared
-// reportsRateLimiter still caps overall quota use; this just overlaps network latency.
+// maxConcurrentAppLookups bounds concurrent per-app Reports lookups for one user, and also sizes
+// the fan-out chunks in lookupUser (see below) between which the deadline budget is checked. The
+// shared reportsRateLimiter still caps overall quota use; this just overlaps network latency.
 const maxConcurrentAppLookups = 8
 
 type usageEventFeed struct {
@@ -123,9 +124,15 @@ func distinctAuthorizedApps(tokenResp *directoryAdmin.Tokens) []oauthApp {
 // is no longer present (e.g. the app was deauthorized between calls), lookupUser conservatively
 // restarts from the beginning rather than guessing a position, which can revisit already-seen
 // apps (harmless — the lookup is idempotent) but never skips one.
-// Per-app lookups run concurrently (bounded by maxConcurrentAppLookups); the shared rate limiter
-// still caps quota use, so this only overlaps network latency.
-func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int) ([]*v2.Event, string, int, error) {
+//
+// Per-app lookups run concurrently in fixed-size chunks (maxConcurrentAppLookups); the shared
+// rate limiter still caps quota use, so this only overlaps network latency and retry/backoff
+// time. deadline is checked between chunks (never before the first one, so a call always makes
+// some progress) — once past it, lookupUser stops starting new chunks and returns what it has
+// with nextResumeState set to the last app actually finished. Without this, a single user with a
+// full budget's worth of apps could keep launching chunks — each with its own rate-limiter wait
+// and up to reportsMaxRetries backoff — well past the caller's soft wall-clock budget.
+func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int, deadline time.Time) ([]*v2.Event, string, int, error) {
 	tokenResp, err := client.ListTokens(ctx, user.ID)
 	if err != nil {
 		var gerr *googleapi.Error
@@ -156,34 +163,48 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 		toProcess = toProcess[:budget]
 	}
 
-	results := make([]*v2.Event, len(toProcess))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrentAppLookups)
-	for i, app := range toProcess {
-		g.Go(func() error {
-			event, err := f.lookupAppLogin(gctx, client, user, app.ClientID, app.DisplayText)
-			if err != nil {
-				return err
-			}
-			results[i] = event
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, "", 0, err
-	}
-
-	events := make([]*v2.Event, 0, len(results))
-	for _, e := range results {
-		if e != nil {
-			events = append(events, e)
+	events := make([]*v2.Event, 0, len(toProcess))
+	consumed := 0
+	for chunkStart := 0; chunkStart < len(toProcess); chunkStart += maxConcurrentAppLookups {
+		if chunkStart > 0 && !deadline.IsZero() && time.Now().After(deadline) {
+			// Past budget: stop starting new chunks. Whatever completed in prior chunks stands;
+			// nextResume (below) picks up right after the last app actually processed.
+			break
 		}
+		chunkEnd := chunkStart + maxConcurrentAppLookups
+		if chunkEnd > len(toProcess) {
+			chunkEnd = len(toProcess)
+		}
+		chunk := toProcess[chunkStart:chunkEnd]
+
+		results := make([]*v2.Event, len(chunk))
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(maxConcurrentAppLookups)
+		for i, app := range chunk {
+			g.Go(func() error {
+				event, err := f.lookupAppLogin(gctx, client, user, app.ClientID, app.DisplayText)
+				if err != nil {
+					return err
+				}
+				results[i] = event
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, "", 0, err
+		}
+
+		for _, e := range results {
+			if e != nil {
+				events = append(events, e)
+			}
+		}
+		consumed += len(chunk)
 	}
 
-	consumed := len(toProcess)
 	nextResume := ""
 	if startIdx+consumed < len(apps) {
-		nextResume = toProcess[len(toProcess)-1].ClientID
+		nextResume = toProcess[consumed-1].ClientID
 	}
 	return events, nextResume, consumed, nil
 }

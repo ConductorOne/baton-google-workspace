@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -47,8 +48,9 @@ func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFee
 	}
 }
 
-// lookupUser issues exactly one Reports API call per user, so resumeState/budget are unused.
-func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
+// lookupUser issues exactly one Reports API call per user, so resumeState/budget/deadline are
+// unused: there's no internal fan-out here to bound.
+func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, _ string, _ int, _ time.Time) ([]*v2.Event, string, int, error) {
 	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppLogin, "login_success", "", "", googleLoginLookupMaxResults)
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("google-workspace-connector: failed to list google login activities for %s: %w", user.Email, err)

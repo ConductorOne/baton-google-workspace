@@ -130,7 +130,7 @@ func TestScanUsersForEvents_PaginatesAcrossMultipleCallsWithoutLoss(t *testing.T
 		}
 
 		_, state, err := scanUsersForEvents(context.Background(), client, "customer", "", nil, &pagination.StreamToken{Cursor: cursor},
-			func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
+			func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, _ string, _ int, _ time.Time) ([]*v2.Event, string, int, error) {
 				visited[u.Email+":lookup"]++
 				return nil, "", 1, nil
 			})
@@ -168,7 +168,7 @@ func TestScanUsersForEvents_FiltersEventsBeforeEarliestEvent(t *testing.T) {
 	oldEvent := &v2.Event{Id: "old", OccurredAt: timestamppb.New(now.Add(-2 * time.Hour))}    // before floor
 	newEvent := &v2.Event{Id: "new", OccurredAt: timestamppb.New(now.Add(-30 * time.Minute))} // after floor
 
-	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
+	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, _ string, _ int, _ time.Time) ([]*v2.Event, string, int, error) {
 		return []*v2.Event{oldEvent, newEvent}, "", 1, nil
 	}
 
@@ -270,6 +270,80 @@ func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
 	}
 }
 
+// TestUsageEventFeed_LookupUserStopsAtDeadlineBetweenChunks verifies that lookupUser's per-app
+// fan-out (usage_event_feed.go) respects the deadline passed in from scanUsersForEvents: once
+// past deadline, it stops launching new chunks of maxConcurrentAppLookups apps rather than
+// draining the whole remaining budget in one call, but it always completes at least the first
+// chunk (the deadline is only checked *between* chunks) so a single call still makes forward
+// progress even if the deadline was already past when the call started.
+func TestUsageEventFeed_LookupUserStopsAtDeadlineBetweenChunks(t *testing.T) {
+	const userEmail = "heavy@example.com"
+	const numApps = maxConcurrentAppLookups*2 + 3 // more than one chunk's worth
+
+	tokens := make([]*directoryAdmin.Token, 0, numApps)
+	for i := 0; i < numApps; i++ {
+		tokens = append(tokens, &directoryAdmin.Token{ClientId: fmt.Sprintf("client-%d", i), DisplayText: fmt.Sprintf("App %d", i)})
+	}
+
+	var mu sync.Mutex
+	callCounts := map[string]int{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Tokens{Items: tokens})
+	})
+	mux.HandleFunc("/admin/reports/v1/activity/users/", func(w http.ResponseWriter, r *http.Request) {
+		clientID := strings.TrimPrefix(r.URL.Query().Get("filters"), "client_id==")
+		mu.Lock()
+		callCounts[clientID]++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{
+			Items: []*reportsAdmin.Activity{
+				activityItem(1, time.Minute, userEmail, "profile-heavy",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: clientID},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: clientID},
+				),
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+	user := pendingUser{Email: userEmail, ID: "heavy-user"}
+
+	// A deadline already in the past: only the check between chunks sees it, so the first chunk
+	// (maxConcurrentAppLookups apps) still runs to completion before lookupUser bails out.
+	events, nextResume, consumed, err := feed.lookupUser(context.Background(), feed.c, user, "", numApps, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("lookupUser: %v", err)
+	}
+	if consumed != maxConcurrentAppLookups {
+		t.Fatalf("expected exactly one chunk (%d apps) to be consumed before bailing out on the past deadline, got %d", maxConcurrentAppLookups, consumed)
+	}
+	if len(events) != maxConcurrentAppLookups {
+		t.Fatalf("expected exactly %d events (one per app in the completed chunk), got %d", maxConcurrentAppLookups, len(events))
+	}
+	wantNextResume := fmt.Sprintf("client-%d", maxConcurrentAppLookups-1)
+	if nextResume != wantNextResume {
+		t.Fatalf("expected nextResume to be the last app finished in the completed chunk (%s), got %q", wantNextResume, nextResume)
+	}
+	for i := 0; i < maxConcurrentAppLookups; i++ {
+		clientID := fmt.Sprintf("client-%d", i)
+		if callCounts[clientID] != 1 {
+			t.Fatalf("expected app %s (in the completed chunk) to be queried exactly once, got %d", clientID, callCounts[clientID])
+		}
+	}
+	for i := maxConcurrentAppLookups; i < numApps; i++ {
+		clientID := fmt.Sprintf("client-%d", i)
+		if callCounts[clientID] != 0 {
+			t.Fatalf("expected app %s (beyond the first chunk) not to be queried once the deadline had passed, got %d", clientID, callCounts[clientID])
+		}
+	}
+}
+
 // TestUsageEventFeed_DedupesRepeatedClientIDsInTokens verifies that when Tokens.list returns
 // multiple Token entries for the same client_id (e.g. separate grants for different scope
 // sets), the feed issues exactly one Reports API lookup for that app and emits exactly one
@@ -337,7 +411,7 @@ func TestScanUsersForEvents_ResumesWithinUserWhenBudgetExhausted(t *testing.T) {
 	user := pendingUser{Email: "heavy@example.com", ID: "heavy-user"}
 	unitLookupCounts := map[int]int{}
 
-	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, resumeState string, budget int) ([]*v2.Event, string, int, error) {
+	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, resumeState string, budget int, _ time.Time) ([]*v2.Event, string, int, error) {
 		startIdx := 0
 		if resumeState != "" {
 			idx, err := strconv.Atoi(resumeState)
@@ -590,6 +664,119 @@ func TestUsageEventFeed_ResumeSurvivesAppListShift(t *testing.T) {
 	for clientID, n := range callCounts {
 		if n != 1 {
 			t.Fatalf("expected exactly 1 Reports API call for %s, got %d", clientID, n)
+		}
+	}
+}
+
+// TestUsageEventFeed_ResumeRestartsWhenAnchorAppRevoked locks in lookupUser's "anchor not
+// found" fallback (usage_event_feed.go): if the exact app the resume cursor anchors on — the
+// last one processed in a prior call — is itself revoked before the next resumed call, the
+// fresh app list no longer contains it, so lookupUser can't re-locate a resume position and
+// instead restarts this user's app scan from the beginning. This is intentionally conservative
+// (it never skips an app), but it isn't free: every app already processed before the anchor gets
+// looked up — and its event re-emitted — a second time. TestUsageEventFeed_ResumeSurvivesAppListShift
+// revokes an app *before* the anchor, which leaves the anchor itself findable and never exercises
+// this restart path.
+func TestUsageEventFeed_ResumeRestartsWhenAnchorAppRevoked(t *testing.T) {
+	withUnlimitedReportsRateLimiter(t)
+
+	const userEmail = "heavy@example.com"
+	const numApps = maxLookupCallsPerEventFeedCall + 15 // forces exactly 2 resumed calls
+	anchorClientID := fmt.Sprintf("client-%d", maxLookupCallsPerEventFeedCall-1)
+
+	var mu sync.Mutex
+	callCounts := map[string]int{}
+	tokensCalls := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/directory/v1/users", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pageToken") != "" {
+			_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{
+			Users: []*directoryAdmin.User{{Id: "profile-heavy", PrimaryEmail: userEmail}},
+		})
+	})
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tokensCalls++
+		anchorRevoked := tokensCalls > 1
+		mu.Unlock()
+
+		tokens := make([]*directoryAdmin.Token, 0, numApps)
+		for i := 0; i < numApps; i++ {
+			clientID := fmt.Sprintf("client-%d", i)
+			if anchorRevoked && clientID == anchorClientID {
+				// The exact app the resume cursor anchors on is revoked before the next call.
+				continue
+			}
+			tokens = append(tokens, &directoryAdmin.Token{ClientId: clientID, DisplayText: clientID})
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Tokens{Items: tokens})
+	})
+	mux.HandleFunc("/admin/reports/v1/activity/users/", func(w http.ResponseWriter, r *http.Request) {
+		clientID := strings.TrimPrefix(r.URL.Query().Get("filters"), "client_id==")
+		mu.Lock()
+		callCounts[clientID]++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{
+			Items: []*reportsAdmin.Activity{
+				activityItem(1, time.Minute, userEmail, "profile-heavy",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: clientID},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: clientID},
+				),
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+
+	var cursor string
+	calls := 0
+	for {
+		calls++
+		if calls > 10 {
+			t.Fatalf("expected this to resolve in a small, bounded number of calls, got stuck after %d", calls)
+		}
+		_, state, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{Cursor: cursor})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		cursor = state.Cursor
+		if !state.HasMore {
+			break
+		}
+	}
+
+	if calls != 3 {
+		t.Fatalf("expected exactly 3 ListEvents calls (call 1, the restart, and the tail), got %d", calls)
+	}
+
+	// The revoked anchor app was queried exactly once, in call 1, before it disappeared.
+	if callCounts[anchorClientID] != 1 {
+		t.Fatalf("expected the revoked anchor app %s to be queried exactly once, got %d", anchorClientID, callCounts[anchorClientID])
+	}
+
+	// Every app processed before the anchor in call 1 gets replayed once the restart-from-0
+	// fallback kicks in — the bounded, non-skipping cost of the conservative fallback.
+	for i := 0; i < maxLookupCallsPerEventFeedCall-1; i++ {
+		clientID := fmt.Sprintf("client-%d", i)
+		if callCounts[clientID] != 2 {
+			t.Fatalf("expected app %s (processed before the revoked anchor) to be replayed once after the restart, got %d calls", clientID, callCounts[clientID])
+		}
+	}
+
+	// No app is ever skipped: every app still present after the revocation is queried at least
+	// once.
+	for i := maxLookupCallsPerEventFeedCall; i < numApps; i++ {
+		clientID := fmt.Sprintf("client-%d", i)
+		if callCounts[clientID] < 1 {
+			t.Fatalf("expected app %s to be queried at least once, got %d", clientID, callCounts[clientID])
 		}
 	}
 }

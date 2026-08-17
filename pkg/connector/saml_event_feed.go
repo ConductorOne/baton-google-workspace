@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -132,7 +133,7 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamp
 	}
 
 	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken,
-		func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
+		func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, _ string, _ int, _ time.Time) ([]*v2.Event, string, int, error) {
 			events, err := f.lookupUser(ctx, client, samlProfileMap, user)
 			if err != nil {
 				return nil, "", 0, err
