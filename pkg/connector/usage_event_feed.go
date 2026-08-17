@@ -13,6 +13,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	"golang.org/x/sync/errgroup"
+	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -28,6 +30,10 @@ var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 // assumption from the acceptance criteria: with a >1 window, the true latest is picked
 // client-side regardless of Google's actual ordering.
 const oauthAppLookupMaxResults = 5
+
+// maxConcurrentAppLookups bounds concurrent per-app Reports lookups for one user. The shared
+// reportsRateLimiter still caps overall quota use; this just overlaps network latency.
+const maxConcurrentAppLookups = 8
 
 type usageEventFeed struct {
 	c          *gwclient.GoogleWorkspaceClient
@@ -79,29 +85,17 @@ type oauthAppActivity struct {
 	appName    string
 }
 
-// lookupUser enumerates the OAuth apps this user has authorized via Directory API Tokens.list
-// (Reports API has no endpoint for "which apps has this user used" — Tokens.list is the cheap,
-// Directory-quota source of truth for that), then issues one Reports API lookup per app,
-// scoped with filters=client_id==<id>. This trades "1 Reports call per user" (old per-app-type
-// window, prone to one app's activity crowding another out of a shared count-bounded window) for
-// "1 Directory call + N Reports calls per user" (N = apps that user has authorized) — each app's
-// freshness is queried independently, so it can never be crowded out by another app's activity.
-func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
-	tokenResp, err := client.ListTokens(ctx, user.ID)
-	if err != nil {
-		var gerr *googleapi.Error
-		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
-			// Benign: the user was deleted between the directory listing and this lookup.
-			return nil, nil
-		}
-		return nil, fmt.Errorf("google-workspace: failed to list oauth tokens for %s: %w", user.Email, err)
-	}
-	// Tokens.list can return multiple Token entries for the same client_id — e.g. a user
-	// granting a different scope set to the same app at different times. Dedupe here so each
-	// distinct app only ever triggers one Reports API lookup, never repeated ones.
-	seenClientIDs := make(map[string]struct{}, len(tokenResp.Items))
+// oauthApp is one distinct app a user has authorized, as discovered via Directory Tokens.list.
+type oauthApp struct {
+	ClientID    string
+	DisplayText string
+}
 
-	events := make([]*v2.Event, 0, len(tokenResp.Items))
+// distinctAuthorizedApps enumerates this user's authorized OAuth apps via Directory Tokens.list,
+// deduping repeated client_ids and filtering out private apps before spending any Reports budget.
+func distinctAuthorizedApps(tokenResp *directoryAdmin.Tokens) []oauthApp {
+	seenClientIDs := make(map[string]struct{}, len(tokenResp.Items))
+	apps := make([]oauthApp, 0, len(tokenResp.Items))
 	for _, t := range tokenResp.Items {
 		if t.ClientId == "" || t.DisplayText == "" {
 			continue
@@ -114,17 +108,79 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 			continue
 		}
 		seenClientIDs[t.ClientId] = struct{}{}
+		apps = append(apps, oauthApp{ClientID: t.ClientId, DisplayText: t.DisplayText})
+	}
+	return apps
+}
 
-		event, err := f.lookupAppLogin(ctx, client, user, t.ClientId, t.DisplayText)
-		if err != nil {
-			return nil, err
+// lookupUser issues one Reports API lookup per authorized OAuth app, scoped by client_id. A user
+// can have more apps than the per-call budget allows: resumeState is the index into the app list
+// to resume from, and if apps remain after spending budget, nextResumeState carries it forward.
+// Per-app lookups run concurrently (bounded by maxConcurrentAppLookups); the shared rate limiter
+// still caps quota use, so this only overlaps network latency.
+func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int) ([]*v2.Event, string, int, error) {
+	tokenResp, err := client.ListTokens(ctx, user.ID)
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// Benign: the user was deleted between the directory listing and this lookup.
+			return nil, "", 0, nil
 		}
-		if event != nil {
-			events = append(events, event)
+		return nil, "", 0, fmt.Errorf("google-workspace: failed to list oauth tokens for %s: %w", user.Email, err)
+	}
+	apps := distinctAuthorizedApps(tokenResp)
+
+	startIdx := 0
+	if resumeState != "" {
+		idx, parseErr := strconv.Atoi(resumeState)
+		if parseErr != nil {
+			return nil, "", 0, fmt.Errorf("google-workspace: invalid resume state for %s: %w", user.Email, parseErr)
+		}
+		startIdx = idx
+	}
+	if startIdx > len(apps) {
+		startIdx = len(apps)
+	}
+
+	remaining := apps[startIdx:]
+	if len(remaining) == 0 {
+		return nil, "", 0, nil
+	}
+	toProcess := remaining
+	if len(toProcess) > budget {
+		toProcess = toProcess[:budget]
+	}
+
+	results := make([]*v2.Event, len(toProcess))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentAppLookups)
+	for i, app := range toProcess {
+		g.Go(func() error {
+			event, err := f.lookupAppLogin(gctx, client, user, app.ClientID, app.DisplayText)
+			if err != nil {
+				return err
+			}
+			results[i] = event
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, "", 0, err
+	}
+
+	events := make([]*v2.Event, 0, len(results))
+	for _, e := range results {
+		if e != nil {
+			events = append(events, e)
 		}
 	}
 
-	return events, nil
+	consumed := len(toProcess)
+	nextResume := ""
+	if startIdx+consumed < len(apps) {
+		nextResume = strconv.Itoa(startIdx + consumed)
+	}
+	return events, nextResume, consumed, nil
 }
 
 // lookupAppLogin fetches this user's most recent "authorize" activity for one specific OAuth

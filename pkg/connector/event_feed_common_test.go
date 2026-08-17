@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,9 +130,9 @@ func TestScanUsersForEvents_PaginatesAcrossMultipleCallsWithoutLoss(t *testing.T
 		}
 
 		_, state, err := scanUsersForEvents(context.Background(), client, "customer", "", nil, &pagination.StreamToken{Cursor: cursor},
-			func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser) ([]*v2.Event, error) {
+			func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
 				visited[u.Email+":lookup"]++
-				return nil, nil
+				return nil, "", 1, nil
 			})
 		if err != nil {
 			t.Fatalf("scanUsersForEvents: %v", err)
@@ -163,11 +165,11 @@ func TestScanUsersForEvents_FiltersEventsBeforeEarliestEvent(t *testing.T) {
 
 	now := time.Now().UTC()
 	floor := timestamppb.New(now.Add(-1 * time.Hour))
-	oldEvent := &v2.Event{Id: "old", OccurredAt: timestamppb.New(now.Add(-2 * time.Hour))}  // before floor
+	oldEvent := &v2.Event{Id: "old", OccurredAt: timestamppb.New(now.Add(-2 * time.Hour))}    // before floor
 	newEvent := &v2.Event{Id: "new", OccurredAt: timestamppb.New(now.Add(-30 * time.Minute))} // after floor
 
-	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser) ([]*v2.Event, error) {
-		return []*v2.Event{oldEvent, newEvent}, nil
+	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
+		return []*v2.Event{oldEvent, newEvent}, "", 1, nil
 	}
 
 	events, _, err := scanUsersForEvents(context.Background(), client, "customer", "", floor, &pagination.StreamToken{}, lookup)
@@ -323,5 +325,161 @@ func TestUsageEventFeed_DedupesRepeatedClientIDsInTokens(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected exactly 1 event for the deduped app, got %d", len(events))
+	}
+}
+
+// TestScanUsersForEvents_ResumesWithinUserWhenBudgetExhausted verifies that a user needing more
+// Reports calls than the budget allows pauses mid-user, resumes via cursor state across calls,
+// and has every unit of work visited exactly once. Uses a synthetic lookup to isolate
+// scanUsersForEvents' generic budget/resume mechanics from any one feed's fan-out logic.
+func TestScanUsersForEvents_ResumesWithinUserWhenBudgetExhausted(t *testing.T) {
+	const totalUnits = maxLookupCallsPerEventFeedCall*2 + 7 // spans exactly 3 resumed calls
+	user := pendingUser{Email: "heavy@example.com", ID: "heavy-user"}
+	unitLookupCounts := map[int]int{}
+
+	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser, resumeState string, budget int) ([]*v2.Event, string, int, error) {
+		startIdx := 0
+		if resumeState != "" {
+			idx, err := strconv.Atoi(resumeState)
+			if err != nil {
+				t.Fatalf("bad resume state %q: %v", resumeState, err)
+			}
+			startIdx = idx
+		}
+		consumed := totalUnits - startIdx
+		if consumed > budget {
+			consumed = budget
+		}
+		events := make([]*v2.Event, 0, consumed)
+		for i := startIdx; i < startIdx+consumed; i++ {
+			unitLookupCounts[i]++
+			events = append(events, &v2.Event{Id: strconv.Itoa(i)})
+		}
+		nextResume := ""
+		if startIdx+consumed < totalUnits {
+			nextResume = strconv.Itoa(startIdx + consumed)
+		}
+		return events, nextResume, consumed, nil
+	}
+
+	server := newDirectoryUsersOnlyServer(t, []*directoryAdmin.User{{Id: user.ID, PrimaryEmail: user.Email}}, 10,
+		func(string) *reportsAdmin.Activities { return &reportsAdmin.Activities{} })
+	defer server.Close()
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir}
+
+	var cursor string
+	var allEvents []*v2.Event
+	calls := 0
+	for {
+		calls++
+		if calls > 10 {
+			t.Fatalf("expected this to resolve in a small, bounded number of calls, got stuck after %d", calls)
+		}
+		events, state, err := scanUsersForEvents(context.Background(), client, "customer", "", nil, &pagination.StreamToken{Cursor: cursor}, lookup)
+		if err != nil {
+			t.Fatalf("scanUsersForEvents: %v", err)
+		}
+		allEvents = append(allEvents, events...)
+		cursor = state.Cursor
+		if !state.HasMore {
+			break
+		}
+	}
+
+	if calls != 3 {
+		t.Fatalf("expected exactly 3 calls (budget=%d, units=%d), got %d", maxLookupCallsPerEventFeedCall, totalUnits, calls)
+	}
+	if len(allEvents) != totalUnits {
+		t.Fatalf("expected exactly %d events (one per unit), got %d", totalUnits, len(allEvents))
+	}
+	for i := 0; i < totalUnits; i++ {
+		if unitLookupCounts[i] != 1 {
+			t.Fatalf("expected unit %d to be looked up exactly once, got %d", i, unitLookupCounts[i])
+		}
+	}
+}
+
+// TestUsageEventFeed_ResumesAcrossManyAuthorizedApps is the end-to-end version of the test above,
+// exercising usage_event_feed's real lookupUser against a user with more authorized apps than
+// maxLookupCallsPerEventFeedCall allows per call.
+func TestUsageEventFeed_ResumesAcrossManyAuthorizedApps(t *testing.T) {
+	const userEmail = "heavy@example.com"
+	const numApps = maxLookupCallsPerEventFeedCall + 15 // forces exactly 2 resumed calls
+
+	tokens := make([]*directoryAdmin.Token, 0, numApps)
+	for i := 0; i < numApps; i++ {
+		tokens = append(tokens, &directoryAdmin.Token{ClientId: fmt.Sprintf("client-%d", i), DisplayText: fmt.Sprintf("App %d", i)})
+	}
+
+	var mu sync.Mutex
+	callCounts := map[string]int{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/directory/v1/users", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pageToken") != "" {
+			_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Users{
+			Users: []*directoryAdmin.User{{Id: "profile-heavy", PrimaryEmail: userEmail}},
+		})
+	})
+	mux.HandleFunc("/admin/directory/v1/users/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(&directoryAdmin.Tokens{Items: tokens})
+	})
+	mux.HandleFunc("/admin/reports/v1/activity/users/", func(w http.ResponseWriter, r *http.Request) {
+		clientID := strings.TrimPrefix(r.URL.Query().Get("filters"), "client_id==")
+		mu.Lock()
+		callCounts[clientID]++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{
+			Items: []*reportsAdmin.Activity{
+				activityItem(1, time.Minute, userEmail, "profile-heavy",
+					&reportsAdmin.ActivityEventsParameters{Name: "client_id", Value: clientID},
+					&reportsAdmin.ActivityEventsParameters{Name: "app_name", Value: clientID},
+				),
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+
+	var cursor string
+	var allEvents []*v2.Event
+	calls := 0
+	for {
+		calls++
+		if calls > 10 {
+			t.Fatalf("expected this to resolve in a small, bounded number of calls, got stuck after %d", calls)
+		}
+		events, state, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{Cursor: cursor})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		allEvents = append(allEvents, events...)
+		cursor = state.Cursor
+		if !state.HasMore {
+			break
+		}
+	}
+
+	if calls != 2 {
+		t.Fatalf("expected exactly 2 ListEvents calls (budget=%d, apps=%d), got %d", maxLookupCallsPerEventFeedCall, numApps, calls)
+	}
+	if len(allEvents) != numApps {
+		t.Fatalf("expected %d events (one per app), got %d", numApps, len(allEvents))
+	}
+	if len(callCounts) != numApps {
+		t.Fatalf("expected %d distinct apps queried, got %d", numApps, len(callCounts))
+	}
+	for clientID, n := range callCounts {
+		if n != 1 {
+			t.Fatalf("expected exactly 1 Reports API call for %s, got %d", clientID, n)
+		}
 	}
 }

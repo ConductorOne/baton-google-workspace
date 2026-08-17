@@ -29,10 +29,15 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// usersPerEventFeedCall bounds how many users are processed per ListEvents invocation, so a
-// single call issues at most this many Reports API filter-queries and returns quickly instead
-// of blocking on the shared 250/min quota for an entire directory page (up to 500 users).
+// usersPerEventFeedCall bounds how many users are considered per ListEvents invocation. This
+// alone does not bound the number of Reports API calls issued (see maxLookupCallsPerEventFeedCall
+// below), but keeps the directory-side bookkeeping (ListTokens, cursor size) proportional.
 const usersPerEventFeedCall = 25
+
+// maxLookupCallsPerEventFeedCall caps total Reports API calls issued by one ListEvents
+// invocation, so a call can't blow its RPC deadline (~16s of rate-limiter time at 220/min).
+// A userEventLookup that needs more calls for one user returns a resumeState instead.
+const maxLookupCallsPerEventFeedCall = 60
 
 type pendingUser struct {
 	Email string `json:"email"`
@@ -45,9 +50,13 @@ type pendingUser struct {
 // When both are empty/exhausted, the walk is complete and the cursor resets to nil so the
 // next call starts a fresh pass — there is no "since last poll" time window to track, since
 // each lookup always asks for the current latest login, not a delta.
+//
+// ResumeState is opaque, feed-defined progress for PendingUsers[0]'s own lookup (e.g. which
+// authorized app to resume from), set when a call exhausts its budget mid-user.
 type userScanCursor struct {
 	PendingUsers       []pendingUser `json:"pending_users,omitempty"`
 	DirectoryPageToken string        `json:"directory_page_token,omitempty"`
+	ResumeState        string        `json:"resume_state,omitempty"`
 }
 
 func unmarshalUserScanCursor(pToken *pagination.StreamToken) (*userScanCursor, error) {
@@ -84,8 +93,11 @@ func (c *userScanCursor) marshal() (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
-// userEventLookup fetches events for a single user via at most one Reports API call.
-type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error)
+// userEventLookup fetches events for one user, spending at most `budget` Reports API calls.
+// resumeState picks up where a prior call for this user left off ("" = start fresh); if more
+// than `budget` calls are needed, it returns a non-empty nextResumeState instead of finishing.
+// consumed is how many calls this invocation issued (meaningful only when err == nil).
+type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int) (events []*v2.Event, nextResumeState string, consumed int, err error)
 
 // scanUsersForEvents drives one bounded step of the rolling user-directory walk shared by all
 // three "last login" event feeds.
@@ -142,37 +154,63 @@ func scanUsersForEvents(
 		batch = batch[:usersPerEventFeedCall]
 	}
 
-	events := []*v2.Event{}
-	for _, u := range batch {
-		userEvents, err := lookup(ctx, client, u)
+	// finish marshals the cursor and returns the call's result; shared by every exit path.
+	finish := func(events []*v2.Event, hasMore bool) ([]*v2.Event, *pagination.StreamState, error) {
+		if !hasMore {
+			cursor = &userScanCursor{}
+		}
+		cursorToken, err := cursor.marshal()
 		if err != nil {
-			// Don't remove `batch` from cursor.PendingUsers until every lookup in it has
-			// succeeded, so a single user's Reports API blip doesn't lose the remaining
-			// unprocessed users and restart the walk from the beginning on retry.
+			return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", err)
+		}
+		return events, &pagination.StreamState{Cursor: cursorToken, HasMore: hasMore}, nil
+	}
+
+	events := []*v2.Event{}
+	budget := maxLookupCallsPerEventFeedCall
+	resumeState := cursor.ResumeState
+
+	for i, u := range batch {
+		if budget <= 0 {
+			// Budget spent before starting u; resume here fresh next call.
+			cursor.PendingUsers = cursor.PendingUsers[i:]
+			cursor.ResumeState = ""
+			return finish(events, true)
+		}
+
+		userEvents, nextResume, consumed, err := lookup(ctx, client, u, resumeState, budget)
+		if err != nil {
+			// Keep u (and the rest) pending with its resume state, so a retry resumes here
+			// instead of restarting the whole batch.
+			cursor.PendingUsers = cursor.PendingUsers[i:]
+			cursor.ResumeState = resumeState
 			cursorToken, marshalErr := cursor.marshal()
 			if marshalErr != nil {
 				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
 			}
 			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true}, err
 		}
+		budget -= consumed
+		resumeState = "" // only the batch's first (possibly-resumed) user carries one in
+
 		for _, e := range userEvents {
 			if earliestEvent != nil && e.GetOccurredAt() != nil && e.GetOccurredAt().AsTime().Before(earliestEvent.AsTime()) {
 				continue
 			}
 			events = append(events, e)
 		}
+
+		if nextResume != "" {
+			// u isn't finished; keep it at the front and stop the batch here.
+			cursor.PendingUsers = cursor.PendingUsers[i:]
+			cursor.ResumeState = nextResume
+			return finish(events, true)
+		}
 	}
+
 	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
+	cursor.ResumeState = ""
 
 	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""
-	if !hasMore {
-		cursor = &userScanCursor{}
-	}
-
-	cursorToken, err := cursor.marshal()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", err)
-	}
-
-	return events, &pagination.StreamState{Cursor: cursorToken, HasMore: hasMore}, nil
+	return finish(events, hasMore)
 }

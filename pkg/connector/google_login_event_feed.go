@@ -47,10 +47,11 @@ func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFee
 	}
 }
 
-func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
+// lookupUser issues exactly one Reports API call per user, so resumeState/budget are unused.
+func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, _ string, _ int) ([]*v2.Event, string, int, error) {
 	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppLogin, "login_success", "", "", googleLoginLookupMaxResults)
 	if err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to list google login activities for %s: %w", user.Email, err)
+		return nil, "", 0, fmt.Errorf("google-workspace-connector: failed to list google login activities for %s: %w", user.Email, err)
 	}
 
 	var best *bestActivity
@@ -67,14 +68,14 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 		}
 	}
 	if best == nil {
-		return nil, nil
+		return nil, "", 1, nil
 	}
 
 	userTrait, err := resource.NewUserTrait(
 		resource.WithEmail(best.activity.Actor.Email, true),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to create user trait in google login event feed: %w", err)
+		return nil, "", 0, fmt.Errorf("google-workspace-connector: failed to create user trait in google login event feed: %w", err)
 	}
 
 	return []*v2.Event{{
@@ -100,7 +101,7 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 				},
 			},
 		},
-	}}, nil
+	}}, "", 1, nil
 }
 
 func (f *googleLoginEventFeed) ListEvents(
