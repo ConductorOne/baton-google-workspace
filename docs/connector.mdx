@@ -56,7 +56,7 @@ The synced user profile exposes the job title under both `title` and `job_title`
 <Note>
 `update_user_profile` and `update_user` never clear an assigned manager, matching the behavior of `update_user_manager`. An empty or invalid `manager_email` is not applied. Unlike other invalid fields, it does not fail the whole call as long as one other provided field is valid.
 
-Both actions return two comma-separated lists: `updated_fields`, naming what changed, and `skipped_fields`, naming any provided field that was not applied and why. A response of `success: true` means only that the call completed. Check `skipped_fields` to see whether `manager_email` was skipped.
+Both actions return `skipped_fields`, a comma-separated list naming any provided field that was not applied and why. A response of `success: true` means only that the call completed, so check `skipped_fields` to see whether `manager_email` was skipped. `update_user` also returns `updated_fields`, naming what changed. `update_user_profile` does not return that field.
 </Note>
 
 ## Before you begin
@@ -77,7 +77,7 @@ You need:
 
 | What | Why it matters |
 | :--- | :--- |
-| **Enabled APIs** | The connector calls the Admin SDK and Cloud Identity APIs, plus the Groups Settings API if you use group settings. Each must be enabled in your project. |
+| **Enabled APIs** | The connector calls the Admin SDK and Cloud Identity APIs, plus the Groups Settings API if you use group settings. The Admin SDK API must be enabled. See the table below for the others. |
 | **Service account** | The single identity C1 authenticates as. It needs no project IAM role. |
 | **JSON key** | The credential you upload to C1. Creating one requires the Service Account Key Admin role and an organization policy that permits key creation. |
 | **Domain-wide delegation** | The Workspace-side grant that authorizes the service account's scopes. This is what actually lets the connector read and write directory data. |
@@ -558,7 +558,17 @@ stringData:
   BATON_CUSTOMER_ID: <Your customer ID>
   BATON_DOMAIN: <Your primary domain>
   BATON_ADMINISTRATOR_EMAIL: <Your administrator email>
-  BATON_CREDENTIALS_JSON: <Contents of your service account JSON key>
+
+  # Paste the service account JSON key as a block scalar, indented under the pipe
+  BATON_CREDENTIALS_JSON: |
+    {
+      "type": "service_account",
+      "project_id": "<Your project ID>",
+      "private_key_id": "<Your private key ID>",
+      "private_key": "<Your private key>",
+      "client_email": "<Your service account email>",
+      "client_id": "<Your service account unique ID>"
+    }
 
   # Optional: include if you want C1 to provision access using this connector
   BATON_PROVISIONING: "true"
