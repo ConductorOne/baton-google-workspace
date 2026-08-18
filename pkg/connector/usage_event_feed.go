@@ -13,6 +13,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,7 +29,14 @@ var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 // worry about — this only needs to cover the "does maxResults=1 return newest-first?" ordering
 // assumption from the acceptance criteria: with a >1 window, the true latest is picked
 // client-side regardless of Google's actual ordering.
-const oauthAppLookupMaxResults = 5
+const oauthAppLookupMaxResults = 50
+
+// oauthAppLookupLookback bounds the startTime of each per-(user, app) Reports API lookup.
+const oauthAppLookupLookback = 180 * 24 * time.Hour
+
+// oauthAppLookupTimeout bounds how long a single (user, app) Reports API lookup — including its
+// internal rate-limit wait and retries
+const oauthAppLookupTimeout = 30 * time.Second
 
 type usageEventFeed struct {
 	c          *gwclient.GoogleWorkspaceClient
@@ -96,9 +105,8 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 		}
 		return nil, fmt.Errorf("google-workspace: failed to list oauth tokens for %s: %w", user.Email, err)
 	}
-	// Tokens.list can return multiple Token entries for the same client_id — e.g. a user
-	// granting a different scope set to the same app at different times. Dedupe here so each
-	// distinct app only ever triggers one Reports API lookup, never repeated ones.
+	// Tokens.list can return multiple Token entries for the same client_id.
+	// Dedupe here so each distinct app only ever triggers one Reports API lookup, never repeated ones.
 	seenClientIDs := make(map[string]struct{}, len(tokenResp.Items))
 
 	events := make([]*v2.Event, 0, len(tokenResp.Items))
@@ -131,8 +139,21 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 // app (client_id), returning nil if there is no such activity within the lookup window.
 func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, clientID, displayName string) (*v2.Event, error) {
 	filters := "client_id==" + clientID
-	r, err := listActivitiesFilteredRateLimited(ctx, client, user.Email, "token", "authorize", "", "", filters, oauthAppLookupMaxResults)
+	startTime := time.Now().Add(-oauthAppLookupLookback).UTC().Format(time.RFC3339)
+
+	lookupCtx, cancel := context.WithTimeout(ctx, oauthAppLookupTimeout)
+	defer cancel()
+
+	r, err := listActivitiesFilteredRateLimited(lookupCtx, client, user.Email, "token", "authorize", startTime, "", filters, oauthAppLookupMaxResults)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// The per-lookup sub-deadline fired, not the caller's own context — this single
+			// (user, app) lookup was slow. Skip it rather than failing the whole batch so one
+			// slow call can't consume the entire sync's deadline.
+			ctxzap.Extract(ctx).Warn("google-workspace: timed out listing token activities, skipping",
+				zap.String("user", user.Email), zap.String("client_id", clientID))
+			return nil, nil
+		}
 		return nil, fmt.Errorf("google-workspace: failed to list token activities for %s app %s: %w", user.Email, clientID, err)
 	}
 
