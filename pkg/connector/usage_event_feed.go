@@ -24,18 +24,16 @@ import (
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
-// oauthAppLookupMaxResults bounds each per-(user, app) Reports API lookup. Since the query is
-// now scoped to one specific client_id via the `filters` param, there's no cross-app crowding to
-// worry about — this only needs to cover the "does maxResults=1 return newest-first?" ordering
-// assumption from the acceptance criteria: with a >1 window, the true latest is picked
-// client-side regardless of Google's actual ordering.
+// oauthAppLookupMaxResults bounds each per-(user, app) Reports API lookup; the true latest event
+// is picked client-side, so this just needs to be large enough to avoid pagination.
 const oauthAppLookupMaxResults = 50
 
-// oauthAppLookupLookback bounds the startTime of each per-(user, app) Reports API lookup.
+// oauthAppLookupLookback bounds startTime so each lookup stays fast, per Google's guidance that
+// narrower time ranges respond faster; 180 days matches Google's own Reports retention window.
 const oauthAppLookupLookback = 180 * 24 * time.Hour
 
-// oauthAppLookupTimeout bounds how long a single (user, app) Reports API lookup — including its
-// internal rate-limit wait and retries
+// oauthAppLookupTimeout caps a single (user, app) lookup so one slow call can't consume the
+// whole sync's deadline.
 const oauthAppLookupTimeout = 30 * time.Second
 
 type usageEventFeed struct {
@@ -147,9 +145,8 @@ func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.Go
 	r, err := listActivitiesFilteredRateLimited(lookupCtx, client, user.Email, "token", "authorize", startTime, "", filters, oauthAppLookupMaxResults)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			// The per-lookup sub-deadline fired, not the caller's own context — this single
-			// (user, app) lookup was slow. Skip it rather than failing the whole batch so one
-			// slow call can't consume the entire sync's deadline.
+			// Our sub-deadline fired, not the caller's context: skip this one app instead of
+			// failing the whole batch.
 			ctxzap.Extract(ctx).Warn("google-workspace: timed out listing token activities, skipping",
 				zap.String("user", user.Email), zap.String("client_id", clientID))
 			return nil, nil

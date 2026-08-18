@@ -2,13 +2,17 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -20,11 +24,18 @@ type bestActivity struct {
 	occurredAt *timestamppb.Timestamp
 }
 
-// googleLoginLookupMaxResults bounds the per-user Reports API lookup for Google Workspace
-// sign-in events. There is exactly one target app (Google Workspace itself), so this only
-// needs to cover the "does maxResults=1 return newest-first?" ordering uncertainty: fetch a
-// small window and pick the maximum occurredAt client-side.
-const googleLoginLookupMaxResults = 5
+// googleLoginLookupMaxResults bounds the per-user Reports API lookup; the true latest event is
+// picked client-side, so this just needs to be large enough to avoid pagination.
+const googleLoginLookupMaxResults = 50
+
+// googleLoginLookupLookback bounds startTime so each lookup stays fast, per Google's guidance
+// that narrower time ranges respond faster; 180 days matches Google's own Reports retention
+// window.
+const googleLoginLookupLookback = 180 * 24 * time.Hour
+
+// googleLoginLookupTimeout caps a single user's lookup so one slow call can't consume the
+// whole sync's deadline.
+const googleLoginLookupTimeout = 30 * time.Second
 
 // googleLoginEventFeed emits UsageEvents from Google Workspace sign-in activity.
 // Unlike SAML/OAuth feeds, the target resource is always Google Workspace itself.
@@ -48,8 +59,20 @@ func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFee
 }
 
 func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
-	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppLogin, "login_success", "", "", googleLoginLookupMaxResults)
+	startTime := time.Now().Add(-googleLoginLookupLookback).UTC().Format(time.RFC3339)
+
+	lookupCtx, cancel := context.WithTimeout(ctx, googleLoginLookupTimeout)
+	defer cancel()
+
+	r, err := listActivitiesRateLimited(lookupCtx, client, user.Email, reportsAppLogin, "login_success", startTime, "", googleLoginLookupMaxResults)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// Our sub-deadline fired, not the caller's context: skip this user instead of
+			// failing the whole batch.
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: timed out listing google login activities, skipping",
+				zap.String("user", user.Email))
+			return nil, nil
+		}
 		return nil, fmt.Errorf("google-workspace-connector: failed to list google login activities for %s: %w", user.Email, err)
 	}
 
