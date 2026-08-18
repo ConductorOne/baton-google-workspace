@@ -115,7 +115,14 @@ func (c *userScanCursor) marshal() (string, error) {
 // nextResumeState reflecting the last unit of work it actually finished — never a zero-value
 // time.Time in practice, but implementations that only ever issue one call per user (there is no
 // fan-out to bound) are free to ignore it.
-type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int, deadline time.Time) (events []*v2.Event, nextResumeState string, consumed int, err error)
+type userEventLookup func(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	user pendingUser,
+	resumeState string,
+	budget int,
+	deadline time.Time,
+) (events []*v2.Event, nextResumeState string, consumed int, err error)
 
 // scanUsersForEvents drives one bounded step of the rolling user-directory walk shared by all
 // three "last login" event feeds.

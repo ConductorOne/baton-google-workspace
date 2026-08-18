@@ -133,7 +133,14 @@ func distinctAuthorizedApps(tokenResp *directoryAdmin.Tokens) []oauthApp {
 // last app actually dispatched. Without this, a single user with a full budget's worth of apps
 // could keep dispatching lookups — each with its own rate-limiter wait and up to
 // reportsMaxRetries backoff — well past the caller's soft wall-clock budget.
-func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int, deadline time.Time) ([]*v2.Event, string, int, error) {
+func (f *usageEventFeed) lookupUser(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	user pendingUser,
+	resumeState string,
+	budget int,
+	deadline time.Time,
+) ([]*v2.Event, string, int, error) {
 	tokenResp, err := client.ListTokens(ctx, user.ID)
 	if err != nil {
 		var gerr *googleapi.Error
