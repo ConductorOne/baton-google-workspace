@@ -125,13 +125,14 @@ func distinctAuthorizedApps(tokenResp *directoryAdmin.Tokens) []oauthApp {
 // restarts from the beginning rather than guessing a position, which can revisit already-seen
 // apps (harmless — the lookup is idempotent) but never skips one.
 //
-// Per-app lookups run concurrently in fixed-size chunks (maxConcurrentAppLookups); the shared
+// Per-app lookups run concurrently, up to maxConcurrentAppLookups in flight at once; the shared
 // rate limiter still caps quota use, so this only overlaps network latency and retry/backoff
-// time. deadline is checked between chunks (never before the first one, so a call always makes
-// some progress) — once past it, lookupUser stops starting new chunks and returns what it has
-// with nextResumeState set to the last app actually finished. Without this, a single user with a
-// full budget's worth of apps could keep launching chunks — each with its own rate-limiter wait
-// and up to reportsMaxRetries backoff — well past the caller's soft wall-clock budget.
+// time. deadline is checked before dispatching each app (never before the first one, so a call
+// always makes some progress) — once past it, lookupUser stops dispatching new lookups but still
+// waits for the ones already in flight, and returns what it has with nextResumeState set to the
+// last app actually dispatched. Without this, a single user with a full budget's worth of apps
+// could keep dispatching lookups — each with its own rate-limiter wait and up to
+// reportsMaxRetries backoff — well past the caller's soft wall-clock budget.
 func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, resumeState string, budget int, deadline time.Time) ([]*v2.Event, string, int, error) {
 	tokenResp, err := client.ListTokens(ctx, user.ID)
 	if err != nil {
@@ -163,47 +164,39 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 		toProcess = toProcess[:budget]
 	}
 
-	events := make([]*v2.Event, 0, len(toProcess))
+	results := make([]*v2.Event, len(toProcess))
 	consumed := 0
-	for chunkStart := 0; chunkStart < len(toProcess); chunkStart += maxConcurrentAppLookups {
-		if chunkStart > 0 && !deadline.IsZero() && time.Now().After(deadline) {
-			// Past budget: stop starting new chunks. Whatever completed in prior chunks stands;
-			// nextResume (below) picks up right after the last app actually processed.
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentAppLookups)
+	for i, app := range toProcess {
+		if i > 0 && !deadline.IsZero() && time.Now().After(deadline) {
+			// Past budget: stop dispatching new lookups. Ones already in flight are awaited
+			// below; nextResume picks up right after the last app actually dispatched.
 			break
 		}
-		chunkEnd := chunkStart + maxConcurrentAppLookups
-		if chunkEnd > len(toProcess) {
-			chunkEnd = len(toProcess)
-		}
-		chunk := toProcess[chunkStart:chunkEnd]
-
-		results := make([]*v2.Event, len(chunk))
-		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(maxConcurrentAppLookups)
-		for i, app := range chunk {
-			g.Go(func() error {
-				event, err := f.lookupAppLogin(gctx, client, user, app.ClientID, app.DisplayText)
-				if err != nil {
-					return err
-				}
-				results[i] = event
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			return nil, "", 0, err
-		}
-
-		for _, e := range results {
-			if e != nil {
-				events = append(events, e)
+		consumed = i + 1
+		g.Go(func() error {
+			event, err := f.lookupAppLogin(gctx, client, user, app.ClientID, app.DisplayText)
+			if err != nil {
+				return err
 			}
+			results[i] = event
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, "", 0, err
+	}
+
+	events := make([]*v2.Event, 0, consumed)
+	for _, e := range results[:consumed] {
+		if e != nil {
+			events = append(events, e)
 		}
-		consumed += len(chunk)
 	}
 
 	nextResume := ""
-	if startIdx+consumed < len(apps) {
+	if consumed > 0 && startIdx+consumed < len(apps) {
 		nextResume = toProcess[consumed-1].ClientID
 	}
 	return events, nextResume, consumed, nil

@@ -201,7 +201,7 @@ func scanUsersForEvents(
 	}
 
 	for i, u := range batch {
-		if budget <= 0 || time.Since(start) >= maxEventFeedCallDuration {
+		if budget <= 0 || !time.Now().Before(deadline) {
 			// Budget or time spent before starting u; resume here fresh next call.
 			cursor.PendingUsers = cursor.PendingUsers[i:]
 			cursor.ResumeState = ""

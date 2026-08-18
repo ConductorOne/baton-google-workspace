@@ -272,9 +272,9 @@ func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
 
 // TestUsageEventFeed_LookupUserStopsAtDeadlineBetweenChunks verifies that lookupUser's per-app
 // fan-out (usage_event_feed.go) respects the deadline passed in from scanUsersForEvents: once
-// past deadline, it stops launching new chunks of maxConcurrentAppLookups apps rather than
-// draining the whole remaining budget in one call, but it always completes at least the first
-// chunk (the deadline is only checked *between* chunks) so a single call still makes forward
+// past deadline, it stops dispatching new app lookups rather than draining the whole remaining
+// budget in one call, but it always dispatches at least the first app (the deadline is only
+// checked *before dispatching the second and later apps*) so a single call still makes forward
 // progress even if the deadline was already past when the call started.
 func TestUsageEventFeed_LookupUserStopsAtDeadlineBetweenChunks(t *testing.T) {
 	const userEmail = "heavy@example.com"
@@ -314,32 +314,29 @@ func TestUsageEventFeed_LookupUserStopsAtDeadlineBetweenChunks(t *testing.T) {
 	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
 	user := pendingUser{Email: userEmail, ID: "heavy-user"}
 
-	// A deadline already in the past: only the check between chunks sees it, so the first chunk
-	// (maxConcurrentAppLookups apps) still runs to completion before lookupUser bails out.
+	// A deadline already in the past: only the check before dispatching the second (and later)
+	// app sees it, so the first app is still dispatched and awaited before lookupUser bails out.
 	events, nextResume, consumed, err := feed.lookupUser(context.Background(), feed.c, user, "", numApps, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("lookupUser: %v", err)
 	}
-	if consumed != maxConcurrentAppLookups {
-		t.Fatalf("expected exactly one chunk (%d apps) to be consumed before bailing out on the past deadline, got %d", maxConcurrentAppLookups, consumed)
+	if consumed != 1 {
+		t.Fatalf("expected exactly one app to be consumed before bailing out on the past deadline, got %d", consumed)
 	}
-	if len(events) != maxConcurrentAppLookups {
-		t.Fatalf("expected exactly %d events (one per app in the completed chunk), got %d", maxConcurrentAppLookups, len(events))
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one event (for the one dispatched app), got %d", len(events))
 	}
-	wantNextResume := fmt.Sprintf("client-%d", maxConcurrentAppLookups-1)
+	wantNextResume := "client-0"
 	if nextResume != wantNextResume {
-		t.Fatalf("expected nextResume to be the last app finished in the completed chunk (%s), got %q", wantNextResume, nextResume)
+		t.Fatalf("expected nextResume to be the one app dispatched (%s), got %q", wantNextResume, nextResume)
 	}
-	for i := 0; i < maxConcurrentAppLookups; i++ {
-		clientID := fmt.Sprintf("client-%d", i)
-		if callCounts[clientID] != 1 {
-			t.Fatalf("expected app %s (in the completed chunk) to be queried exactly once, got %d", clientID, callCounts[clientID])
-		}
+	if callCounts["client-0"] != 1 {
+		t.Fatalf("expected app client-0 to be queried exactly once, got %d", callCounts["client-0"])
 	}
-	for i := maxConcurrentAppLookups; i < numApps; i++ {
+	for i := 1; i < numApps; i++ {
 		clientID := fmt.Sprintf("client-%d", i)
 		if callCounts[clientID] != 0 {
-			t.Fatalf("expected app %s (beyond the first chunk) not to be queried once the deadline had passed, got %d", clientID, callCounts[clientID])
+			t.Fatalf("expected app %s not to be queried once the deadline had passed, got %d", clientID, callCounts[clientID])
 		}
 	}
 }
