@@ -76,7 +76,7 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Our sub-deadline fired, not the caller's context: skip this user instead of
 			// failing the whole batch.
-			ctxzap.Extract(ctx).Debug("google-workspace-connector: timed out listing saml login activities, skipping",
+			ctxzap.Extract(ctx).Warn("google-workspace-connector: timed out listing saml login activities, skipping",
 				zap.String("user", user.Email))
 			return nil, nil
 		}
