@@ -135,7 +135,7 @@ func listActivitiesFilteredRateLimited(
 		// that fired, not the caller's overall lookup deadline — treat that the same as a
 		// retryable 429/503 rather than as "out of time."
 		hungAttempt := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
-		if attempt >= reportsMaxRetries || !(isRetryableReportsError(err) || hungAttempt) {
+		if attempt >= reportsMaxRetries || (!isRetryableReportsError(err) && !hungAttempt) {
 			return nil, err
 		}
 
