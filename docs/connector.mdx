@@ -65,7 +65,8 @@ This connector authenticates with a **service account and domain-wide delegation
 
 You need:
 
-- **Google Cloud roles for whoever runs this setup.** Project **Owner** covers all of it. Otherwise, grant three roles: **Service Usage Admin** (`roles/serviceusage.serviceUsageAdmin`) to enable APIs, **Service Account Creator** (`roles/iam.serviceAccountCreator`) to create the service account, and **Service Account Key Admin** (`roles/iam.serviceAccountKeyAdmin`) to create its JSON key. These roles belong to you, the person doing the setup. The service account itself needs no project role. See [Allow service account key creation](#allow-service-account-key-creation).
+- **Permission to create the project**, if you are creating a new one: **Project Creator** (`roles/resourcemanager.projectCreator`), granted at the organization or folder level. A project-level role cannot create a project. Skip this if you are using an existing project.
+- **Google Cloud roles on the project.** **Owner** covers everything else. Otherwise, grant three roles: **Service Usage Admin** (`roles/serviceusage.serviceUsageAdmin`) to enable APIs, **Service Account Creator** (`roles/iam.serviceAccountCreator`) to create the service account, and **Service Account Key Admin** (`roles/iam.serviceAccountKeyAdmin`) to create its JSON key. These roles belong to you, the person doing the setup. The service account itself needs no project role. See [Allow service account key creation](#allow-service-account-key-creation).
 - **A Google Workspace super admin** to authorize domain-wide delegation and to act as the impersonated administrator.
 - Either the **Connector Administrator** or **Super Administrator** role in C1.
 
