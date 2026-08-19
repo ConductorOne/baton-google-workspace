@@ -32,6 +32,11 @@ const (
 	reportsMaxRetries                = 5
 	reportsInitialBackoff            = 500 * time.Millisecond
 	reportsMaxBackoff                = 30 * time.Second
+
+	// reportsPerAttemptTimeout bounds a single ListActivities call, not the retry loop as a
+	// whole, so a genuinely hung request is retried like any other transient error instead of
+	// being confused with the caller's overall lookup deadline expiring.
+	reportsPerAttemptTimeout = 25 * time.Second
 )
 
 // reportsRateLimiter is a simple token-bucket limiter built on the standard library only
@@ -119,11 +124,18 @@ func listActivitiesFilteredRateLimited(
 			return nil, fmt.Errorf("google-workspace-connector: context cancelled waiting for reports api quota: %w", err)
 		}
 
-		resp, err := client.ListActivities(ctx, userKey, applicationName, eventName, startTime, pageToken, filters, maxResults)
+		attemptCtx, cancel := context.WithTimeout(ctx, reportsPerAttemptTimeout)
+		resp, err := client.ListActivities(attemptCtx, userKey, applicationName, eventName, startTime, pageToken, filters, maxResults)
+		cancel()
 		if err == nil {
 			return resp, nil
 		}
-		if attempt >= reportsMaxRetries || !isRetryableReportsError(err) {
+
+		// ctx (not attemptCtx) still being live means it was attemptCtx's own shorter timeout
+		// that fired, not the caller's overall lookup deadline — treat that the same as a
+		// retryable 429/503 rather than as "out of time."
+		hungAttempt := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		if attempt >= reportsMaxRetries || !(isRetryableReportsError(err) || hungAttempt) {
 			return nil, err
 		}
 

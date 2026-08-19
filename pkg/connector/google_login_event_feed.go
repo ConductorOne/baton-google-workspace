@@ -33,9 +33,11 @@ const googleLoginLookupMaxResults = 50
 // window.
 const googleLoginLookupLookback = 180 * 24 * time.Hour
 
-// googleLoginLookupTimeout caps a single user's lookup so one slow call can't consume the
-// whole sync's deadline.
-const googleLoginLookupTimeout = 30 * time.Second
+// googleLoginLookupTimeout caps a single user's lookup, including its retries, so one stuck
+// lookup can't consume the whole sync's deadline. Kept above the retry loop's own worst-case
+// backoff (~31s) so throttled 429/503s can complete their normal retries instead of being cut
+// off mid-backoff.
+const googleLoginLookupTimeout = 45 * time.Second
 
 // googleLoginEventFeed emits UsageEvents from Google Workspace sign-in activity.
 // Unlike SAML/OAuth feeds, the target resource is always Google Workspace itself.
