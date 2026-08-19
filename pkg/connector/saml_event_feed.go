@@ -29,11 +29,9 @@ const samlAppLookupMaxResults = 50
 // narrower time ranges respond faster; 180 days matches Google's own Reports retention window.
 const samlAppLookupLookback = 180 * 24 * time.Hour
 
-// samlAppLookupTimeout caps a single user's lookup, including its retries, so one stuck lookup
-// can't consume the whole sync's deadline. Kept above the worst case of a hung attempt
-// (reportsPerAttemptTimeout) plus backoff plus a second full-length attempt (~51s), so the
-// hung-attempt retry path in listActivitiesFilteredRateLimited has room to actually complete
-// instead of being cut off by this deadline first.
+// samlAppLookupTimeout caps a single user's lookup, including retries. Kept above the worst case
+// of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
+// listActivitiesFilteredRateLimited has room to complete.
 const samlAppLookupTimeout = 60 * time.Second
 
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.

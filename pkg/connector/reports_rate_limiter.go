@@ -97,6 +97,10 @@ func (l *reportsRateLimiter) refillLocked() {
 	l.lastRefill = l.now()
 }
 
+// listActivitiesFunc mirrors GoogleWorkspaceClient.ListActivities so retryListActivities can be
+// tested with a fake implementation.
+type listActivitiesFunc func(ctx context.Context, userKey, applicationName, eventName, startTime, pageToken, filters string, maxResults int64) (*reportsAdmin.Activities, error)
+
 // listActivitiesRateLimited waits for the shared filter-query budget, then calls
 // client.ListActivities, retrying with exponential backoff on 429/503 — both are transient,
 // SDK-retryable conditions, not connector bugs (see patterns-error-handling.md).
@@ -118,24 +122,48 @@ func listActivitiesFilteredRateLimited(
 	userKey, applicationName, eventName, startTime, pageToken, filters string,
 	maxResults int64,
 ) (*reportsAdmin.Activities, error) {
-	backoff := reportsInitialBackoff
+	return retryListActivities(
+		ctx, sharedReportsRateLimiter, client.ListActivities,
+		reportsPerAttemptTimeout, reportsMaxRetries, reportsInitialBackoff, reportsMaxBackoff,
+		userKey, applicationName, eventName, startTime, pageToken, filters, maxResults,
+	)
+}
+
+// retryListActivities holds the retry/backoff/per-attempt-timeout policy, parameterized so tests
+// can drive it with a fake call and short durations. The per-attempt timeout only applies when
+// ctx already has a deadline, so deadline-less callers like app_login.go keep running unbounded.
+func retryListActivities(
+	ctx context.Context,
+	limiter *reportsRateLimiter,
+	call listActivitiesFunc,
+	perAttemptTimeout time.Duration,
+	maxRetries int,
+	initialBackoff, maxBackoff time.Duration,
+	userKey, applicationName, eventName, startTime, pageToken, filters string,
+	maxResults int64,
+) (*reportsAdmin.Activities, error) {
+	_, callerHasDeadline := ctx.Deadline()
+	backoff := initialBackoff
 	for attempt := 0; ; attempt++ {
-		if err := sharedReportsRateLimiter.Wait(ctx); err != nil {
+		if err := limiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("google-workspace-connector: context cancelled waiting for reports api quota: %w", err)
 		}
 
-		attemptCtx, cancel := context.WithTimeout(ctx, reportsPerAttemptTimeout)
-		resp, err := client.ListActivities(attemptCtx, userKey, applicationName, eventName, startTime, pageToken, filters, maxResults)
+		attemptCtx := ctx
+		cancel := func() {}
+		if callerHasDeadline {
+			attemptCtx, cancel = context.WithTimeout(ctx, perAttemptTimeout)
+		}
+		resp, err := call(attemptCtx, userKey, applicationName, eventName, startTime, pageToken, filters, maxResults)
 		cancel()
 		if err == nil {
 			return resp, nil
 		}
 
-		// ctx (not attemptCtx) still being live means it was attemptCtx's own shorter timeout
-		// that fired, not the caller's overall lookup deadline — treat that the same as a
-		// retryable 429/503 rather than as "out of time."
-		hungAttempt := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
-		if attempt >= reportsMaxRetries || (!isRetryableReportsError(err) && !hungAttempt) {
+		// ctx still being live means attemptCtx's own timeout fired, not the caller's deadline —
+		// treat that like a retryable 429/503 rather than "out of time."
+		hungAttempt := callerHasDeadline && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		if attempt >= maxRetries || (!isRetryableReportsError(err) && !hungAttempt) {
 			return nil, err
 		}
 
@@ -146,8 +174,8 @@ func listActivitiesFilteredRateLimited(
 			return nil, ctx.Err()
 		}
 		backoff *= 2
-		if backoff > reportsMaxBackoff {
-			backoff = reportsMaxBackoff
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }

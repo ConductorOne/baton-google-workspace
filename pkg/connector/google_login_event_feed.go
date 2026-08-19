@@ -33,11 +33,9 @@ const googleLoginLookupMaxResults = 50
 // window.
 const googleLoginLookupLookback = 180 * 24 * time.Hour
 
-// googleLoginLookupTimeout caps a single user's lookup, including its retries, so one stuck
-// lookup can't consume the whole sync's deadline. Kept above the worst case of a hung attempt
-// (reportsPerAttemptTimeout) plus backoff plus a second full-length attempt (~51s), so the
-// hung-attempt retry path in listActivitiesFilteredRateLimited has room to actually complete
-// instead of being cut off by this deadline first.
+// googleLoginLookupTimeout caps a single user's lookup, including retries. Kept above the worst
+// case of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
+// listActivitiesFilteredRateLimited has room to complete.
 const googleLoginLookupTimeout = 60 * time.Second
 
 // googleLoginEventFeed emits UsageEvents from Google Workspace sign-in activity.
