@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
@@ -29,10 +30,27 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// usersPerEventFeedCall bounds how many users are processed per ListEvents invocation, so a
-// single call issues at most this many Reports API filter-queries and returns quickly instead
-// of blocking on the shared 250/min quota for an entire directory page (up to 500 users).
+// usersPerEventFeedCall bounds how many users are considered per ListEvents invocation. This
+// alone does not bound the number of Reports API calls issued (see maxLookupCallsPerEventFeedCall
+// below), but keeps the directory-side bookkeeping (ListTokens, cursor size) proportional.
 const usersPerEventFeedCall = 25
+
+// maxLookupCallsPerEventFeedCall caps Reports API calls per ListEvents invocation. Bounds cost,
+// not time (shared rate limiter, retries with backoff) — see maxEventFeedCallDuration for that.
+const maxLookupCallsPerEventFeedCall = 60
+
+// maxEventFeedCallDuration is a soft wall-clock budget per ListEvents invocation. It bounds the
+// gap between users (see the loop in scanUsersForEvents) and is also handed to each user's own
+// lookup as a deadline, so a single user's internal fan-out (e.g. usageEventFeed.lookupUser's
+// per-app Reports calls) stops starting new work once it's spent, instead of only being checked
+// again after that one user's lookup already returned.
+const maxEventFeedCallDuration = 45 * time.Second
+
+// eventFeedDeadlineSafetyMargin is subtracted from ctx's deadline (when the caller set one) to
+// derive the effective per-call deadline passed to lookup, so this connector stops issuing new
+// Reports calls with enough margin to unwind and return a partial result before the RPC itself
+// times out — rather than getting DeadlineExceeded mid-call with nothing to show for it.
+const eventFeedDeadlineSafetyMargin = 5 * time.Second
 
 type pendingUser struct {
 	Email string `json:"email"`
@@ -45,9 +63,13 @@ type pendingUser struct {
 // When both are empty/exhausted, the walk is complete and the cursor resets to nil so the
 // next call starts a fresh pass — there is no "since last poll" time window to track, since
 // each lookup always asks for the current latest login, not a delta.
+//
+// ResumeState is opaque, feed-defined progress for PendingUsers[0]'s own lookup (e.g. which
+// authorized app to resume from), set when a call exhausts its budget mid-user.
 type userScanCursor struct {
 	PendingUsers       []pendingUser `json:"pending_users,omitempty"`
 	DirectoryPageToken string        `json:"directory_page_token,omitempty"`
+	ResumeState        string        `json:"resume_state,omitempty"`
 }
 
 func unmarshalUserScanCursor(pToken *pagination.StreamToken) (*userScanCursor, error) {
@@ -84,8 +106,23 @@ func (c *userScanCursor) marshal() (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
-// userEventLookup fetches events for a single user via at most one Reports API call.
-type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error)
+// userEventLookup fetches events for one user, spending at most `budget` Reports API calls.
+// resumeState picks up where a prior call for this user left off ("" = start fresh); if more
+// than `budget` calls are needed, it returns a non-empty nextResumeState instead of finishing.
+// consumed is how many calls this invocation issued (meaningful only when err == nil). deadline
+// is a soft wall-clock cutoff: a lookup with internal fan-out (multiple Reports calls per user)
+// should stop starting new calls once it's past deadline and return whatever it has, with
+// nextResumeState reflecting the last unit of work it actually finished — never a zero-value
+// time.Time in practice, but implementations that only ever issue one call per user (there is no
+// fan-out to bound) are free to ignore it.
+type userEventLookup func(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	user pendingUser,
+	resumeState string,
+	budget int,
+	deadline time.Time,
+) (events []*v2.Event, nextResumeState string, consumed int, err error)
 
 // scanUsersForEvents drives one bounded step of the rolling user-directory walk shared by all
 // three "last login" event feeds.
@@ -142,37 +179,76 @@ func scanUsersForEvents(
 		batch = batch[:usersPerEventFeedCall]
 	}
 
-	events := []*v2.Event{}
-	for _, u := range batch {
-		userEvents, err := lookup(ctx, client, u)
+	// finish marshals the cursor and returns the call's result; shared by every exit path.
+	finish := func(events []*v2.Event, hasMore bool) ([]*v2.Event, *pagination.StreamState, error) {
+		if !hasMore {
+			cursor = &userScanCursor{}
+		}
+		cursorToken, err := cursor.marshal()
 		if err != nil {
-			// Don't remove `batch` from cursor.PendingUsers until every lookup in it has
-			// succeeded, so a single user's Reports API blip doesn't lose the remaining
-			// unprocessed users and restart the walk from the beginning on retry.
+			return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", err)
+		}
+		return events, &pagination.StreamState{Cursor: cursorToken, HasMore: hasMore}, nil
+	}
+
+	events := []*v2.Event{}
+	budget := maxLookupCallsPerEventFeedCall
+	resumeState := cursor.ResumeState
+	start := time.Now()
+
+	// deadline is handed to each user's lookup so a single heavy user's internal fan-out (e.g.
+	// many Reports calls for one user's authorized apps) also respects the wall-clock budget,
+	// not just the gap between users below. If the caller's ctx carries its own deadline (the
+	// real RPC deadline), stop earlier than that with a safety margin instead of racing it.
+	deadline := start.Add(maxEventFeedCallDuration)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		if safe := ctxDeadline.Add(-eventFeedDeadlineSafetyMargin); safe.Before(deadline) {
+			deadline = safe
+		}
+	}
+
+	for i, u := range batch {
+		if budget <= 0 || !time.Now().Before(deadline) {
+			// Budget or time spent before starting u; resume here fresh next call.
+			cursor.PendingUsers = cursor.PendingUsers[i:]
+			cursor.ResumeState = ""
+			return finish(events, true)
+		}
+
+		userEvents, nextResume, consumed, err := lookup(ctx, client, u, resumeState, budget, deadline)
+		if err != nil {
+			// The SDK drops this StreamState on error (connectorbuilder.ListEvents returns nil,
+			// err without ever reading it), so what we marshal here is moot either way; return
+			// cursor as it currently stands — which may already include a fresh directory-page
+			// advance from the len(cursor.PendingUsers) == 0 branch above — rather than trying to
+			// preserve or roll back per-user progress for no effect.
 			cursorToken, marshalErr := cursor.marshal()
 			if marshalErr != nil {
 				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
 			}
 			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true}, err
 		}
+		budget -= consumed
+		resumeState = "" // only the batch's first (possibly-resumed) user carries one in
+
 		for _, e := range userEvents {
 			if earliestEvent != nil && e.GetOccurredAt() != nil && e.GetOccurredAt().AsTime().Before(earliestEvent.AsTime()) {
 				continue
 			}
 			events = append(events, e)
 		}
+
+		if nextResume != "" {
+			// u isn't finished; keep it at the front and stop the batch here.
+			cursor.PendingUsers = cursor.PendingUsers[i:]
+			cursor.ResumeState = nextResume
+			return finish(events, true)
+		}
 	}
+
 	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
+	cursor.ResumeState = ""
 
 	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""
-	if !hasMore {
-		cursor = &userScanCursor{}
-	}
-
-	cursorToken, err := cursor.marshal()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", err)
-	}
-
-	return events, &pagination.StreamState{Cursor: cursorToken, HasMore: hasMore}, nil
+	return finish(events, hasMore)
 }
