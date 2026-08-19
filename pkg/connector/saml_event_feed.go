@@ -30,10 +30,11 @@ const samlAppLookupMaxResults = 50
 const samlAppLookupLookback = 180 * 24 * time.Hour
 
 // samlAppLookupTimeout caps a single user's lookup, including its retries, so one stuck lookup
-// can't consume the whole sync's deadline. Kept above the retry loop's own worst-case backoff
-// (~31s) so throttled 429/503s can complete their normal retries instead of being cut off
-// mid-backoff.
-const samlAppLookupTimeout = 45 * time.Second
+// can't consume the whole sync's deadline. Kept above the worst case of a hung attempt
+// (reportsPerAttemptTimeout) plus backoff plus a second full-length attempt (~51s), so the
+// hung-attempt retry path in listActivitiesFilteredRateLimited has room to actually complete
+// instead of being cut off by this deadline first.
+const samlAppLookupTimeout = 60 * time.Second
 
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
 type samlEventFeed struct {
