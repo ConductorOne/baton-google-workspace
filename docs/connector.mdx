@@ -23,6 +23,8 @@ The Google Workspace connector supports [automatic account provisioning and depr
 
 The connector also supports group creation (via the `create_group` connector action) and deletion, [continuous sync](/baton/faq#syncing), and targeted sync for accounts, groups, and roles.
 
+Continuous sync streams sign-in activity, app usage, and admin audit events between full syncs, so last-login data and membership changes stay current. It requires the `admin.reports.audit.readonly` scope.
+
 ### Connector actions
 
 Connector actions are custom capabilities that extend C1 automations with app-specific operations. You can use connector actions in the [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) automation step.
@@ -33,7 +35,7 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | disable_user | `user_id` (string, required) | Suspends a user account (idempotent) |
 | enable_user | `user_id` (string, required) | Unsuspends a user account (idempotent) |
 | change_user_primary_email | `resource_id` (string, required)<br/>`new_primary_email` (string, required) | Updates a user's primary email address |
-| transfer_user_drive_files | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`privacy_levels` (string, optional) | Transfers Google Drive ownership from one user to another. Accepts `private` or `shared` for privacy_levels |
+| transfer_user_drive_files | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`privacy_levels` (string list, optional) | Transfers Google Drive ownership from one user to another. Set `privacy_levels` to `private`, `shared`, or both. Defaults to both. Pass it as a list, not a single string. |
 | transfer_user_calendar | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`release_resources` (boolean, optional) | Transfers Google Calendar data from one user to another |
 | change_user_org_unit | `user_id` (string, required)<br/>`org_unit_path` (string, required) | Moves a user to a different organizational unit |
 | offboarding_profile_update | `user_id` (string, required)<br/>`archive_account` (boolean, optional) | Comprehensive offboarding: removes from GAL, clears recovery details, deletes addresses/phones, optionally archives |
@@ -41,7 +43,7 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | delete_all_oauth_tokens | `user_id` (string, required) | Revokes all third-party app authorizations |
 | delete_all_application_passwords | `user_id` (string, required) | Deletes all app-specific passwords |
 | create_group | `email` (string, required)<br/>`name` (string, required)<br/>`description` (string, optional) | Creates a new Google Workspace group |
-| modify_group_settings | `group_key` (string, required)<br/>`allow_external_members` (boolean, optional)<br/>`allow_web_posting` (boolean, optional)<br/>`who_can_post_message` (string, optional)<br/>`message_moderation_level` (string, optional) | Update settings for an existing Google Group |
+| modify_group_settings | `group_key` (string, required)<br/>`allow_external_members` (boolean, optional)<br/>`allow_web_posting` (boolean, optional)<br/>`who_can_post_message` (string, optional)<br/>`message_moderation_level` (string, optional) | Updates settings for an existing Google Group. `who_can_post_message` accepts `ANYONE_CAN_POST`, `ALL_IN_DOMAIN_CAN_POST`, `ALL_MEMBERS_CAN_POST`, `ALL_MANAGERS_CAN_POST`, `ALL_OWNERS_CAN_POST`, or `NONE_CAN_POST`. `message_moderation_level` accepts `MODERATE_NONE`, `MODERATE_NEW_MEMBERS`, `MODERATE_NON_MEMBERS`, or `MODERATE_ALL_MESSAGES`. Other values are rejected. |
 | update_user_manager | `user_id` (string, required)<br/> `manager_email` (string, required) | Updates the manager relation for a user in Google Workspace. Updates the 'manager' entry in the user's Relations field |
 | update_user_profile | `user_id` (resource ID, required)<br/>`given_name` (string, optional)<br/>`family_name` (string, optional)<br/>`recovery_email` (string, optional)<br/>`recovery_phone` (string, optional)<br/>`department` (string, optional)<br/>`job_title` (string, optional)<br/>`cost_center` (string, optional)<br/>`employee_type` (string, optional)<br/>`employee_id` (string, optional)<br/>`manager_email` (string, optional)<br/>`custom_schemas` (JSON string, optional) | Applies a partial update to a user's profile using patch semantics (only the provided fields change). Supports name fields, recovery details, Employee Information attributes (department, job title, cost center, employee ID, employee type), the manager relation, and custom-schema attribute values. Custom-schema definitions must already exist in the Workspace tenant. At least one updatable field is required. One narrow exception: an `employee_id` change that reduces the number of external IDs on the account (clearing it, or consolidating duplicate entries down to the new value) uses a full-object update instead of a sparse patch (Google does not reliably shrink a repeated field via patch), which widens the read-modify-write window to the whole user for that specific call. An empty or invalid `manager_email` does not fail the call when another provided field is valid — see the partial-success note below. |
 | update_user | `user_id` (resource ID, required)<br/>`user_profile` (JSON string, required) | Updates a user's profile from a `user_profile` JSON object (keys: `given_name`, `family_name`, `recovery_email`, `recovery_phone`, `department`, `job_title`, `cost_center`, `employee_type`, `employee_id`, `manager_email`, `custom_schemas`). Consumed by C1 push rules for automated profile sync. Same partial-success behavior as `update_user_profile` for `manager_email`. |
@@ -52,22 +54,52 @@ The synced user profile exposes the job title under both `title` and `job_title`
 </Note>
 
 <Note>
-`update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other provided field is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (comma-separated, naming any provided field that wasn't applied and why) to detect this — a caller checking `success` alone will not be told that `manager_email` specifically was skipped.
+`update_user_profile` and `update_user` never clear an assigned manager, matching the behavior of `update_user_manager`. An empty or invalid `manager_email` is not applied. Unlike other invalid fields, it does not fail the whole call as long as one other provided field is valid.
+
+Both actions return `skipped_fields`, a comma-separated list naming any provided field that was not applied and why. A response of `success: true` means only that the call completed, so check `skipped_fields` to see whether `manager_email` was skipped. `update_user` also returns `updated_fields`, naming what changed. `update_user_profile` does not return that field.
 </Note>
 
-## Gather Google Workspace credentials 
+## Before you begin
 
-Configuring the connector requires you to pass in credentials generated in Google Workspace. Gather these credentials before you move on. 
+This connector authenticates with a **service account and domain-wide delegation**, not per-user OAuth. Every call reaches Google as one service account impersonating a Workspace super admin.
+
+You need:
+
+- **Permission to create the project**, if you are creating a new one: **Project Creator** (`roles/resourcemanager.projectCreator`), granted at the organization or folder level. A project-level role cannot create a project. Skip this if you are using an existing project.
+- **Google Cloud roles on the project.** **Owner** covers everything else. Otherwise, grant three roles: **Service Usage Admin** (`roles/serviceusage.serviceUsageAdmin`) to enable APIs, **Service Account Creator** (`roles/iam.serviceAccountCreator`) to create the service account, and **Service Account Key Admin** (`roles/iam.serviceAccountKeyAdmin`) to create its JSON key. These roles belong to you, the person doing the setup. The service account itself needs no project role. See [Allow service account key creation](#allow-service-account-key-creation).
+- **A Google Workspace super admin** to authorize domain-wide delegation and to act as the impersonated administrator.
+- Either the **Connector Administrator** or **Super Administrator** role in C1.
 
 <Warning>
-A user with the **Super Admin** role in Google Workspace must perform this task.
+**Check your organization's key policy first.** Google organizations created on or after May 3, 2024 block service account key creation by default. The connector requires a JSON key, so confirm you can create one before you start. See [Allow service account key creation](#allow-service-account-key-creation).
 </Warning>
 
-### Create a new project
+### What the Google Cloud project provides
+
+| What | Why it matters |
+| :--- | :--- |
+| **Enabled APIs** | The connector calls the Admin SDK and Cloud Identity APIs, plus the Groups Settings API if you use group settings. The Admin SDK API must be enabled. See the table below for the others. |
+| **Service account** | The single identity C1 authenticates as. It needs no project IAM role. |
+| **JSON key** | The credential you upload to C1. Creating one requires the Service Account Key Admin role and an organization policy that permits key creation. |
+| **Domain-wide delegation** | The Workspace-side grant that authorizes the service account's scopes. This is what actually lets the connector read and write directory data. |
+
+<Note>
+Domain-wide delegation is configured in the Google Admin console, not in Google Cloud. Granting the service account a Google Cloud IAM role does not give it access to Workspace data, and no project role is required for this connector.
+</Note>
+
+## Set up the Google Cloud project
+
+This part happens entirely in Google Cloud and needs the Google Cloud permissions listed in [Before you begin](#before-you-begin). The Workspace super admin isn't needed until [Grant domain-wide delegation in Google Workspace](#grant-domain-wide-delegation-in-google-workspace).
+
+Each section below gives the Google Cloud console steps and the equivalent `gcloud` commands. Use whichever you prefer. To use the CLI, [install the gcloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud auth login` first.
+
+### Create or select a project
+
+Create a new Google Cloud project dedicated to this connector, or select an existing one.
 
 <Steps>
 <Step>
-As a Google Workspace Super Admin, sign in to [https://console.cloud.google.com](https://console.cloud.google.com/).
+Sign in to [https://console.cloud.google.com](https://console.cloud.google.com/) with an account that can create projects, enable APIs, and manage service accounts.
 </Step>
 <Step>
 In the toolbar, open the project select dropdown and click **NEW PROJECT**.
@@ -75,7 +107,7 @@ In the toolbar, open the project select dropdown and click **NEW PROJECT**.
 <Step>
 Create a new project for your organization:
 
-   - **Project Name**: Choose a names, such as "C1 Integration"
+   - **Project Name**: Choose a name, such as "C1 Integration"
    - **Organization/Location**: Choose the appropriate Organization/Location
 
 </Step>
@@ -83,31 +115,75 @@ Create a new project for your organization:
 After the project is created, make sure the correct project is selected in the dropdown in the toolbar at the top of the page.
 </Step>
 </Steps>
-### Enable the API
+
+From the command line:
+
+```bash
+gcloud projects create YOUR_PROJECT_ID \
+  --name="C1 Integration" \
+  --organization=YOUR_ORG_ID
+```
+
+```bash
+gcloud config set project YOUR_PROJECT_ID
+```
+
+<Note>
+The Workspace APIs this connector uses don't require a billing account.
+</Note>
+
+### Enable the APIs
+
+Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise application IDs, and the Groups Settings API if you use group settings.
+
+| API | Service ID | Required? | Used for |
+| :--- | :--- | :--- | :--- |
+| Admin SDK API | `admin.googleapis.com` | Required | Syncing users, groups, roles, and audit events, and running provisioning and data transfer actions |
+| Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. |
+| Groups Settings API | `groupssettings.googleapis.com` | Optional | The `modify_group_settings` connector action |
+
+<Note>
+The Admin SDK API covers the Directory, Reports, and Data Transfer APIs. Enabling it once is enough. There is no separate Data Transfer API to enable, even though the connector requests the `admin.datatransfer` scope.
+</Note>
 
 <Steps>
 <Step>
-In the navigation menu, navigate to > **APIs & Services** > **Library**.
+In the navigation menu, navigate to **APIs & Services** > **Library**.
 </Step>
 <Step>
-Search for and select the **Admin SDK API**.
+Search for and select the **Admin SDK API**, then click **Enable**.
 </Step>
 <Step>
-Click **Enable**.
-</Step>
-
-<Step>
-**Optional.** If you want to use the group settings connector action, you must also search for, select, and enable the **Groups Settings API**.
+Repeat for the **Cloud Identity API**.
 </Step>
 <Step>
-You must also search for, select, and enable the **Cloud Identity API** (used for resolving SAML app IDs to stable identifiers).
+**Optional.** If you want to use the group settings connector action, repeat for the **Groups Settings API**.
 </Step>
 </Steps>
+
+From the command line:
+
+```bash
+gcloud services enable \
+  admin.googleapis.com \
+  cloudidentity.googleapis.com \
+  groupssettings.googleapis.com \
+  --project=YOUR_PROJECT_ID
+```
+
+To confirm which APIs are enabled on the project:
+
+```bash
+gcloud services list --enabled --project=YOUR_PROJECT_ID
+```
+
 ### Create a service account
+
+Create the service account C1 will authenticate as.
 
 <Steps>
 <Step>
-In the navigation menu, navigate to > **APIs & Services** > **Credentials**.
+In the navigation menu, navigate to **APIs & Services** > **Credentials**.
 </Step>
 <Step>
 Select **CREATE CREDENTIALS** > **Service Account**.
@@ -121,7 +197,7 @@ Under **Service account details**, fill in the following:
 
 </Step>
 <Step>
-Under **Grant this service account access to a project**, grant the **Editor** role.
+Under **Grant this service account access to a project**, click **CONTINUE** without selecting a role. The connector's access comes from domain-wide delegation, so no project role is required.
 </Step>
 <Step>
 Leave **Grant users access to this service account** blank.
@@ -131,14 +207,97 @@ Click **DONE**.
 </Step>
 </Steps>
 
-### Get credentials
+From the command line:
+
+```bash
+gcloud iam service-accounts create c1-integration \
+  --project=YOUR_PROJECT_ID \
+  --display-name="C1 Integration" \
+  --description="Service account for C1 Google Workspace Integration"
+```
+
+<Tip>
+Earlier versions of this guide granted the service account the **Editor** role. That role is not needed and grants broad access to your Google Cloud project. If you already granted it, you can safely remove it.
+</Tip>
+
+### Allow service account key creation
+
+The connector authenticates with a JSON key, so your organization must permit key creation on this service account.
+
+The `constraints/iam.disableServiceAccountKeyCreation` organization policy blocks key creation. **Google enforces this policy by default for organizations created on or after May 3, 2024**, so new organizations hit it unless an administrator grants an exception.
+
+If the policy blocks you, key creation fails with:
+
+```text
+ERROR: (gcloud.iam.service-accounts.keys.create) FAILED_PRECONDITION: Key creation
+is not allowed on this service account.
+```
+
+In the console, the **ADD KEY** option is unavailable and Google reports that service account key creation is disabled.
+
+**Permissions to check:**
+
+| Requirement | Details |
+| :--- | :--- |
+| IAM permission | `iam.serviceAccountKeys.create`, granted by the **Service Account Key Admin** role (`roles/iam.serviceAccountKeyAdmin`). The basic **Editor** role also includes it. |
+| Organization policy | `constraints/iam.disableServiceAccountKeyCreation` must not be enforced on the project. A managed equivalent, `iam.managed.disableServiceAccountKeyCreation`, controls the same behavior. |
+| Related policies | `constraints/iam.serviceAccountKeyExpiryHours` caps how long new keys stay valid. If your organization sets it, plan to rotate the key in C1 before it expires. |
+
+Grant the key admin role to whoever creates the key:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  c1-integration@YOUR_PROJECT_ID.iam.gserviceaccount.com \
+  --member="user:admin@yourdomain.com" \
+  --role="roles/iam.serviceAccountKeyAdmin" \
+  --project=YOUR_PROJECT_ID
+```
+
+Check whether the organization policy is enforced on your project:
+
+```bash
+gcloud org-policies describe iam.disableServiceAccountKeyCreation \
+  --project=YOUR_PROJECT_ID \
+  --effective
+```
+
+If it is enforced, a user with the **Organization Policy Administrator** role (`roles/orgpolicy.policyAdmin`) can add a project-level exception. Save this as `policy.yaml`:
+
+```yaml
+name: projects/YOUR_PROJECT_ID/policies/iam.disableServiceAccountKeyCreation
+spec:
+  rules:
+  - enforce: false
+```
+
+Then apply it:
+
+```bash
+gcloud org-policies set-policy policy.yaml
+```
+
+<Note>
+This exception applies only to the project you name. Enforcement elsewhere in your organization is unchanged. If your organization manages exceptions with tags rather than per-project policies, see Google's [Organization policies and tags](https://cloud.google.com/resource-manager/docs/organization-policy/tags-organization-policy) documentation.
+</Note>
+
+<Warning>
+Google recommends against long-lived service account keys and prefers Workload Identity Federation where it's available. This connector requires a JSON key, so treat it as a sensitive credential: store it in a secrets manager, never commit it to source control, and rotate it on a schedule. See Google's [best practices for managing service account keys](https://cloud.google.com/iam/docs/best-practices-for-managing-service-account-keys).
+</Warning>
+
+### Create the key and get the unique ID
+
+Generate the service account's JSON key and record its numeric unique ID, which domain-wide delegation requires.
 
 <Steps>
 <Step>
 Navigate back to **APIs & Services** > **Credentials** and select the service account you just created.
 </Step>
 <Step>
-Click the service account's email address. Locate and save the **Unique ID**.
+Click the service account's email address. Locate and save the **Unique ID**, a numeric string such as `108123456789012345678`. The service account's details page also shows this value as the **OAuth 2 Client ID**.
+
+   <Tip>
+   Do not confuse the Unique ID with the service account's email address. Domain-wide delegation requires the numeric ID.
+   </Tip>
 </Step>
 <Step>
 On the **Service account details** page, click **KEYS**.
@@ -150,11 +309,35 @@ Click **ADD KEY** > **Create new key**.
 Choose **JSON** and click **CREATE**.
 </Step>
 <Step>
-Keep the downloaded file somewhere safe.
+Keep the downloaded file somewhere safe. Google does not let you download it again.
 </Step>
-</Steps> 
+</Steps>
 
-### Add the service account to Google Workspace
+From the command line:
+
+```bash
+gcloud iam service-accounts keys create c1-credentials.json \
+  --iam-account=c1-integration@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+Retrieve the numeric unique ID you'll use for domain-wide delegation:
+
+```bash
+gcloud iam service-accounts describe \
+  c1-integration@YOUR_PROJECT_ID.iam.gserviceaccount.com \
+  --format='value(uniqueId)'
+```
+
+To review the keys that exist on the service account:
+
+```bash
+gcloud iam service-accounts keys list \
+  --iam-account=c1-integration@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+## Grant domain-wide delegation in Google Workspace
+
+Domain-wide delegation authorizes the service account to call Workspace APIs on behalf of your organization. Configure it in the Google Admin console.
 
 <Steps>
 <Step>
@@ -169,96 +352,78 @@ Click **MANAGE DOMAIN WIDE DELEGATION**.
 <Step>
 Click **Add new** and fill out the form:
 
-   - **Client ID**: The service account's unique ID
-   - **OAuth Scopes**: Copy and paste in the relevant scopes
-
-      Use the following scopes to give C1 **READ** access (for syncing access data):
-
-      ```bash
-      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
-      ```
-
-      Here's an explanation of each scope's purpose:
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.domain.readonly <br/>
-        Purpose: To identify the primary domain of the Google Workspace account.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.group.readonly <br/>
-        Purpose: To read and sync Google Groups.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.group.member.readonly <br/>
-        Purpose: To read and sync the members of each group.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly <br/>
-        Purpose: To read and sync roles and their assignments.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.user.readonly <br/>
-        Purpose: To read and sync users.
-
-      - Scope:   https://www.googleapis.com/auth/admin.reports.audit.readonly <br/>
-        Purpose: To sync usage events and admin events (used in conjunction with incremental sync).
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.user.security <br/>
-        Purpose: To discover OAuth apps via per-user token listing.
-
-      - Scope:   https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly <br/>
-        Purpose: (Optional) To resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names.
-
-      Use the following scopes to give C1 **READ/WRITE** access (for syncing access data and provisioning access):
-
-      ```bash
-      https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
-      ```
-
-      Here's an explanation of each scope's purpose:
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.domain.readonly <br/>
-        Purpose: To identify the primary domain of the Google Workspace account.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.group.readonly <br/>
-        Purpose: To read and sync Google Groups.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.group.member <br/>
-        Purpose: (Write) To manage group memberships (add or remove users from groups).
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.rolemanagement <br/>
-        Purpose: (Write) To manage role assignments (grant or revoke roles).
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.user <br/>
-        Purpose: (Write) To provision/deprovision accounts, update user profiles and custom-schema values, and promote/demote super administrators.
-
-      - Scope:   https://www.googleapis.com/auth/admin.reports.audit.readonly <br/>
-        Purpose: To sync usage events and admin events (used in conjunction with continuous sync).
-
-      - Scope:   https://www.googleapis.com/auth/admin.datatransfer <br/>
-        Purpose: (Write) To transfer user data between Google accounts.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.group <br/>
-        Purpose: (Write) To provision groups.
-
-      - Scope:   https://www.googleapis.com/auth/admin.directory.user.security <br/>
-        Purpose: (Write) To discover OAuth apps and run actions for removing a user's access (sign out, delete auth tokens and app passwords).
-
-      - Scope: https://www.googleapis.com/auth/apps.groups.settings <br/>
-        Purpose: (Write) To edit group settings.
-
-      - Scope:   https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly <br/>
-        Purpose: (Optional) To resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names.
+   - **Client ID**: The service account's Unique ID
+   - **OAuth Scopes**: Copy and paste in the relevant scopes from [OAuth scopes](#oauth-scopes) below
 </Step>
 <Step>
 Click **AUTHORIZE**.
 </Step>
+</Steps>
+
+### OAuth scopes
+
+Choose one of the two sets below. Read-only access lets C1 sync access data. Read/write access lets C1 sync access data and provision access.
+
+<Tabs>
+<Tab title="Read-only">
+Paste this comma-separated list into the **OAuth Scopes** field:
+
+```bash
+https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
+```
+
+| Scope | Purpose |
+| :--- | :--- |
+| `admin.directory.domain.readonly` | Identify the primary domain of the Google Workspace account |
+| `admin.directory.group.readonly` | Read and sync Google Groups |
+| `admin.directory.group.member.readonly` | Read and sync the members of each group |
+| `admin.directory.rolemanagement.readonly` | Read and sync roles and their assignments |
+| `admin.directory.user.readonly` | Read and sync users |
+| `admin.reports.audit.readonly` | Sync usage and admin events for continuous sync. Also required to sync enterprise applications |
+| `admin.directory.user.security` | Discover OAuth apps through per-user token listing. Also required to sync enterprise applications, and permits three actions that revoke a user's access. See the warning below |
+| `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
+</Tab>
+
+<Tab title="Read/write">
+Paste this comma-separated list into the **OAuth Scopes** field:
+
+```bash
+https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
+```
+
+| Scope | Purpose |
+| :--- | :--- |
+| `admin.directory.domain.readonly` | Identify the primary domain of the Google Workspace account |
+| `admin.directory.group.readonly` | Read and sync Google Groups |
+| `admin.directory.group.member` | Write. Manage group memberships, adding or removing users from groups |
+| `admin.directory.rolemanagement` | Write. Manage role assignments, granting or revoking roles |
+| `admin.directory.user` | Write. Provision and deprovision accounts, update user profiles and custom-schema values, and promote and demote super administrators |
+| `admin.reports.audit.readonly` | Sync usage and admin events for continuous sync. Also required to sync enterprise applications |
+| `admin.datatransfer` | Write. Transfer user data between Google accounts |
+| `admin.directory.group` | Write. Provision groups |
+| `admin.directory.user.security` | Write. Discover OAuth apps, sync enterprise applications, and run actions that remove a user's access, such as sign out and deleting auth tokens and app passwords |
+| `apps.groups.settings` | Write. Edit group settings. Requires the Groups Settings API |
+| `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
+</Tab>
+</Tabs>
+
+<Warning>
+The write scopes let C1 provision and deprovision access. **If you do not want C1 to perform these tasks, use the read-only scope set.** Read-only still syncs users, groups, roles, and enterprise applications, so it is sufficient when you use Google Workspace as your [directory](#set-google-workspace-as-your-c1-directory) and run access reviews.
+
+The read-only set has one exception. `admin.directory.user.security` appears in both sets, and it permits three actions that revoke a user's access: `sign_out_user`, `delete_all_oauth_tokens`, and `delete_all_application_passwords`. These actions remain available with the read-only set. **If you do not want C1 to perform these tasks, do not grant this scope.** The connector then stops discovering OAuth apps and stops syncing enterprise applications.
+</Warning>
+
+### Find your customer ID and primary domain
+
+The connector configuration needs your Google Workspace customer ID and primary domain, both available in the Admin console.
+
+<Steps>
 <Step>
-In the navigation menu, select **Account > Account Settings**.
+In the Google Admin console, select **Account** > **Account Settings**.
 </Step>
 <Step>
 Copy the **Customer ID** from this page.
 </Step>
-</Steps>
-
-### Locate your primary domain
-
-<Steps>
 <Step>
 In the navigation panel on the left, click **Account** > **Domains**.
 </Step>
@@ -267,7 +432,7 @@ Click **Manage Domains**. Locate and copy the domain labeled as the **Primary Do
 </Step>
 </Steps>
 
-**Done.** Next, move on to the connector configuration instructions. 
+**Done.** Next, move on to the connector configuration instructions.
 
 ## Configure the Google Workspace connector
 
@@ -312,10 +477,10 @@ Find the **Settings** area of the page and click **Edit**.
 In the **Customer ID** field, enter the Google Workspace customer ID.
 </Step>
 <Step>
-**Optional.** If you want to limit which domains C1 syncs, in the **Domain** field, enter the primary domain from Step 6. If you leave this field blank, C1 will sync all available domains.
+**Optional.** If you want to limit which domains C1 syncs, in the **Domain** field, enter your primary domain. If you leave this field blank, C1 will sync all available domains.
 </Step>
 <Step>
-In the **Administrator email** field, enter the email address associated with your domain or a super admin.
+In the **Administrator email** field, enter the email address of a Google Workspace super admin. The service account impersonates this user.
 </Step>
 <Step>
 In the **Credentials (JSON)** area, click **Choose file** and upload the file.
@@ -385,22 +550,32 @@ kind: Secret
 metadata:
   name: baton-google-workspace-secrets
 type: Opaque
-data:
+stringData:
   # C1 credentials
-  BATON_CLIENT_ID: <base64 encoded C1 client ID>
-  BATON_CLIENT_SECRET: <base64 encoded C1 client secret>
-  
-  # Google Workspace specific credentials
-  BATON_CUSTOMER_ID: <base64 encoded customer ID>
-  BATON_DOMAIN: <base64 encoded domain>
-  BATON_ADMINISTRATOR_EMAIL: <base64 encoded administrator email>
-  BATON_CREDENTIALS_JSON: <base64 encoded credentials JSON>
+  BATON_CLIENT_ID: <C1 client ID>
+  BATON_CLIENT_SECRET: <C1 client secret>
+
+  # Google Workspace credentials
+  BATON_CUSTOMER_ID: <Your customer ID>
+  BATON_DOMAIN: <Your primary domain>
+  BATON_ADMINISTRATOR_EMAIL: <Your administrator email>
+
+  # Paste the service account JSON key as a block scalar, indented under the pipe
+  BATON_CREDENTIALS_JSON: |
+    {
+      "type": "service_account",
+      "project_id": "<Your project ID>",
+      "private_key_id": "<Your private key ID>",
+      "private_key": "<Your private key>",
+      "client_email": "<Your service account email>",
+      "client_id": "<Your service account unique ID>"
+    }
 
   # Optional: include if you want C1 to provision access using this connector
-  BATON_PROVISIONING: true
+  BATON_PROVISIONING: "true"
 ```
 
-**Base64 Encoding:** Use `echo -n "your-value" | base64` to encode your secrets,
+`stringData` takes plain values, so no base64 encoding is required. Quote `"true"` so Kubernetes reads it as a string rather than a Boolean.
 
 See the connector's README or run `--help` to see all available configuration flags and environment variables.
 
@@ -452,11 +627,51 @@ Check that the connector data uploaded correctly. In C1, click **Apps**. On the 
 </Tab>
 </Tabs>
 
-### What's next?
+## Set Google Workspace as your C1 directory
+
+If Google Workspace is your source of truth for who works at your company, designate the connector's app as your [directory](/product/admin/directory). C1 then creates a C1 user for each Workspace account it syncs, and accounts from your other connectors attach to those users.
+
+<Note>
+Importing users and groups doesn't require provisioning. If all you want is a directory and access reviews, the read-only scope set in [OAuth scopes](#oauth-scopes) is sufficient, and the service account still needs no Google Cloud IAM role.
+</Note>
+
+<Steps>
+<Step>
+Wait for the connector's first sync to finish. An app becomes available to select only after it has synced at least once.
+</Step>
+<Step>
+In C1, navigate to **Directory** > **Directory sources**.
+</Step>
+<Step>
+On the **Directories** tab, click **Add directory data source**.
+</Step>
+<Step>
+Select the app your Google Workspace connector is attached to.
+</Step>
+<Step>
+**Optional.** [Limit which accounts will be pulled into C1](/product/admin/directory#optional-limit-which-accounts-will-be-pulled-into-c1) or [configure merge matching](/product/admin/directory#configure-merge-matching). You can change both later.
+</Step>
+<Step>
+Click **Create directory**.
+</Step>
+</Steps>
+
+For how directory accounts become C1 users, and how accounts from non-directory apps find an owner, see [Connect a directory](/product/admin/directory).
+
+## What's next?
 
 If Google Workspace is your company's identity provider (meaning that it is used to SSO into other software), the integration sync will automatically create applications in C1 for all of your SCIMed software. Before you move on, review the [Create applications](/product/admin/applications) page for important information about how to set up integrations with the SCIMed apps.
 
 ## Troubleshooting the Google Workspace integration
+
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| `FAILED_PRECONDITION: Key creation is not allowed on this service account` | The `iam.disableServiceAccountKeyCreation` organization policy is enforced, or you lack the Service Account Key Admin role. | See [Allow service account key creation](#allow-service-account-key-creation). |
+| `Error 403: Request had insufficient authentication scopes` / `ACCESS_TOKEN_SCOPE_INSUFFICIENT` | The domain-wide delegation grant is missing scopes the connector needs. | Remove and re-add the API client with the full scope set. See [When adding permissions to my Google Workspace API Client permissions I get authorization errors](#when-adding-permissions-to-my-google-workspace-api-client-permissions-i-get-authorization-errors). |
+| `unauthorized_client` when the connector authenticates | The Client ID in domain-wide delegation doesn't match the service account's Unique ID, or the requested scopes aren't authorized. | Confirm you entered the numeric **Unique ID**, not the service account email, and that the scope list matches exactly. |
+| `SERVICE_DISABLED` or "API has not been used in project ... before or it is disabled" | The connector's API isn't enabled in the project. | Enable it. See [Enable the APIs](#enable-the-apis). |
+| Authentication succeeds but the sync returns no users or `Not Authorized to access this resource/api` | The **Administrator email** isn't a super admin, or the **Customer ID** is wrong. | Confirm both values. See [Find your customer ID and primary domain](#find-your-customer-id-and-primary-domain). |
+| The connector worked and then stopped authenticating | The service account key expired under `constraints/iam.serviceAccountKeyExpiryHours`, or someone deleted it. | Create a new key and upload it to the connector. |
 
 ### When adding permissions to my Google Workspace API Client permissions I get authorization errors
 
@@ -467,6 +682,7 @@ If Google Workspace is your company's identity provider (meaning that it is used
 **To resolve this issue:** 
 
 Remove the Google Workspace API Client, then re-add with the correct permissions.
+
 <Steps>
 <Step>
  Copy the Client ID.
@@ -478,18 +694,6 @@ Delete the API Client.
 Add a new Client ID.
 </Step>
 <Step>
-Re-add the relevant scopes:
-
-   Read-only
-
-   ```bash
-   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
-   ```
-
-   Read/Write
-
-   ```bash
-   https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member, https://www.googleapis.com/auth/admin.directory.rolemanagement, https://www.googleapis.com/auth/admin.directory.user, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.datatransfer, https://www.googleapis.com/auth/admin.directory.group, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
-   ```
+Re-add the relevant scopes from [OAuth scopes](#oauth-scopes).
 </Step>
 </Steps>
