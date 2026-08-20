@@ -34,7 +34,7 @@ const oauthAppLookupLookback = 180 * 24 * time.Hour
 
 // oauthAppLookupTimeout caps a single (user, app) lookup, including retries. Kept above the
 // worst case of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry
-// in listActivitiesFilteredRateLimited has room to complete.
+// in listActivitiesFilteredRateLimitedBounded has room to complete.
 const oauthAppLookupTimeout = 60 * time.Second
 
 type usageEventFeed struct {
@@ -143,7 +143,7 @@ func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.Go
 	lookupCtx, cancel := context.WithTimeout(ctx, oauthAppLookupTimeout)
 	defer cancel()
 
-	r, err := listActivitiesFilteredRateLimited(lookupCtx, client, user.Email, "token", "authorize", startTime, "", filters, oauthAppLookupMaxResults)
+	r, err := listActivitiesFilteredRateLimitedBounded(lookupCtx, client, user.Email, "token", "authorize", startTime, "", filters, oauthAppLookupMaxResults)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Our sub-deadline fired, not the caller's context: skip this one app instead of

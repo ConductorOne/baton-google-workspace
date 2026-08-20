@@ -103,7 +103,9 @@ type listActivitiesFunc func(ctx context.Context, userKey, applicationName, even
 
 // listActivitiesRateLimited waits for the shared filter-query budget, then calls
 // client.ListActivities, retrying with exponential backoff on 429/503 — both are transient,
-// SDK-retryable conditions, not connector bugs (see patterns-error-handling.md).
+// SDK-retryable conditions, not connector bugs (see patterns-error-handling.md). It imposes no
+// per-attempt timeout: use listActivitiesRateLimitedBounded for callers that set their own
+// lookupCtx sub-deadline and want a hung attempt retried instead of just waited out.
 func listActivitiesRateLimited(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,
@@ -124,14 +126,43 @@ func listActivitiesFilteredRateLimited(
 ) (*reportsAdmin.Activities, error) {
 	return retryListActivities(
 		ctx, sharedReportsRateLimiter, client.ListActivities,
+		0, reportsMaxRetries, reportsInitialBackoff, reportsMaxBackoff,
+		userKey, applicationName, eventName, startTime, pageToken, filters, maxResults,
+	)
+}
+
+// listActivitiesRateLimitedBounded is listActivitiesRateLimited plus reportsPerAttemptTimeout
+// applied to every attempt. Reserved for the event feed callers (usage/google-login/saml), which
+// always wrap the call in their own bounded lookupCtx, so a hung attempt can be told apart from
+// the caller's own deadline expiring and retried instead of failing the lookup outright.
+func listActivitiesRateLimitedBounded(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	userKey, applicationName, eventName, startTime, pageToken string,
+	maxResults int64,
+) (*reportsAdmin.Activities, error) {
+	return listActivitiesFilteredRateLimitedBounded(ctx, client, userKey, applicationName, eventName, startTime, pageToken, "", maxResults)
+}
+
+// listActivitiesFilteredRateLimitedBounded is listActivitiesRateLimitedBounded plus an optional
+// Reports API `filters` expression; see listActivitiesFilteredRateLimited.
+func listActivitiesFilteredRateLimitedBounded(
+	ctx context.Context,
+	client *gwclient.GoogleWorkspaceClient,
+	userKey, applicationName, eventName, startTime, pageToken, filters string,
+	maxResults int64,
+) (*reportsAdmin.Activities, error) {
+	return retryListActivities(
+		ctx, sharedReportsRateLimiter, client.ListActivities,
 		reportsPerAttemptTimeout, reportsMaxRetries, reportsInitialBackoff, reportsMaxBackoff,
 		userKey, applicationName, eventName, startTime, pageToken, filters, maxResults,
 	)
 }
 
 // retryListActivities holds the retry/backoff/per-attempt-timeout policy, parameterized so tests
-// can drive it with a fake call and short durations. The per-attempt timeout only applies when
-// ctx already has a deadline, so deadline-less callers like app_login.go keep running unbounded.
+// can drive it with a fake call and short durations. perAttemptTimeout == 0 means "no per-attempt
+// cap" — the caller's own ctx is used as-is and a DeadlineExceeded from it is never retried as
+// a hung attempt.
 func retryListActivities(
 	ctx context.Context,
 	limiter *reportsRateLimiter,
@@ -142,7 +173,7 @@ func retryListActivities(
 	userKey, applicationName, eventName, startTime, pageToken, filters string,
 	maxResults int64,
 ) (*reportsAdmin.Activities, error) {
-	_, callerHasDeadline := ctx.Deadline()
+	applyPerAttemptTimeout := perAttemptTimeout > 0
 	backoff := initialBackoff
 	for attempt := 0; ; attempt++ {
 		if err := limiter.Wait(ctx); err != nil {
@@ -151,7 +182,7 @@ func retryListActivities(
 
 		attemptCtx := ctx
 		cancel := func() {}
-		if callerHasDeadline {
+		if applyPerAttemptTimeout {
 			attemptCtx, cancel = context.WithTimeout(ctx, perAttemptTimeout)
 		}
 		resp, err := call(attemptCtx, userKey, applicationName, eventName, startTime, pageToken, filters, maxResults)
@@ -162,7 +193,7 @@ func retryListActivities(
 
 		// ctx still being live means attemptCtx's own timeout fired, not the caller's deadline —
 		// treat that like a retryable 429/503 rather than "out of time."
-		hungAttempt := callerHasDeadline && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		hungAttempt := applyPerAttemptTimeout && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
 		if attempt >= maxRetries || (!isRetryableReportsError(err) && !hungAttempt) {
 			return nil, err
 		}

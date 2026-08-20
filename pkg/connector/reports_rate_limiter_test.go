@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // unlimitedRateLimiter returns a limiter whose Wait() never blocks, so tests exercise only the
@@ -72,6 +75,34 @@ func blockingCallWithDelays(delays []time.Duration, results ...error) (listActiv
 
 func rateLimitedGoogleErr() error {
 	return &googleapi.Error{Code: http.StatusTooManyRequests}
+}
+
+// productionWrappedRateLimitErr mirrors what client.ListActivities actually returns for a 429:
+// wrapGoogleApiErrorWithContext joins a gRPC status with the original *googleapi.Error, rather
+// than returning the bare *googleapi.Error the other tests use.
+func productionWrappedRateLimitErr() error {
+	return errors.Join(status.Error(codes.Unavailable, "rate limited"), &googleapi.Error{Code: http.StatusTooManyRequests})
+}
+
+// blockingCallWrappedTimeout is blockingCallWithDelays, but on a ctx timeout it returns the
+// error shape production code actually produces (a *url.Error wrapping the context error, as
+// net/http's transport does) instead of a bare context error.
+func blockingCallWrappedTimeout(delays []time.Duration) (listActivitiesFunc, *int32) {
+	var calls int32
+	fn := func(ctx context.Context, userKey, applicationName, eventName, startTime, pageToken, filters string, maxResults int64) (*reportsAdmin.Activities, error) {
+		idx := int(atomic.AddInt32(&calls, 1) - 1)
+		delay := delays[len(delays)-1]
+		if idx < len(delays) {
+			delay = delays[idx]
+		}
+		select {
+		case <-time.After(delay):
+			return &reportsAdmin.Activities{}, nil
+		case <-ctx.Done():
+			return nil, &url.Error{Op: "Get", URL: "https://example.com", Err: ctx.Err()}
+		}
+	}
+	return fn, &calls
 }
 
 func TestRetryListActivities(t *testing.T) {
@@ -157,26 +188,69 @@ func TestRetryListActivities(t *testing.T) {
 		}
 	})
 
-	t.Run("imposes no per-attempt timeout when the caller has no deadline", func(t *testing.T) {
-		// A call that blocks well past perAttemptTimeout must still be allowed to complete when
-		// the caller (e.g. app_login.go) passed a ctx with no deadline of its own.
-		var sawDeadline bool
+	t.Run("imposes no per-attempt timeout when perAttemptTimeout is 0, even with a deadline-bearing ctx", func(t *testing.T) {
+		// perAttemptTimeout == 0 must disable the sub-timeout on its own terms, regardless of
+		// whether ctx happens to carry a deadline (e.g. a future SDK change attaches one to the
+		// sync context) — this is what listActivitiesFilteredRateLimited (used by app_login.go)
+		// relies on to stay unbounded.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		wantDeadline, _ := ctx.Deadline()
+
+		var gotDeadline time.Time
+		var gotHasDeadline bool
 		call := func(ctx context.Context, userKey, applicationName, eventName, startTime, pageToken, filters string, maxResults int64) (*reportsAdmin.Activities, error) {
-			_, sawDeadline = ctx.Deadline()
+			gotDeadline, gotHasDeadline = ctx.Deadline()
 			time.Sleep(perAttemptTimeout * 3)
 			return &reportsAdmin.Activities{}, nil
 		}
 
 		start := time.Now()
-		_, err := retryListActivities(context.Background(), unlimitedRateLimiter(), call, perAttemptTimeout, 5, initialBackoff, maxBackoff, "u", "app", "event", "", "", "", 10)
+		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, 0, 5, initialBackoff, maxBackoff, "u", "app", "event", "", "", "", 10)
 		if err != nil {
 			t.Fatalf("expected success, got %v", err)
 		}
-		if sawDeadline {
-			t.Fatalf("expected no deadline to be imposed on attemptCtx for a deadline-less caller")
+		// attemptCtx must be ctx itself (same deadline as the caller's own, not a new shorter
+		// one), proving perAttemptTimeout==0 disabled the sub-timeout rather than the caller
+		// simply having no deadline to begin with.
+		if !gotHasDeadline || !gotDeadline.Equal(wantDeadline) {
+			t.Fatalf("expected attemptCtx to carry the caller's own deadline unchanged, got hasDeadline=%v deadline=%v want=%v", gotHasDeadline, gotDeadline, wantDeadline)
 		}
 		if elapsed := time.Since(start); elapsed < perAttemptTimeout*3 {
 			t.Fatalf("expected the call to run past perAttemptTimeout uninterrupted, only took %v", elapsed)
+		}
+	})
+
+	t.Run("retries a rate-limited error wrapped the way production code wraps it", func(t *testing.T) {
+		// Pins the contract that isRetryableReportsError's errors.As still finds the
+		// *googleapi.Error inside wrapGoogleApiErrorWithContext's errors.Join, not just a bare
+		// *googleapi.Error.
+		call, calls := blockingCall(0, productionWrappedRateLimitErr())
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, perAttemptTimeout, 5, initialBackoff, maxBackoff, "u", "app", "event", "", "", "", 10)
+		if err != nil {
+			t.Fatalf("expected eventual success, got %v", err)
+		}
+		if got := atomic.LoadInt32(calls); got != 2 {
+			t.Fatalf("expected 2 calls, got %d", got)
+		}
+	})
+
+	t.Run("retries a hung attempt whose timeout arrives wrapped like production's transport error", func(t *testing.T) {
+		// Pins the contract that hungAttempt's errors.Is still finds context.DeadlineExceeded
+		// inside a *url.Error, not just a bare context error.
+		call, calls := blockingCallWrappedTimeout([]time.Duration{perAttemptTimeout * 3, 0})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, perAttemptTimeout, 5, initialBackoff, maxBackoff, "u", "app", "event", "", "", "", 10)
+		if err != nil {
+			t.Fatalf("expected the wrapped hung attempt to be retried and eventually succeed, got %v", err)
+		}
+		if got := atomic.LoadInt32(calls); got != 2 {
+			t.Fatalf("expected 2 calls (initial hung attempt + retry), got %d", got)
 		}
 	})
 

@@ -31,7 +31,7 @@ const samlAppLookupLookback = 180 * 24 * time.Hour
 
 // samlAppLookupTimeout caps a single user's lookup, including retries. Kept above the worst case
 // of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
-// listActivitiesFilteredRateLimited has room to complete.
+// listActivitiesRateLimitedBounded has room to complete.
 const samlAppLookupTimeout = 60 * time.Second
 
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
@@ -72,7 +72,7 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 	lookupCtx, cancel := context.WithTimeout(ctx, samlAppLookupTimeout)
 	defer cancel()
 
-	r, err := listActivitiesRateLimited(lookupCtx, client, user.Email, reportsAppSAML, "login_success", startTime, "", samlAppLookupMaxResults)
+	r, err := listActivitiesRateLimitedBounded(lookupCtx, client, user.Email, reportsAppSAML, "login_success", startTime, "", samlAppLookupMaxResults)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Our sub-deadline fired, not the caller's context: skip this user instead of
