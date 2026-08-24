@@ -115,22 +115,10 @@ func listActivitiesRateLimited(
 	userKey, applicationName, eventName, startTime, pageToken string,
 	maxResults int64,
 ) (*reportsAdmin.Activities, error) {
-	return listActivitiesFilteredRateLimited(ctx, client, userKey, applicationName, eventName, startTime, pageToken, "", maxResults)
-}
-
-// listActivitiesFilteredRateLimited is listActivitiesRateLimited plus an optional Reports API
-// `filters` expression (e.g. "client_id==<id>"), for callers that need to scope a lookup to one
-// specific app rather than an entire app-type.
-func listActivitiesFilteredRateLimited(
-	ctx context.Context,
-	client *gwclient.GoogleWorkspaceClient,
-	userKey, applicationName, eventName, startTime, pageToken, filters string,
-	maxResults int64,
-) (*reportsAdmin.Activities, error) {
 	return retryListActivities(
 		ctx, sharedReportsRateLimiter, client.ListActivities,
 		0, reportsMaxRetries, reportsInitialBackoff, reportsMaxBackoff,
-		userKey, applicationName, eventName, startTime, pageToken, filters, maxResults,
+		userKey, applicationName, eventName, startTime, pageToken, "", maxResults,
 	)
 }
 
@@ -148,7 +136,8 @@ func listActivitiesRateLimitedBounded(
 }
 
 // listActivitiesFilteredRateLimitedBounded is listActivitiesRateLimitedBounded plus an optional
-// Reports API `filters` expression; see listActivitiesFilteredRateLimited.
+// Reports API `filters` expression (e.g. "client_id==<id>"), for callers that need to scope a
+// lookup to one specific app rather than an entire app-type.
 func listActivitiesFilteredRateLimitedBounded(
 	ctx context.Context,
 	client *gwclient.GoogleWorkspaceClient,

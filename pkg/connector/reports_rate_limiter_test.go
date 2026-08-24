@@ -191,8 +191,8 @@ func TestRetryListActivities(t *testing.T) {
 	t.Run("imposes no per-attempt timeout when perAttemptTimeout is 0, even with a deadline-bearing ctx", func(t *testing.T) {
 		// perAttemptTimeout == 0 must disable the sub-timeout on its own terms, regardless of
 		// whether ctx happens to carry a deadline (e.g. a future SDK change attaches one to the
-		// sync context) — this is what listActivitiesFilteredRateLimited (used by app_login.go)
-		// relies on to stay unbounded.
+		// sync context) — this is what listActivitiesRateLimited (used by app_login.go) relies
+		// on to stay unbounded.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		wantDeadline, _ := ctx.Deadline()
