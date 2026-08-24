@@ -25,10 +25,6 @@ import (
 // by resolved app ID, keeping only the newest event per app.
 const samlAppLookupMaxResults = 50
 
-// samlAppLookupLookback bounds startTime so each lookup stays fast, per Google's guidance that
-// narrower time ranges respond faster; 180 days matches Google's own Reports retention window.
-const samlAppLookupLookback = 180 * 24 * time.Hour
-
 // samlAppLookupTimeout caps a single user's lookup, including retries. Kept above the worst case
 // of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
 // listActivitiesRateLimitedBounded has room to complete.
@@ -68,7 +64,7 @@ type samlAppActivity struct {
 // (no numeric client_id).
 func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string, user pendingUser) ([]*v2.Event, error) {
 	l := ctxzap.Extract(ctx)
-	startTime := time.Now().Add(-samlAppLookupLookback).UTC().Format(time.RFC3339)
+	startTime := time.Now().Add(-reportsLookback).UTC().Format(time.RFC3339)
 
 	lookupCtx, cancel := context.WithTimeout(ctx, samlAppLookupTimeout)
 	defer cancel()

@@ -28,11 +28,6 @@ type bestActivity struct {
 // picked client-side, so this just needs to be large enough to avoid pagination.
 const googleLoginLookupMaxResults = 50
 
-// googleLoginLookupLookback bounds startTime so each lookup stays fast, per Google's guidance
-// that narrower time ranges respond faster; 180 days matches Google's own Reports retention
-// window.
-const googleLoginLookupLookback = 180 * 24 * time.Hour
-
 // googleLoginLookupTimeout caps a single user's lookup, including retries. Kept above the worst
 // case of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
 // listActivitiesRateLimitedBounded has room to complete.
@@ -61,7 +56,7 @@ func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFee
 
 func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
 	l := ctxzap.Extract(ctx)
-	startTime := time.Now().Add(-googleLoginLookupLookback).UTC().Format(time.RFC3339)
+	startTime := time.Now().Add(-reportsLookback).UTC().Format(time.RFC3339)
 
 	lookupCtx, cancel := context.WithTimeout(ctx, googleLoginLookupTimeout)
 	defer cancel()

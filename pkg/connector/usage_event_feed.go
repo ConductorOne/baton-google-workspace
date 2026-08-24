@@ -28,10 +28,6 @@ var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 // is picked client-side, so this just needs to be large enough to avoid pagination.
 const oauthAppLookupMaxResults = 50
 
-// oauthAppLookupLookback bounds startTime so each lookup stays fast, per Google's guidance that
-// narrower time ranges respond faster; 180 days matches Google's own Reports retention window.
-const oauthAppLookupLookback = 180 * 24 * time.Hour
-
 // oauthAppLookupTimeout caps a single (user, app) lookup, including retries. Kept above the
 // worst case of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry
 // in listActivitiesFilteredRateLimitedBounded has room to complete.
@@ -139,7 +135,7 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, clientID, displayName string) (*v2.Event, error) {
 	l := ctxzap.Extract(ctx)
 	filters := "client_id==" + clientID
-	startTime := time.Now().Add(-oauthAppLookupLookback).UTC().Format(time.RFC3339)
+	startTime := time.Now().Add(-reportsLookback).UTC().Format(time.RFC3339)
 
 	lookupCtx, cancel := context.WithTimeout(ctx, oauthAppLookupTimeout)
 	defer cancel()

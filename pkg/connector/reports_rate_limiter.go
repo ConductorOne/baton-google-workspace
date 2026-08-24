@@ -37,6 +37,9 @@ const (
 	// whole, so a genuinely hung request is retried like any other transient error instead of
 	// being confused with the caller's overall lookup deadline expiring.
 	reportsPerAttemptTimeout = 25 * time.Second
+
+	// reportsLookback matches Google's Reports retention window; shared by the event feeds.
+	reportsLookback = 180 * 24 * time.Hour
 )
 
 // reportsRateLimiter is a simple token-bucket limiter built on the standard library only
