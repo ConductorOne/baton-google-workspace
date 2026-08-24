@@ -137,6 +137,7 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 // lookupAppLogin fetches this user's most recent "authorize" activity for one specific OAuth
 // app (client_id), returning nil if there is no such activity within the lookup window.
 func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, clientID, displayName string) (*v2.Event, error) {
+	l := ctxzap.Extract(ctx)
 	filters := "client_id==" + clientID
 	startTime := time.Now().Add(-oauthAppLookupLookback).UTC().Format(time.RFC3339)
 
@@ -148,7 +149,7 @@ func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.Go
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Our sub-deadline fired, not the caller's context: skip this one app instead of
 			// failing the whole batch.
-			ctxzap.Extract(ctx).Warn("google-workspace: timed out listing token activities, skipping",
+			l.Debug("google-workspace: timed out listing token activities, skipping",
 				zap.String("user", user.Email), zap.String("client_id", clientID))
 			return nil, nil
 		}

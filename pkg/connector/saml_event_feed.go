@@ -67,6 +67,7 @@ type samlAppActivity struct {
 // authentication, so last login timestamps are accurate. SAML apps are identified by app name
 // (no numeric client_id).
 func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string, user pendingUser) ([]*v2.Event, error) {
+	l := ctxzap.Extract(ctx)
 	startTime := time.Now().Add(-samlAppLookupLookback).UTC().Format(time.RFC3339)
 
 	lookupCtx, cancel := context.WithTimeout(ctx, samlAppLookupTimeout)
@@ -77,7 +78,7 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Our sub-deadline fired, not the caller's context: skip this user instead of
 			// failing the whole batch.
-			ctxzap.Extract(ctx).Warn("google-workspace-connector: timed out listing saml login activities, skipping",
+			l.Debug("google-workspace-connector: timed out listing saml login activities, skipping",
 				zap.String("user", user.Email))
 			return nil, nil
 		}

@@ -60,6 +60,7 @@ func (f *googleLoginEventFeed) EventFeedMetadata(_ context.Context) *v2.EventFee
 }
 
 func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
+	l := ctxzap.Extract(ctx)
 	startTime := time.Now().Add(-googleLoginLookupLookback).UTC().Format(time.RFC3339)
 
 	lookupCtx, cancel := context.WithTimeout(ctx, googleLoginLookupTimeout)
@@ -70,7 +71,7 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Our sub-deadline fired, not the caller's context: skip this user instead of
 			// failing the whole batch.
-			ctxzap.Extract(ctx).Warn("google-workspace-connector: timed out listing google login activities, skipping",
+			l.Debug("google-workspace-connector: timed out listing google login activities, skipping",
 				zap.String("user", user.Email))
 			return nil, nil
 		}
