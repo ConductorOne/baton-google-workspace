@@ -47,8 +47,16 @@ func blockingCall(delay time.Duration, results ...error) (listActivitiesFunc, *i
 
 // blockingCallWithDelays is blockingCall but each call gets its own delay from delays (the last
 // entry repeats if there are more calls than delays), so a test can make the first attempt hang
-// and later attempts return quickly.
+// and later attempts return quickly. On a ctx timeout, the returned error is ctx.Err() as-is; use
+// blockingCallWithDelaysWrapped to pin a production-shaped wrapping of that error instead.
 func blockingCallWithDelays(delays []time.Duration, results ...error) (listActivitiesFunc, *int32) {
+	return blockingCallWithDelaysWrapped(delays, func(err error) error { return err }, results...)
+}
+
+// blockingCallWithDelaysWrapped is blockingCallWithDelays, but passes a ctx timeout's error
+// through wrapCtxErr before returning it — e.g. to mirror how net/http's transport wraps a
+// context error in a *url.Error, so tests can pin that errors.Is still unwraps it correctly.
+func blockingCallWithDelaysWrapped(delays []time.Duration, wrapCtxErr func(error) error, results ...error) (listActivitiesFunc, *int32) {
 	var calls int32
 	fn := func(ctx context.Context, userKey, applicationName, eventName, startTime, pageToken, filters string, maxResults int64) (*reportsAdmin.Activities, error) {
 		idx := int(atomic.AddInt32(&calls, 1) - 1)
@@ -67,7 +75,7 @@ func blockingCallWithDelays(delays []time.Duration, results ...error) (listActiv
 			}
 			return &reportsAdmin.Activities{}, nil
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, wrapCtxErr(ctx.Err())
 		}
 	}
 	return fn, &calls
@@ -82,27 +90,6 @@ func rateLimitedGoogleErr() error {
 // than returning the bare *googleapi.Error the other tests use.
 func productionWrappedRateLimitErr() error {
 	return errors.Join(status.Error(codes.Unavailable, "rate limited"), &googleapi.Error{Code: http.StatusTooManyRequests})
-}
-
-// blockingCallWrappedTimeout is blockingCallWithDelays, but on a ctx timeout it returns the
-// error shape production code actually produces (a *url.Error wrapping the context error, as
-// net/http's transport does) instead of a bare context error.
-func blockingCallWrappedTimeout(delays []time.Duration) (listActivitiesFunc, *int32) {
-	var calls int32
-	fn := func(ctx context.Context, userKey, applicationName, eventName, startTime, pageToken, filters string, maxResults int64) (*reportsAdmin.Activities, error) {
-		idx := int(atomic.AddInt32(&calls, 1) - 1)
-		delay := delays[len(delays)-1]
-		if idx < len(delays) {
-			delay = delays[idx]
-		}
-		select {
-		case <-time.After(delay):
-			return &reportsAdmin.Activities{}, nil
-		case <-ctx.Done():
-			return nil, &url.Error{Op: "Get", URL: "https://example.com", Err: ctx.Err()}
-		}
-	}
-	return fn, &calls
 }
 
 func TestRetryListActivities(t *testing.T) {
@@ -241,7 +228,9 @@ func TestRetryListActivities(t *testing.T) {
 	t.Run("retries a hung attempt whose timeout arrives wrapped like production's transport error", func(t *testing.T) {
 		// Pins the contract that hungAttempt's errors.Is still finds context.DeadlineExceeded
 		// inside a *url.Error, not just a bare context error.
-		call, calls := blockingCallWrappedTimeout([]time.Duration{perAttemptTimeout * 3, 0})
+		call, calls := blockingCallWithDelaysWrapped([]time.Duration{perAttemptTimeout * 3, 0}, func(err error) error {
+			return &url.Error{Op: "Get", URL: "https://example.com", Err: err}
+		})
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
