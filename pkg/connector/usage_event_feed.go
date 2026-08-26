@@ -131,7 +131,7 @@ func (f *usageEventFeed) lookupUser(ctx context.Context, client *gwclient.Google
 }
 
 // lookupAppLogin fetches this user's most recent "authorize" activity for one specific OAuth
-// app (client_id), returning nil if there is no such activity within the lookup window.
+// app (client_id), returning nil if there is no such activity, or if the lookup timed out.
 func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, clientID, displayName string) (*v2.Event, error) {
 	l := ctxzap.Extract(ctx)
 	filters := "client_id==" + clientID
