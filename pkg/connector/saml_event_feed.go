@@ -2,13 +2,17 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -20,6 +24,11 @@ import (
 // specific app within applicationName="saml", so a small recent window is fetched and grouped
 // by resolved app ID, keeping only the newest event per app.
 const samlAppLookupMaxResults = 50
+
+// samlAppLookupTimeout caps a single user's lookup, including retries. Kept above the worst case
+// of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
+// listActivitiesRateLimitedBounded has room to complete.
+const samlAppLookupTimeout = 60 * time.Second
 
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
 type samlEventFeed struct {
@@ -54,8 +63,21 @@ type samlAppActivity struct {
 // authentication, so last login timestamps are accurate. SAML apps are identified by app name
 // (no numeric client_id).
 func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string, user pendingUser) ([]*v2.Event, error) {
-	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppSAML, "login_success", "", "", samlAppLookupMaxResults)
+	l := ctxzap.Extract(ctx)
+	startTime := time.Now().Add(-reportsLookback).UTC().Format(time.RFC3339)
+
+	lookupCtx, cancel := context.WithTimeout(ctx, samlAppLookupTimeout)
+	defer cancel()
+
+	r, err := listActivitiesRateLimitedBounded(lookupCtx, client, user.Email, reportsAppSAML, "login_success", startTime, "", samlAppLookupMaxResults)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// Our sub-deadline fired, not the caller's context: skip this user instead of
+			// failing the whole batch.
+			l.Debug("google-workspace-connector: timed out listing saml login activities, skipping",
+				zap.String("user", user.Email))
+			return nil, nil
+		}
 		return nil, fmt.Errorf("google-workspace-connector: failed to list saml login activities for %s: %w", user.Email, err)
 	}
 

@@ -9,9 +9,8 @@
 // pagination.StreamToken, and never loops internally across directory pages (see
 // ref-antipatterns.md, "Client-Side Pagination Loop").
 //
-// Ordering note: it is not documented whether activities.list returns newest-first when no
-// startTime/orderBy is given, so each lookup fetches a small bounded window (not maxResults=1)
-// and picks the maximum occurredAt client-side, per the plan's acceptance-criteria fallback.
+// Ordering note: activities.list ordering is undocumented, so with startTime=180 days back and
+// maxResults=50, each lookup still picks the maximum occurredAt client-side rather than trusting result order.
 package connector
 
 import (
