@@ -115,7 +115,7 @@ func TestScanUsersForEvents_PaginatesAcrossMultipleCallsWithoutLoss(t *testing.T
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	client := &gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}
+	client := &gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, ReportService: rep}
 
 	var cursor string
 	seenAny := true
@@ -159,11 +159,11 @@ func TestScanUsersForEvents_FiltersEventsBeforeEarliestEvent(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	client := &gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}
+	client := &gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, ReportService: rep}
 
 	now := time.Now().UTC()
 	floor := timestamppb.New(now.Add(-1 * time.Hour))
-	oldEvent := &v2.Event{Id: "old", OccurredAt: timestamppb.New(now.Add(-2 * time.Hour))}  // before floor
+	oldEvent := &v2.Event{Id: "old", OccurredAt: timestamppb.New(now.Add(-2 * time.Hour))}    // before floor
 	newEvent := &v2.Event{Id: "new", OccurredAt: timestamppb.New(now.Add(-30 * time.Minute))} // after floor
 
 	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser) ([]*v2.Event, error) {
@@ -243,7 +243,11 @@ func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+	feed := newUsageEventFeed(
+		&gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, UserSecurityService: dir, ReportService: rep},
+		"customer",
+		"",
+	)
 
 	events, state, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{})
 	if err != nil {
@@ -312,7 +316,11 @@ func TestUsageEventFeed_DedupesRepeatedClientIDsInTokens(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	feed := newUsageEventFeed(&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}, "customer", "")
+	feed := newUsageEventFeed(
+		&gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, UserSecurityService: dir, ReportService: rep},
+		"customer",
+		"",
+	)
 
 	events, _, _, err := feed.ListEvents(context.Background(), nil, &pagination.StreamToken{})
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
@@ -136,7 +137,7 @@ var (
 				IsRequired:  true,
 			},
 		},
-		ReturnTypes: []*config.Field{
+		ReturnTypes: append([]*config.Field{
 			{
 				Name:        fieldSuccess,
 				DisplayName: displaySuccess,
@@ -149,7 +150,7 @@ var (
 				Description: "The number of OAuth tokens that were deleted.",
 				Field:       &config.Field_IntField{},
 			},
-		},
+		}, securityResultFields()...),
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
@@ -205,7 +206,7 @@ var (
 				IsRequired:  true,
 			},
 		},
-		ReturnTypes: []*config.Field{
+		ReturnTypes: append([]*config.Field{
 			{
 				Name:        fieldSuccess,
 				DisplayName: displaySuccess,
@@ -218,7 +219,7 @@ var (
 				Description: "The number of application passwords that were deleted.",
 				Field:       &config.Field_IntField{},
 			},
-		},
+		}, securityResultFields()...),
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 
@@ -627,153 +628,67 @@ func (o *userResourceType) signOutUserActionHandler(ctx context.Context, args *s
 }
 
 func (o *userResourceType) deleteAllOAuthTokensActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-	if o.client.UserSecurityService == nil {
-		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
-	}
-
-	// Extract user_id argument
-	userId, err := extractUserId(args, l, "delete_all_oauth_tokens")
+	userID, err := extractUserId(args, ctxzap.Extract(ctx), "delete_all_oauth_tokens")
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// List all tokens for the user
-	tokens, err := withRateLimitWaitValue(ctx, func() (*admin.Tokens, error) {
-		return o.client.ListTokens(ctx, userId)
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// If no tokens, return success with 0 deleted
-	if len(tokens.Items) == 0 {
-		tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", 0)
-		return actions.NewReturnValues(true, tokensDeletedRv), nil, nil
-	}
-
-	// Delete each token
-	tokensDeleted := 0
-	var lastErr error
-	waitLoop := newRateLimitWaitLoop(ctx)
-	for _, token := range tokens.Items {
-		if token.ClientId == "" {
-			l.Debug("google-workspace: skipping token with empty client ID",
-				zap.String(argUserID, userId),
-				zap.String("display_text", token.DisplayText))
-			continue
-		}
-
-		err := waitLoop(func() error {
-			return o.client.DeleteToken(ctx, userId, token.ClientId)
+	result, err := revokeUserCredentials(ctx, "tokens_deleted", func() ([]string, error) {
+		tokens, err := withRateLimitWaitValue(ctx, func() (*admin.Tokens, error) {
+			return o.client.ListTokens(ctx, userID)
 		})
 		if err != nil {
-			gerr := &googleapi.Error{}
-			if errors.As(err, &gerr) {
-				// If token was already deleted (404), continue
-				if gerr.Code == http.StatusNotFound {
-					l.Debug("google-workspace: token already deleted",
-						zap.String(argUserID, userId),
-						zap.String("client_id", token.ClientId))
-					tokensDeleted++
-					continue
-				}
-			}
-			l.Error("google-workspace: failed to delete token",
-				zap.String(argUserID, userId),
-				zap.String("client_id", token.ClientId),
-				zap.Error(err))
-			lastErr = err
-			continue
+			return nil, err
 		}
-		tokensDeleted++
-	}
-
-	// If we failed to delete some tokens, return an error
-	if lastErr != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to delete some OAuth tokens (deleted %d of %d): %w",
-			tokensDeleted, len(tokens.Items), lastErr)
-	}
-
-	l.Debug("google-workspace: user action handler: deleted all OAuth tokens",
-		zap.String(argUserID, userId),
-		zap.Int("tokens_deleted", tokensDeleted))
-
-	tokensDeletedRv := actions.NewNumberReturnField("tokens_deleted", float64(tokensDeleted))
-
-	return actions.NewReturnValues(true, tokensDeletedRv), nil, nil
+		if tokens == nil {
+			return nil, fmt.Errorf("google-workspace: OAuth token enumeration returned no response")
+		}
+		ids := make([]string, 0, len(tokens.Items))
+		for _, token := range tokens.Items {
+			if token == nil {
+				ids = append(ids, "")
+			} else {
+				ids = append(ids, token.ClientId)
+			}
+		}
+		return ids, nil
+	}, func(id string) error {
+		return o.client.DeleteToken(ctx, userID, id)
+	})
+	return result, nil, err
 }
 
 func (o *userResourceType) deleteAllApplicationPasswordsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-	if o.client.UserSecurityService == nil {
-		return nil, nil, fmt.Errorf("google-workspace: user security service not available - requires %s scope", admin.AdminDirectoryUserSecurityScope)
-	}
-
-	// Extract user_id argument
-	userId, err := extractUserId(args, l, "delete_all_application_passwords")
+	userID, err := extractUserId(args, ctxzap.Extract(ctx), "delete_all_application_passwords")
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// List all application-specific passwords (ASPs) for the user
-	asps, err := withRateLimitWaitValue(ctx, func() (*admin.Asps, error) {
-		return o.client.ListAsps(ctx, userId)
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// If no application passwords, return success with 0 deleted
-	if len(asps.Items) == 0 {
-		passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", 0)
-		return actions.NewReturnValues(true, passwordsDeletedRv), nil, nil
-	}
-
-	// Delete each application password
-	passwordsDeleted := 0
-	var lastErr error
-	waitLoop := newRateLimitWaitLoop(ctx)
-	for _, asp := range asps.Items {
-		err := waitLoop(func() error {
-			return o.client.DeleteAsp(ctx, userId, asp.CodeId)
+	result, err := revokeUserCredentials(ctx, "passwords_deleted", func() ([]string, error) {
+		asps, err := withRateLimitWaitValue(ctx, func() (*admin.Asps, error) {
+			return o.client.ListAsps(ctx, userID)
 		})
 		if err != nil {
-			gerr := &googleapi.Error{}
-			if errors.As(err, &gerr) {
-				// If ASP was already deleted (404), continue
-				if gerr.Code == http.StatusNotFound {
-					l.Debug("google-workspace: application password already deleted",
-						zap.String(argUserID, userId),
-						zap.Int64("code_id", asp.CodeId))
-					passwordsDeleted++
-					continue
-				}
-			}
-			l.Error("google-workspace: failed to delete application password",
-				zap.String(argUserID, userId),
-				zap.Int64("code_id", asp.CodeId),
-				zap.String("name", asp.Name),
-				zap.Error(err))
-			lastErr = err
-			continue
+			return nil, err
 		}
-		passwordsDeleted++
-	}
-
-	// If we failed to delete some application passwords, return an error
-	if lastErr != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to delete some application passwords (deleted %d of %d): %w",
-			passwordsDeleted, len(asps.Items), lastErr)
-	}
-
-	l.Debug("google-workspace: user action handler: deleted all application passwords",
-		zap.String(argUserID, userId),
-		zap.Int("passwords_deleted", passwordsDeleted))
-
-	passwordsDeletedRv := actions.NewNumberReturnField("passwords_deleted", float64(passwordsDeleted))
-
-	return actions.NewReturnValues(true, passwordsDeletedRv), nil, nil
+		if asps == nil {
+			return nil, fmt.Errorf("google-workspace: application password enumeration returned no response")
+		}
+		ids := make([]string, 0, len(asps.Items))
+		for _, asp := range asps.Items {
+			if asp == nil || asp.CodeId == 0 {
+				ids = append(ids, "")
+			} else {
+				ids = append(ids, strconv.FormatInt(asp.CodeId, 10))
+			}
+		}
+		return ids, nil
+	}, func(id string) error {
+		codeID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return err
+		}
+		return o.client.DeleteAsp(ctx, userID, codeID)
+	})
+	return result, nil, err
 }
 
 func (o *userResourceType) registerUpdateUserManagerAction(ctx context.Context, registry actions.ActionRegistry) error {
@@ -920,7 +835,8 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 
 	updatedUser, updatedFields, skippedFields, err := applyUserProfilePatch(ctx, o.client, userId, patch)
 	if err != nil {
-		return nil, nil, err
+		return actions.NewReturnValues(false,
+			actions.NewStringReturnField(fieldSkippedFields, strings.Join(skippedFields, ", "))), nil, err
 	}
 
 	l.Debug("google-workspace: user action handler: updated user profile",
@@ -1065,7 +981,10 @@ func applyUserProfilePatch(
 			return client.GetUserFullForProvisioning(ctx, userId)
 		})
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, skippedFields, err
+		}
+		if current == nil || current.Id != userId {
+			return nil, nil, skippedFields, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: profile read did not identify the requested user")
 		}
 	}
 
@@ -1085,7 +1004,7 @@ func applyUserProfilePatch(
 	if patch.employeeID != nil {
 		currentExtIDs, err := extractFromInterface[*admin.UserExternalId](current.ExternalIds)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
+			return nil, nil, skippedFields, fmt.Errorf("google-workspace: failed to parse external ids: %w", err)
 		}
 		updatedExternalIDs, externalIDsChanged = buildUpdatedExternalIDs(currentExtIDs, *patch.employeeID)
 		externalIDsWillShrink = len(updatedExternalIDs) < len(currentExtIDs)
@@ -1103,24 +1022,12 @@ func applyUserProfilePatch(
 	// it when given the genuinely complete object. So whenever ExternalIds is
 	// actually shrinking - per externalIDsWillShrink above, which is not
 	// limited to the empty-clear case - start from a full copy of `current` and
-	// send the result via Update instead of Patch: `update` begins as an exact copy of
-	// `current` with only the fields below overwritten, so nothing this
-	// function doesn't touch changes - modulo the accepted tradeoff that a
-	// full-object Update widens the read-modify-write race window to every
-	// field on the user (not just the ones this call touches) versus Patch's
-	// narrower one, since anything changed on the server between this GET and
-	// the Update below would be silently reverted to the value captured here.
-	// Every other case (name, recovery, Employee Information, manager) keeps
-	// the narrower, cheaper Patch.
+	// send the result via Update instead of Patch. The conditional If-Match
+	// below protects this read-modify-write from concurrent profile changes.
+	// Every other case keeps the narrower Patch.
 	usePut := externalIDsWillShrink
 	var update *admin.User
 	if usePut {
-		// Logged so a wider-race-window write (see the tradeoff above) can be
-		// correlated after the fact against a reported issue.
-		ctxzap.Extract(ctx).Debug("google-workspace: applyUserProfilePatch: employee_id shrinks ExternalIds, "+
-			"widening the update to a full-object Update (PUT) - concurrent changes to this user made "+
-			"between this call's GET and its write may be silently reverted",
-			zap.String(argUserID, userId))
 		full := *current
 		update = &full
 	} else {
@@ -1151,7 +1058,7 @@ func applyUserProfilePatch(
 		// Empty string is a legitimate "clear" request; only validate non-empty values.
 		if *patch.recoveryEmail != "" {
 			if _, err := mail.ParseAddress(*patch.recoveryEmail); err != nil {
-				return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+				return nil, nil, skippedFields, uhttp.WrapErrors(codes.InvalidArgument,
 					fmt.Sprintf("google-workspace: invalid recovery_email: %s", *patch.recoveryEmail), err)
 			}
 		}
@@ -1174,7 +1081,7 @@ func applyUserProfilePatch(
 	if setOrg {
 		orgs, err := extractFromInterface[*admin.UserOrganization](current.Organizations)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
+			return nil, nil, skippedFields, fmt.Errorf("google-workspace: failed to parse organizations: %w", err)
 		}
 		updatedOrgs, changed := buildUpdatedOrganizations(orgs, patch)
 		// Only assign update.Organizations when something actually changed:
@@ -1206,7 +1113,7 @@ func applyUserProfilePatch(
 	if setManagerEmail {
 		currentRelations, err := extractFromInterface[*admin.UserRelation](current.Relations)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse relations: %w", err)
+			return nil, nil, skippedFields, fmt.Errorf("google-workspace: failed to parse relations: %w", err)
 		}
 		update.Relations = buildManagerRelations(currentRelations, *patch.managerEmail)
 		forceSend = append(forceSend, "Relations")
@@ -1243,13 +1150,20 @@ func applyUserProfilePatch(
 			// WAS provided here, it just couldn't be applied - leading with
 			// "requires at least one updatable field" while also naming a
 			// provided-but-rejected field reads as self-contradictory.
-			return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
+			return nil, nil, skippedFields, uhttp.WrapErrors(codes.InvalidArgument,
 				fmt.Sprintf("google-workspace: no updatable field was applied - the only field(s) provided were skipped: %s", strings.Join(skippedFields, "; ")))
 		}
-		return nil, nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
+		return nil, nil, skippedFields, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: profile update requires at least one updatable field")
 	}
 
 	update.ForceSendFields = forceSend
+	if needCurrent && (len(forceSend) != 0 || customSchemasSet) {
+		if current.Etag == "" {
+			return nil, nil, skippedFields, uhttp.WrapErrors(codes.FailedPrecondition,
+				"google-workspace: profile read did not include an ETag; refusing an unconditional read-modify-write")
+		}
+		update.Etag = current.Etag
+	}
 
 	var updatedUser *admin.User
 	var err error
@@ -1271,7 +1185,7 @@ func applyUserProfilePatch(
 		})
 	}
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, skippedFields, err
 	}
 
 	updatedFields := append([]string{}, forceSend...)
@@ -1564,7 +1478,8 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 
 	_, updatedFields, skippedFields, err := applyUserProfilePatch(ctx, client, userId, patch)
 	if err != nil {
-		return nil, nil, err
+		return actions.NewReturnValues(false,
+			actions.NewStringReturnField(fieldSkippedFields, strings.Join(skippedFields, ", "))), nil, err
 	}
 
 	l.Debug("google-workspace: update_user: updated user profile",

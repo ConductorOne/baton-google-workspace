@@ -24,6 +24,7 @@ const testUserEmail = "user@example.com"
 // safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
 type safeUserResponse struct {
 	Id            string                             `json:"id,omitempty"`
+	Etag          string                             `json:"etag,omitempty"`
 	PrimaryEmail  string                             `json:"primaryEmail,omitempty"`
 	Name          *directoryAdmin.UserName           `json:"name,omitempty"`
 	RecoveryEmail string                             `json:"recoveryEmail,omitempty"`
@@ -123,7 +124,7 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	rep := newReportsService(t, server.URL, server.Client())
 
 	client := &gwclient.GoogleWorkspaceClient{
-		UserService:   dir,
+		UserService:   &gwclient.UserService{Service: dir, HTTPClient: server.Client()},
 		GroupService:  dir,
 		ReportService: rep,
 	}

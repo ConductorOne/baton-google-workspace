@@ -1,0 +1,129 @@
+package connector
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/stretchr/testify/require"
+	groupssettings "google.golang.org/api/groupssettings/v1"
+	"google.golang.org/api/option"
+	"google.golang.org/protobuf/types/known/structpb"
+)
+
+func TestGroupPrivacyReadbackRejectsProviderMismatch(t *testing.T) {
+	var patch map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/admin/directory/v1/groups/group-id" {
+			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+			return
+		}
+		if r.Method == http.MethodPatch {
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&patch))
+		}
+		// Provider accepts the patch but the independent read does not confirm it.
+		_, _ = w.Write([]byte(`{"email":"team@example.com","whoCanViewGroup":"ANYONE_CAN_VIEW","includeInGlobalAddressList":"true"}`))
+	}))
+	defer server.Close()
+	settings, err := groupssettings.NewService(context.Background(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
+	require.NoError(t, err)
+	o := &groupResourceType{resourceType: resourceTypeGroup, client: &gwclient.GoogleWorkspaceClient{
+		GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings,
+	}}
+	args, err := structpb.NewStruct(map[string]any{"group_key": "group-id", "who_can_view_group": "ALL_MEMBERS_CAN_VIEW", "include_in_global_address_list": false})
+	require.NoError(t, err)
+	result, _, err := o.modifyGroupSettingsActionHandler(context.Background(), args)
+	require.Error(t, err)
+	require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
+	require.Equal(t, map[string]any{"whoCanViewGroup": "ALL_MEMBERS_CAN_VIEW", "includeInGlobalAddressList": "false"}, patch)
+	require.Equal(t, "ALL_MEMBERS_CAN_VIEW", result.GetFields()["new_who_can_view_group"].GetStringValue())
+	require.Contains(t, result.AsMap(), fieldResource, "retain the observed group alongside the failed verification")
+}
+
+func TestGroupGrantConflictUsesExactMemberRead(t *testing.T) {
+	paths := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":409,"message":"already exists"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"wrong-user","type":"USER"}`))
+	}))
+	defer server.Close()
+	o := &groupResourceType{client: &gwclient.GoogleWorkspaceClient{GroupMemberProvisioningService: newTestDirectoryService(t, server.URL, server.Client())}}
+	grants, _, err := o.Grant(
+		context.Background(),
+		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "expected-user"}},
+		&v2.Entitlement{Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}}},
+	)
+	require.Error(t, err)
+	require.Empty(t, grants)
+	require.Equal(t, []string{"POST /admin/directory/v1/groups/group-id/members", "GET /admin/directory/v1/groups/group-id/members/expected-user"}, paths)
+}
+
+func TestGroupPrivacyPreservesOmittedSettingsAndQualifiesDeniedRead(t *testing.T) {
+	current := map[string]any{
+		"email": "team@example.com", "allowExternalMembers": "true",
+		"whoCanViewGroup": "ANYONE_CAN_VIEW", "whoCanViewMembership": "ALL_IN_DOMAIN_CAN_VIEW",
+		"whoCanDiscoverGroup": "ANYONE_CAN_DISCOVER", "includeInGlobalAddressList": "true",
+		"whoCanJoin": "ANYONE_CAN_JOIN",
+	}
+	deny := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/admin/directory/v1/groups/group-id" {
+			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+			return
+		}
+		if deny {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":403,"message":"permission denied"}}`))
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var patch map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&patch))
+			for key, value := range patch {
+				current[key] = value
+			}
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(current))
+	}))
+	defer server.Close()
+	settings, err := groupssettings.NewService(context.Background(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
+	require.NoError(t, err)
+	o := &groupResourceType{resourceType: resourceTypeGroup, client: &gwclient.GoogleWorkspaceClient{
+		GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings,
+	}}
+	args, err := structpb.NewStruct(map[string]any{
+		"group_key": "group-id", "who_can_view_group": "ALL_MEMBERS_CAN_VIEW",
+		"who_can_view_membership": "ALL_MANAGERS_CAN_VIEW", "who_can_discover_group": "ALL_MEMBERS_CAN_DISCOVER",
+		"include_in_global_address_list": false, "who_can_join": "INVITED_CAN_JOIN",
+	})
+	require.NoError(t, err)
+	result, _, err := o.modifyGroupSettingsActionHandler(context.Background(), args)
+	require.NoError(t, err)
+	require.True(t, result.GetFields()[fieldSuccess].GetBoolValue())
+	require.Equal(t, "true", current["allowExternalMembers"], "omitted setting must not be reset")
+	id := &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}
+	group, _, err := o.Get(context.Background(), id, nil)
+	require.NoError(t, err)
+	profile := group.GetProfile().AsMap()
+	require.Equal(t, "observed", profile["group_settings_status"])
+	require.Equal(t, "INVITED_CAN_JOIN", profile["group_settings"].(map[string]any)["who_can_join"])
+	require.Equal(t, "false", profile["group_settings"].(map[string]any)["include_in_global_address_list"])
+	deny = true
+	group, _, err = o.Get(context.Background(), id, nil)
+	require.NoError(t, err, "optional settings permission must not hide the directory group")
+	profile = group.GetProfile().AsMap()
+	require.Equal(t, "unknown", profile["group_settings_status"])
+	require.NotContains(t, profile, "group_settings")
+}

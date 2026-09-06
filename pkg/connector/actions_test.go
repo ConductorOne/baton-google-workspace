@@ -177,9 +177,10 @@ func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *data
 	}
 	c.client = &gwclient.GoogleWorkspaceClient{}
 	if dir != nil {
-		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = dir
-		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = dir
-		c.client.UserService = dir
+		service := &gwclient.UserService{Service: dir, HTTPClient: http.DefaultClient}
+		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = service
+		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = service
+		c.client.UserService = service
 		c.client.UserProvisioningService = dir
 		c.client.GroupService = dir
 		c.client.GroupProvisioningService = dir

@@ -163,7 +163,11 @@ func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.S
 }
 
 func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*directoryAdmin.Service, error) {
-	return getService(ctx, c, scope, directoryAdmin.NewService)
+	service, err := getService(ctx, c, scope, gwclient.NewUserService)
+	if err != nil {
+		return nil, err
+	}
+	return service.Service, nil
 }
 
 func (c *GoogleWorkspace) getGroupsSettingsService(ctx context.Context) (*groupssettings.Service, error) {
@@ -280,12 +284,28 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 				"changePasswordAtNextLogin": {
 					DisplayName: "Change Password at Next Login",
 					Required:    false,
-					Description: "If true, the user will be required to change their password at next login. A random password is always generated.",
+					Description: "Require a password change at the next direct Google login. Does not enforce a password change through a third-party identity provider.",
 					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
 						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
 					},
 					Placeholder: "false",
 					Order:       4,
+				},
+				"suspended": {
+					DisplayName: "Suspended",
+					Description: "Create the account suspended in the initial request, without an active interval.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
+						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
+					},
+					Order: 5,
+				},
+				profileKeyOrgUnitPath: {
+					DisplayName: "Organizational Unit Path",
+					Description: "Absolute organizational unit path for the initial account placement, such as /Prehires. Omit to use Google's default.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Order: 6,
 				},
 			},
 		},
@@ -379,7 +399,7 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 		return nil, err
 	}
 
-	client.UserService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
+	client.UserService, err = getService(ctx, c, directoryAdmin.AdminDirectoryUserReadonlyScope, gwclient.NewUserService)
 	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization", &skippedServices); err != nil {
 		return nil, err
 	}

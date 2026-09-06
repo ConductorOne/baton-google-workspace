@@ -126,7 +126,7 @@ func newTestUserResourceType(t *testing.T, server *httptest.Server) *userResourc
 	return &userResourceType{
 		resourceType: resourceTypeUser,
 		client: &gwclient.GoogleWorkspaceClient{
-			UserService:             dir,
+			UserService:             &gwclient.UserService{Service: dir, HTTPClient: server.Client()},
 			UserProvisioningService: dir,
 		},
 		customerId: "test-customer",
@@ -266,7 +266,7 @@ func newTestUserResourceTypeWithSecurity(t *testing.T, server *httptest.Server) 
 	return &userResourceType{
 		resourceType: resourceTypeUser,
 		client: &gwclient.GoogleWorkspaceClient{
-			UserService:             dir,
+			UserService:             &gwclient.UserService{Service: dir, HTTPClient: server.Client()},
 			UserProvisioningService: dir,
 			UserSecurityService:     securityDir,
 		},

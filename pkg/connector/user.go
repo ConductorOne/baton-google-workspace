@@ -14,9 +14,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -62,7 +63,6 @@ func (o *userResourceType) userStatus(user *admin.User) (v2.UserTrait_Status_Sta
 }
 
 func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
-	l := ctxzap.Extract(ctx)
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(attrs.PageToken.Token)
 	if err != nil {
@@ -84,14 +84,13 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
 	for _, user := range users.Users {
-		if user.Id == "" {
-			l.Error("user had no id", zap.String("email", user.PrimaryEmail))
-			continue
-		}
 
-		userResource, err := o.userResource(ctx, user)
+		userResource, err := o.userResource(ctx, user.User)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to build user resource in List: %w", err)
+		}
+		if err := addUserState(userResource, user.State); err != nil {
+			return nil, nil, err
 		}
 		rv = append(rv, userResource)
 	}
@@ -250,8 +249,6 @@ func extractFromInterface[T any](data interface{}) ([]T, error) {
 }
 
 func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user: %w", err)
@@ -271,27 +268,34 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 			}
 		}
 		if !found {
-			l.Info("user not in domain", zap.String("email", user.PrimaryEmail), zap.String("domain", o.domain))
-			return nil, nil, nil
+			return nil, nil, status.Error(codes.PermissionDenied, "google-workspace: user is excluded by the configured domain filter")
 		}
 	} else if o.customerId != "" {
 		if user.CustomerId != o.customerId {
-			l.Info("user not in customer account", zap.String("email", user.PrimaryEmail), zap.String("customer_id", user.CustomerId))
-			return nil, nil, nil
+			return nil, nil, status.Error(codes.PermissionDenied, "google-workspace: user is excluded by the configured customer filter")
 		}
 	}
 
-	if user.Id == "" {
-		l.Error("user had no id", zap.String("email", user.PrimaryEmail))
-		return nil, nil, nil
-	}
-
-	userResource, err := o.userResource(ctx, user)
+	userResource, err := o.userResource(ctx, user.User)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build user resource in Get: %w", err)
 	}
+	if err := addUserState(userResource, user.State); err != nil {
+		return nil, nil, err
+	}
 
 	return userResource, nil, nil
+}
+
+func addUserState(resource *v2.Resource, state map[string]any) error {
+	value, err := structpb.NewStruct(state)
+	if err != nil {
+		return fmt.Errorf("google-workspace: failed to encode observed user state: %w", err)
+	}
+	// Set after custom-schema flattening so a custom profile cannot impersonate
+	// provider-observed security state.
+	resource.Profile.Fields["google_user_state"] = structpb.NewStructValue(value)
+	return nil
 }
 
 func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (*v2.Resource, error) {
@@ -429,8 +433,12 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 		},
 	))
 
+	displayName := user.PrimaryEmail
+	if user.Name != nil && user.Name.FullName != "" {
+		displayName = user.Name.FullName
+	}
 	userResource, err := rs.NewUserResource(
-		user.Name.FullName,
+		displayName,
 		resourceTypeUser,
 		user.Id,
 		traitOpts,
@@ -445,6 +453,7 @@ func (o *userResourceType) CreateAccountCapabilityDetails(
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
 		},
 		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 	}, nil, nil
@@ -457,7 +466,7 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	annotations.Annotations,
 	error,
 ) {
-	pMap := accountInfo.Profile.AsMap()
+	pMap := accountInfo.GetProfile().AsMap()
 	email, ok := pMap["email"].(string)
 	if !ok || email == "" {
 		return nil, nil, nil, fmt.Errorf("email not found in profile")
@@ -473,9 +482,28 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		return nil, nil, nil, fmt.Errorf("family_name not found in profile")
 	}
 
-	changePasswordAtNextLogin, ok := pMap["changePasswordAtNextLogin"].(bool)
-	if !ok {
-		changePasswordAtNextLogin = false
+	changePasswordAtNextLogin := credentialOptions.GetForceChangeAtNextLogin()
+	if value, present := pMap["changePasswordAtNextLogin"]; present && value != nil {
+		requested, valid := value.(bool)
+		if !valid {
+			return nil, nil, nil, fmt.Errorf("google-workspace: changePasswordAtNextLogin must be a boolean")
+		}
+		changePasswordAtNextLogin = changePasswordAtNextLogin || requested
+	}
+	suspended := false
+	if value, present := pMap["suspended"]; present && value != nil {
+		var valid bool
+		suspended, valid = value.(bool)
+		if !valid {
+			return nil, nil, nil, fmt.Errorf("google-workspace: suspended must be a boolean")
+		}
+	}
+	orgUnitPath, err := optionalStringField(accountInfo.GetProfile(), profileKeyOrgUnitPath)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("google-workspace: invalid org_unit_path: %w", err)
+	}
+	if orgUnitPath != nil && !strings.HasPrefix(*orgUnitPath, "/") {
+		return nil, nil, nil, fmt.Errorf("google-workspace: org_unit_path must be an absolute organizational unit path")
 	}
 
 	user := &admin.User{
@@ -485,6 +513,10 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 			FamilyName: familyName,
 		},
 		ChangePasswordAtNextLogin: changePasswordAtNextLogin,
+		Suspended:                 suspended,
+	}
+	if orgUnitPath != nil {
+		user.OrgUnitPath = *orgUnitPath
 	}
 
 	if credentialOptions == nil {
@@ -495,33 +527,30 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		return nil, nil, nil, err
 	}
 
-	var password string
-	var plaintextData []*v2.PlaintextData
-	var err error
-
-	if credentialOptions.GetRandomPassword() != nil || credentialOptions.GetPlaintextPassword() != nil {
-		password, err = crypto.GeneratePassword(ctx, credentialOptions)
-	} else {
-		password, err = crypto.GenerateRandomPassword(&v2.LocalCredentialOptions_RandomPassword{
-			Length: 16,
-		})
-	}
-
+	password, err := crypto.GeneratePassword(ctx, credentialOptions)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to generate password: %w", err)
+		return nil, nil, nil, fmt.Errorf("google-workspace: failed to prepare password: %w", err)
 	}
-
-	plaintextData = append(plaintextData, &v2.PlaintextData{
-		Name:        "password",
-		Description: "Generated password for the new account",
-		Bytes:       []byte(password),
-	})
+	if password == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: password must not be empty")
+	}
+	var plaintextData []*v2.PlaintextData
+	if credentialOptions.GetRandomPassword() != nil {
+		plaintextData = []*v2.PlaintextData{{
+			Name:        "password",
+			Description: "Generated password for the new account",
+			Bytes:       []byte(password),
+		}}
+	}
 
 	user.Password = password
 
 	user, err = o.client.InsertUser(ctx, user)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: failed to insert user: %w", err)
+	}
+	if user == nil || user.Id == "" {
+		return nil, nil, nil, fmt.Errorf("google-workspace: user creation returned no provider identity; outcome unknown")
 	}
 
 	userResource, err := o.userResource(ctx, user)

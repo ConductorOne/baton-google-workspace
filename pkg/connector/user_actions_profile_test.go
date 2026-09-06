@@ -74,12 +74,16 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if u.Etag == "" {
+			u.Etag = `"fixture-version"`
+		}
 
 		switch r.Method {
 		case http.MethodGet:
 			state.getCount++
 			_ = json.NewEncoder(w).Encode(safeUserResponse{
 				Id:            u.Id,
+				Etag:          u.Etag,
 				PrimaryEmail:  u.PrimaryEmail,
 				Name:          u.Name,
 				RecoveryEmail: u.RecoveryEmail,
@@ -89,6 +93,10 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 				Relations:     extractRelations(u),
 			})
 		case http.MethodPatch, http.MethodPut:
+			if match := r.Header.Get("If-Match"); match != "" && match != u.Etag {
+				http.Error(w, "stale user version", http.StatusPreconditionFailed)
+				return
+			}
 			state.patchCount++
 			state.lastMethod = r.Method
 			raw, _ := io.ReadAll(r.Body)
@@ -128,6 +136,7 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(safeUserResponse{
 				Id:            u.Id,
+				Etag:          u.Etag,
 				PrimaryEmail:  u.PrimaryEmail,
 				Name:          u.Name,
 				RecoveryEmail: u.RecoveryEmail,

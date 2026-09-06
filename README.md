@@ -77,10 +77,15 @@ baton resources
 
 | Operation                     | Description                                                          |
 | ----------------------------- | ------------------------------------------------------------------- |
-| Create/Delete user            | Directory API `users.insert` / `users.delete`                       |
+| Create/Delete user            | Directory API `users.insert` / `users.delete`; creation accepts initial `suspended` and `org_unit_path` |
 | Delete group                  | Directory API `groups.delete` (group creation is the `create_group` connector action, below) |
 | Grant/Revoke group membership | Directory API `members.insert` / `members.delete`                   |
 | Grant/Revoke role assignment  | Directory API `roleAssignments.insert` / `roleAssignments.delete`   |
+| Rotate user password          | SDK credential interface with encrypted supplied or generated passwords and force-change-at-next-login handling |
+
+Creation and rotation use protected SDK credential inputs/results, never ordinary password action arguments. Configure encrypted result recipients before requesting generated credentials. A next-login password requirement applies to direct Google authentication, not third-party SSO.
+
+User `Get` and sync pages expose presence-aware `google_user_state` metadata: separate suspension/archive flags, aliases, password-change requirement, mailbox-setup state, and observation time. Omitted fields are unknown. Targeted group `Get` optionally exposes `group_settings` with an observed/unsupported/unknown status; normal listing does not fetch settings per group.
 
 ## Connector actions
 
@@ -97,18 +102,22 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | `change_user_primary_email` | `resource_id`, `new_primary_email` | Change a user's primary email address |
 | `offboarding_profile_update` | `user_id`, `archive_account` (bool) | Remove from GAL, clear recovery details, delete addresses/phones, optionally archive |
 | `sign_out_user` | `user_id` | Sign the user out of all sessions and reset sign-in cookies |
-| `delete_all_oauth_tokens` | `user_id` | Revoke all third-party app authorizations |
-| `delete_all_application_passwords` | `user_id` | Delete all app-specific passwords |
+| `delete_all_oauth_tokens` | `user_id` | Revoke authorizations and enumerate remaining entries; retain failed/skipped IDs and incomplete-read evidence |
+| `delete_all_application_passwords` | `user_id` | Delete app-specific passwords and enumerate remaining entries; partial cleanup remains an error |
 | `transfer_user_drive_files` | `resource_id`, `target_resource_id`, `privacy_levels` | Transfer Google Drive ownership to another user |
 | `transfer_user_calendar` | `resource_id`, `target_resource_id`, `release_resources` | Transfer Google Calendar data to another user |
 | `create_group` | `email`, `name`, `description` | Create a new Google Group |
-| `modify_group_settings` | `group_key`, plus settings flags | Update settings of an existing group |
+| `modify_group_settings` | `group_key`, plus settings flags | Update supplied privacy/membership/discovery/join/GAL settings and return an independently observed group resource |
 
 > **Custom schemas:** `update_user_profile` and `update_user` can write values into custom-schema attributes (Directory API `customSchemas`). The connector only sets values — the schema **definitions must already exist** in the tenant (the connector does not request the `admin.directory.userschema` scope).
 
 > **Job title round-trip:** the synced user profile exposes the job title under both `title` and `job_title` for backward compatibility. `update_user`'s `user_profile` JSON object accepts any of `job_title`, `jobTitle`, or `title` as the source key. `update_user_profile` has a fixed schema and only exposes `job_title` as an argument name — pass the value under that key.
 
 > **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
+
+> **Read-modify-write safety:** profile changes that preserve existing names or array entries send the observed ETag as `If-Match`. A missing version or concurrent change fails rather than overwriting unrelated changes. `updated_fields` describes requested changes, not independently verified state.
+
+> **Credential cleanup evidence:** check `inventory_complete` before interpreting `remaining_ids`. Failed security actions retain their per-item results. Empty results after a failed enumeration are not absence, and login-derived application grants are not a live credential inventory.
 
 # Credentials Setup
 

@@ -25,7 +25,7 @@ func errServiceNotAvailable(service string) error {
 // callers are responsible for nil-checking before use.
 type GoogleWorkspaceClient struct {
 	// Directory – users
-	UserService             *directoryAdmin.Service
+	UserService             *UserService
 	UserProvisioningService *directoryAdmin.Service
 	UserSecurityService     *directoryAdmin.Service
 
@@ -91,44 +91,9 @@ func (c *GoogleWorkspaceClient) RequireUserProvisioning() error {
 // data while dropping the unused fields, reducing per-page payload size by
 // roughly 80–90% for attribute-heavy directories.
 const listUsersFields googleapi.Field = "nextPageToken,users(id,primaryEmail,name,thumbnailPhotoUrl," +
-	"archived,suspended,suspensionReason,deletionTime,isEnrolledIn2Sv," +
+	"archived,suspended,suspensionReason,deletionTime,isEnrolledIn2Sv,aliases,nonEditableAliases,changePasswordAtNextLogin,isMailboxSetup," +
 	"creationTime,lastLoginTime,orgUnitPath,includeInGlobalAddressList," +
 	"customerId,relations,organizations,customSchemas,posixAccounts,externalIds)"
-
-func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerId, domain, pageToken string) (*directoryAdmin.Users, error) {
-	if c.UserService == nil {
-		return nil, errServiceNotAvailable("user service")
-	}
-	r := c.UserService.Users.List().
-		OrderBy("email").
-		Projection("full").
-		MaxResults(200).
-		Fields(listUsersFields)
-	if domain != "" {
-		r = r.Domain(domain)
-	} else {
-		r = r.Customer(customerId)
-	}
-	if pageToken != "" {
-		r = r.PageToken(pageToken)
-	}
-	resp, err := r.Context(ctx).Do()
-	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, "failed to list users")
-	}
-	return resp, nil
-}
-
-func (c *GoogleWorkspaceClient) GetUser(ctx context.Context, userId string) (*directoryAdmin.User, error) {
-	if c.UserService == nil {
-		return nil, errServiceNotAvailable("user service")
-	}
-	resp, err := c.UserService.Users.Get(userId).Projection("full").Context(ctx).Do()
-	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user: %s", userId))
-	}
-	return resp, nil
-}
 
 // ---------------------------------------------------------------------------
 // Users – write (requires UserProvisioningService)
@@ -175,10 +140,9 @@ func (c *GoogleWorkspaceClient) InsertUser(ctx context.Context, user *directoryA
 // set - but only when given the genuinely complete current object; a sparse
 // object sent via Update has the same problem as Patch. Callers relying on
 // that shrink-to-empty guarantee must pass the full current user (fields they
-// don't intend to change included) rather than a partial one, and should weigh
-// the wider read-modify-write race window this implies: anything else on the
-// user that changes between the caller's GET and this call is silently
-// overwritten back to the value captured at GET time. Callers only touching
+// don't intend to change included). Read-modify-write callers must supply the
+// observed ETag; it is sent as If-Match so a concurrent change rejects the write.
+// Callers only touching
 // scalar fields (as most existing call sites in pkg/connector do - suspend,
 // primary email, org unit, manager relation, etc.) are unaffected and can keep
 // sending a sparse object.
@@ -186,7 +150,11 @@ func (c *GoogleWorkspaceClient) UpdateUser(ctx context.Context, userId string, u
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Update(userId, user).Context(ctx).Do()
+	call := c.UserProvisioningService.Users.Update(userId, user).Context(ctx)
+	if user.Etag != "" {
+		call.Header().Set("If-Match", user.Etag)
+	}
+	resp, err := call.Do()
 	if err != nil {
 		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user: %s", userId))
 	}
@@ -211,7 +179,11 @@ func (c *GoogleWorkspaceClient) PatchUser(ctx context.Context, userId string, us
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Patch(userId, user).Context(ctx).Do()
+	call := c.UserProvisioningService.Users.Patch(userId, user).Context(ctx)
+	if user.Etag != "" {
+		call.Header().Set("If-Match", user.Etag)
+	}
+	resp, err := call.Do()
 	if err != nil {
 		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to patch user: %s", userId))
 	}

@@ -73,7 +73,7 @@ var (
 		Name:        "modify_group_settings",
 		DisplayName: "Modify Group Settings",
 		Description: "Update settings for an existing Google Group.",
-		Arguments: []*config.Field{
+		Arguments: append([]*config.Field{
 			{
 				Name:        "group_key",
 				DisplayName: "Group Key",
@@ -84,14 +84,14 @@ var (
 			{
 				Name:        "allow_external_members",
 				DisplayName: "Allow External Members",
-				Description: "If true, allows external members to join the group. Defaults to false.",
+				Description: "If provided, controls whether external users can join. Omit to preserve the current setting.",
 				Field:       &config.Field_BoolField{},
 				IsRequired:  false,
 			},
 			{
 				Name:        "allow_web_posting",
 				DisplayName: "Allow Web Posting",
-				Description: "If true, allows posting via email from external (non-member) addresses. Defaults to false.",
+				Description: "If provided, allows group members to post through the web forum. This does not control external-sender email permission.",
 				Field:       &config.Field_BoolField{},
 				IsRequired:  false,
 			},
@@ -133,8 +133,8 @@ var (
 				},
 				IsRequired: false,
 			},
-		},
-		ReturnTypes: []*config.Field{
+		}, groupPrivacyFields...),
+		ReturnTypes: append([]*config.Field{
 			{
 				Name:        fieldSuccess,
 				DisplayName: displaySuccess,
@@ -201,7 +201,7 @@ var (
 				Description: "New value of message_moderation_level setting.",
 				Field:       &config.Field_StringField{},
 			},
-		},
+		}, groupPrivacyReturnFields()...),
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
 	}
 )
@@ -310,6 +310,7 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 	messageModerationLevel string,
 	hasAllowExternal bool,
 	hasAllowWebPosting bool,
+	additional map[string]string,
 ) (bool, map[string]string, map[string]string, error) {
 	previousSettings := make(map[string]string)
 	newSettings := make(map[string]string)
@@ -320,6 +321,9 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 		return false, nil, nil, err
 	}
 
+	if currentSettings == nil {
+		return false, nil, nil, fmt.Errorf("google-workspace: group settings read returned no response")
+	}
 	// Check if any updates are needed
 	needsUpdate := false
 	updatedSettings := &groupssettings.Groups{}
@@ -385,6 +389,27 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 			updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, result.ForceSendField)
 		}
 	}
+	for _, field := range []struct {
+		name, wireName, current string
+		target                  *string
+	}{
+		{"who_can_view_group", "WhoCanViewGroup", currentSettings.WhoCanViewGroup, &updatedSettings.WhoCanViewGroup},
+		{"who_can_view_membership", "WhoCanViewMembership", currentSettings.WhoCanViewMembership, &updatedSettings.WhoCanViewMembership},
+		{"who_can_discover_group", "WhoCanDiscoverGroup", currentSettings.WhoCanDiscoverGroup, &updatedSettings.WhoCanDiscoverGroup},
+		{"include_in_global_address_list", "IncludeInGlobalAddressList", currentSettings.IncludeInGlobalAddressList, &updatedSettings.IncludeInGlobalAddressList},
+		{"who_can_join", "WhoCanJoin", currentSettings.WhoCanJoin, &updatedSettings.WhoCanJoin},
+	} {
+		if requested, present := additional[field.name]; present {
+			result := applyStringGroupSetting(field.current, requested, field.wireName)
+			previousSettings[field.name] = result.PreviousValue
+			newSettings[field.name] = result.NewValue
+			if result.NeedsUpdate {
+				needsUpdate = true
+				*field.target = result.NewValue
+				updatedSettings.ForceSendFields = append(updatedSettings.ForceSendFields, result.ForceSendField)
+			}
+		}
+	}
 
 	// If no updates needed, return success (idempotent)
 	if !needsUpdate {
@@ -403,7 +428,7 @@ func (o *groupResourceType) applyGroupSettingsWithTracking(
 // modifyGroupSettingsActionHandler updates settings for an existing Google Group (idempotent: checks current settings before updating).
 func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	// Extract and validate group_key parameter
-	groupKeyValue, exists := args.Fields["group_key"]
+	groupKeyValue, exists := args.GetFields()["group_key"]
 	if !exists || groupKeyValue == nil {
 		return nil, nil, fmt.Errorf("missing group_key")
 	}
@@ -418,13 +443,42 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 	}
 
 	// Extract optional settings parameters
+	for _, name := range []string{"allow_external_members", "allow_web_posting"} {
+		value := args.GetFields()[name]
+		if value == nil {
+			continue
+		}
+		switch value.GetKind().(type) {
+		case *structpb.Value_NullValue, *structpb.Value_BoolValue:
+		default:
+			return nil, nil, fmt.Errorf("google-workspace: %s must be a boolean", name)
+		}
+	}
 	allowExternalMembers, hasAllowExternal := getBoolField(args, "allow_external_members")
 	allowWebPosting, hasAllowWebPosting := getBoolField(args, "allow_web_posting")
-	whoCanPostMessage := getStringField(args, "who_can_post_message")
-	messageModerationLevel := getStringField(args, "message_moderation_level")
+	var whoCanPostMessage, messageModerationLevel string
+	for _, field := range []struct {
+		name  string
+		value *string
+	}{
+		{"who_can_post_message", &whoCanPostMessage},
+		{"message_moderation_level", &messageModerationLevel},
+	} {
+		value, err := optionalStringField(args, field.name)
+		if err != nil {
+			return nil, nil, err
+		}
+		if value != nil {
+			*field.value = *value
+		}
+	}
+	additional, err := parseGroupPrivacy(args)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Check if at least one setting parameter is provided
-	if !hasAllowExternal && !hasAllowWebPosting && whoCanPostMessage == "" && messageModerationLevel == "" {
+	if !hasAllowExternal && !hasAllowWebPosting && whoCanPostMessage == "" && messageModerationLevel == "" && len(additional) == 0 {
 		return nil, nil, fmt.Errorf("at least one settings parameter must be provided")
 	}
 
@@ -470,6 +524,9 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 		}
 		return nil, nil, err
 	}
+	if group == nil || group.Id == "" || group.Email == "" {
+		return nil, nil, fmt.Errorf("google-workspace: group lookup returned incomplete identity")
+	}
 
 	// Apply settings with tracking
 	settingsUpdated, previousSettings, newSettings, err := o.applyGroupSettingsWithTracking(
@@ -481,6 +538,7 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 		messageModerationLevel,
 		hasAllowExternal,
 		hasAllowWebPosting,
+		additional,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to update group settings: %w", err)
@@ -499,6 +557,11 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 		"allow_web_posting",
 		"who_can_post_message",
 		"message_moderation_level",
+		"who_can_view_group",
+		"who_can_view_membership",
+		"who_can_discover_group",
+		"include_in_global_address_list",
+		"who_can_join",
 	}
 
 	for _, settingName := range settingNames {
@@ -509,6 +572,35 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 			response.Fields["new_"+settingName] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
 		}
 	}
+	observed, err := o.client.GetGroupSettings(ctx, group.Email)
+	if err != nil {
+		response.Fields[fieldSuccess] = structpb.NewBoolValue(false)
+		return &response, nil, fmt.Errorf("google-workspace: settings mutation acknowledged but readback failed: %w", err)
+	}
+	resource, err := groupToResource(ctx, group)
+	response.Fields[fieldSuccess] = structpb.NewBoolValue(false)
+	if err != nil {
+		return &response, nil, err
+	}
+	if observed == nil {
+		return &response, nil, fmt.Errorf("google-workspace: settings readback returned no response")
+	}
+	if err := addGroupSettings(resource, observed, "observed"); err != nil {
+		return &response, nil, err
+	}
+	resourceResult, err := actions.NewResourceReturnField(fieldResource, resource)
+	if err != nil {
+		return &response, nil, err
+	}
+	response.Fields[resourceResult.Key] = resourceResult.Value
+	actual := groupSettingsProfile(observed)
+	for name, requested := range newSettings {
+		if actual[name] != requested {
+			response.Fields[fieldSuccess] = structpb.NewBoolValue(false)
+			return &response, nil, fmt.Errorf("google-workspace: requested %s was not observed after the settings update", name)
+		}
+	}
+	response.Fields[fieldSuccess] = structpb.NewBoolValue(true)
 
 	return &response, nil, nil
 }

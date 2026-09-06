@@ -219,6 +219,9 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 			return nil, nil, fmt.Errorf("google-workspace: failed to insert group member: %w", err)
 		}
 	}
+	if assignment == nil || assignment.Id == "" || assignment.Id != principal.GetId().GetResource() {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: membership response did not identify the requested principal; outcome unknown")
+	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, groupMemberEntitlement, principal.GetId())
 	grant.Id = assignment.Id
@@ -262,6 +265,30 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 	groupResource, err := groupToResource(ctx, g)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create group resource in Get: %w", err)
+	}
+	readStatus := "unsupported"
+	var settingsErr error
+	if o.client.GroupsSettingsService != nil {
+		settings, err := o.client.GetGroupSettings(ctx, g.Email)
+		settingsErr = err
+		switch {
+		case err != nil:
+			readStatus = "unknown"
+		case settings == nil:
+			readStatus = "unknown"
+		default:
+			readStatus = "observed"
+		}
+		if err := addGroupSettings(groupResource, settings, readStatus); err != nil {
+			return nil, nil, err
+		}
+	} else if err := addGroupSettings(groupResource, nil, readStatus); err != nil {
+		return nil, nil, err
+	}
+	// Optional enrichment does not make settings authorization a new prerequisite
+	// for reading the directory group. Unknown settings are never negative evidence.
+	if settingsErr != nil && status.Code(settingsErr) != codes.PermissionDenied && status.Code(settingsErr) != codes.NotFound {
+		return groupResource, nil, fmt.Errorf("google-workspace: failed to observe group settings: %w", settingsErr)
 	}
 
 	return groupResource, nil, nil
