@@ -84,7 +84,6 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
 	for _, user := range users.Users {
-
 		userResource, err := o.userResource(ctx, user.User)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to build user resource in List: %w", err)

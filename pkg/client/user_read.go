@@ -104,34 +104,41 @@ type UserSnapshots struct {
 	googleapi.ServerResponse
 }
 
-func (s *UserService) read(ctx context.Context, path string, query url.Values, target any) (*http.Response, error) {
+func (s *UserService) read(ctx context.Context, path string, query url.Values, target any) (googleapi.ServerResponse, error) {
+	var metadata googleapi.ServerResponse
 	base, err := url.Parse(s.BasePath)
 	if err != nil {
-		return nil, err
+		return metadata, err
 	}
 	endpoint, err := base.Parse(path)
 	if err != nil {
-		return nil, err
+		return metadata, err
 	}
+	query.Set("alt", "json")
+	query.Set("prettyPrint", "false")
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return nil, err
+		return metadata, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", googleapi.UserAgent)
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {
-		return resp, err
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return metadata, err
 	}
 	defer resp.Body.Close()
+	metadata = googleapi.ServerResponse{HTTPStatusCode: resp.StatusCode, Header: resp.Header}
 	if err := googleapi.CheckResponse(resp); err != nil {
-		return resp, err
+		return metadata, err
 	}
 	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
-		return resp, fmt.Errorf("google-workspace: failed to decode user response: %w", err)
+		return metadata, fmt.Errorf("google-workspace: failed to decode user response: %w", err)
 	}
-	return resp, nil
+	return metadata, nil
 }
 
 func (u *UserSnapshot) observed(at string) {
@@ -161,7 +168,7 @@ func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerID, domai
 	if err != nil {
 		return nil, wrapGoogleApiErrorWithContext(err, "failed to list users")
 	}
-	result.ServerResponse = googleapi.ServerResponse{HTTPStatusCode: resp.StatusCode, Header: resp.Header}
+	result.ServerResponse = resp
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, user := range result.Users {
 		if user == nil || user.User == nil || user.Id == "" {

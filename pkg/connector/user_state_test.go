@@ -23,11 +23,10 @@ func TestUserGetPreservesUnknownAndFalseState(t *testing.T) {
 				[]byte(`{"id":"user-id","customerId":"test-customer","primaryEmail":"user@example.com","suspended":false,"aliases":[],"customSchemas":{"spoof":{"google_user_state":"fake"}}}`),
 			)
 		} else {
-			_, _ = w.Write(
-				[]byte(
-					`{"id":"user-id","customerId":"test-customer","primaryEmail":"user@example.com","suspended":true,"archived":false,"isMailboxSetup":false,"changePasswordAtNextLogin":true,"aliases":["alias@example.com"]}`,
-				),
-			)
+			_, _ = w.Write([]byte(
+				`{"id":"user-id","customerId":"test-customer","primaryEmail":"user@example.com",` +
+					`"suspended":true,"archived":false,"isMailboxSetup":false,"changePasswordAtNextLogin":true,"aliases":["alias@example.com"]}`,
+			))
 		}
 	}))
 	defer server.Close()
