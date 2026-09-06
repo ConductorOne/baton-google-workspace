@@ -106,6 +106,8 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | `delete_all_application_passwords` | `user_id` | Delete app-specific passwords and enumerate remaining entries; partial cleanup remains an error |
 | `transfer_user_drive_files` | `resource_id`, `target_resource_id`, `privacy_levels` | Transfer Google Drive ownership to another user |
 | `transfer_user_calendar` | `resource_id`, `target_resource_id`, `release_resources` | Transfer Google Calendar data to another user |
+| `get_user_data_transfer` | `transfer_id`, expected `resource_id`, `target_resource_id`, `application_id`, and application parameters | Read a saved transfer; verify owners and complete parameters; return overall/per-application status without mutation |
+| `remove_user_alias` | `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` | Verify the exact owner and account preconditions; remove an editable alias and read back; never claim global address availability |
 | `create_group` | `email`, `name`, `description` | Create a new Google Group |
 | `modify_group_settings` | `group_key`, plus settings flags | Update supplied privacy/membership/discovery/join/GAL settings and return an independently observed group resource |
 
@@ -118,6 +120,8 @@ Connector actions are custom operations invoked on demand from C1 automations:
 > **Read-modify-write safety:** profile changes that preserve existing names or array entries send the observed ETag as `If-Match`. A missing version or concurrent change fails rather than overwriting unrelated changes. `updated_fields` describes requested changes, not independently verified state.
 
 > **Credential cleanup evidence:** check `inventory_complete` before interpreting `remaining_ids`. Failed security actions retain their per-item results. Empty results after a failed enumeration are not absence, and login-derived application grants are not a live credential inventory.
+
+> **Transfers:** submission is acknowledgement, not completion. Keep the provider transfer ID and approved parameters, then use `get_user_data_transfer`; never poll by replaying a mutation. Drive wire privacy values are uppercase and preserve the existing default of both private/shared. Calendar retain-resources uses the documented empty parameter set. Conflicting, unknown, or truncated discovery never triggers a new insert.
 
 # Credentials Setup
 

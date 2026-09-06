@@ -723,6 +723,9 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		return fmt.Errorf("google-workspace: failed to register transfer_user_calendar action: %w", err)
 	}
+	if err := registry.Register(ctx, getUserDataTransferActionSchema, c.getUserDataTransfer); err != nil {
+		return fmt.Errorf("google-workspace: failed to register get_user_data_transfer action: %w", err)
+	}
 	if err := registry.Register(ctx, updateUserGlobalActionSchema, c.updateUserActionHandler); err != nil {
 		return fmt.Errorf("google-workspace: failed to register update_user action: %w", err)
 	}

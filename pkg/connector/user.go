@@ -248,9 +248,15 @@ func extractFromInterface[T any](data interface{}) ([]T, error) {
 }
 
 func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	if resourceId.GetResource() == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "google-workspace: user resource ID is required")
+	}
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to get user: %w", err)
+	}
+	if user.Id != resourceId.GetResource() {
+		return nil, nil, status.Error(codes.FailedPrecondition, "google-workspace: provider returned a different user identity")
 	}
 
 	if o.domain != "" {

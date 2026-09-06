@@ -413,6 +413,9 @@ func (o *userResourceType) ResourceActions(ctx context.Context, registry actions
 	if err := o.registerMakeAdminAction(ctx, registry); err != nil {
 		return err
 	}
+	if err := o.registerRemoveUserAliasAction(ctx, registry); err != nil {
+		return err
+	}
 	return nil
 }
 

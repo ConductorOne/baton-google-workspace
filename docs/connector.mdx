@@ -41,6 +41,8 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | change_user_primary_email | `resource_id` (string, required)<br/>`new_primary_email` (string, required) | Updates a user's primary email address |
 | transfer_user_drive_files | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`privacy_levels` (string list, optional) | Transfers Google Drive ownership from one user to another. Set `privacy_levels` to `private`, `shared`, or both. Defaults to both. Pass it as a list, not a single string. |
 | transfer_user_calendar | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`release_resources` (boolean, optional) | Transfers Google Calendar data from one user to another |
+| get_user_data_transfer | `transfer_id`, `resource_id`, `target_resource_id`, `application_id` (strings, required)<br/>`privacy_levels` (required for Drive) or `release_resources` (required for Calendar) | Reads one saved provider operation and verifies its ID, owners, application, and complete parameters. Returns actual owner IDs, parameters, and overall/per-application statuses. Never starts a transfer. |
+| remove_user_alias | `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` (strings, required) | Removes an editable alias from the exact account after checking ownership and primary/customer preconditions. Missing users, another owner, and unreadable post-state are not successful absence. |
 | change_user_org_unit | `user_id` (string, required)<br/>`org_unit_path` (string, required) | Moves a user to a different organizational unit |
 | offboarding_profile_update | `user_id` (string, required)<br/>`archive_account` (boolean, optional) | Comprehensive offboarding: removes from GAL, clears recovery details, deletes addresses/phones, optionally archives |
 | sign_out_user | `user_id` (string, required) | Signs user out of all sessions and resets sign-in cookies |
@@ -80,6 +82,16 @@ Targeted group reads optionally expose `group_settings` and `group_settings_stat
 OAuth-token and application-password deletion results retain `deleted_ids`, `already_absent_ids`, `failed_ids`, `skipped_ids`, and `remaining_ids`, together with `inventory_complete` and `observed_at`. A blank skipped ID means an entry could not be identified. If final enumeration fails, an empty `remaining_ids` list is not evidence of absence. Failed actions retain these partial results; consumers must preserve both the error and the result. These are observations at that instant, not proof of global session invalidation. Application grants derived from login activity are not a current credential inventory.
 
 Group membership remains on the existing grant interface. Conflict reconciliation uses an exact member lookup, not a whole-group scan. The connector does not expose an independent point-grant action; callers must not replace unavailable bounded evidence with an incomplete membership enumeration.
+
+### Transfer and alias evidence
+
+Transfer submission is an acknowledgement, not completion. Retain the returned nonempty `transfer_id` and the approved source, recipient, application, and parameters. Use `get_user_data_transfer` for later observations; do not re-run a mutation to poll or blindly replay an unknown or completed attempt. Discovery of existing ongoing transfers is bounded to ten pages. Conflicting, ambiguous, or incomplete discovery fails before an insert. Historical completed records are not adopted as a new operation's result.
+
+Drive privacy inputs remain case-insensitive and default to both private and shared; the connector sends Google's uppercase `PRIVATE`/`SHARED` values. The read action requires an explicit privacy list so verification cannot silently expand the approved scope. Calendar verification requires an explicit `release_resources`; an empty parameter set represents the documented retain-resources default. `completed` is true only after the saved identity and parameters match and both overall and per-application statuses report completion. Failed, missing, and unknown statuses are not completion.
+
+Calendar Data Transfer covers future, non-private events in the source user's primary calendar with a guest or resource. It does not migrate all past, private, or secondary-calendar content. Operation completion is not independent per-file ownership or reservation-release evidence. Required broader postconditions need separate verification.
+
+Alias removal uses the dedicated alias collection before and after a deletion, not absence of an optional user-profile field. It rejects primary addresses, known non-editable aliases, account-precondition changes, and an alias resolving to a different user. `alias_present_after` is omitted when readback is unknown. An alias absent from the selected account is not proof that the address is globally available; another user, group, or namespace may own it.
 
 ## Before you begin
 

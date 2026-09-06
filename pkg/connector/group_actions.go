@@ -22,189 +22,185 @@ import (
 
 var _ connectorbuilder.ResourceActionProvider = (*groupResourceType)(nil)
 
-var (
-	createGroupActionSchema = &v2.BatonActionSchema{
-		Name:        "create_group",
-		DisplayName: "Create Group",
-		Description: "Creates a new Google Workspace group. The group email must be unique within the domain.",
-		Arguments: []*config.Field{
-			{
-				Name:        "email",
-				DisplayName: "Group Email",
-				Description: "The group's email address. Must be unique within the domain. Group email addresses are subject to the same character usage rules as usernames.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "name",
-				DisplayName: "Group Name",
-				Description: "The group's display name.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "description",
-				DisplayName: "Description",
-				Description: "An extended description to help users determine the purpose of a group. Maximum length is 4,096 characters.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  false,
-			},
+var createGroupActionSchema = &v2.BatonActionSchema{
+	Name:        "create_group",
+	DisplayName: "Create Group",
+	Description: "Creates a new Google Workspace group. The group email must be unique within the domain.",
+	Arguments: []*config.Field{
+		{
+			Name:        "email",
+			DisplayName: "Group Email",
+			Description: "The group's email address. Must be unique within the domain. Group email addresses are subject to the same character usage rules as usernames.",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
 		},
-		ReturnTypes: []*config.Field{
-			{
-				Name:        fieldSuccess,
-				DisplayName: displaySuccess,
-				Description: "Whether the group was created successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        fieldResource,
-				DisplayName: "Created Group",
-				Description: "The created group resource.",
-				Field:       &config.Field_ResourceField{},
-			},
+		{
+			Name:        "name",
+			DisplayName: "Group Name",
+			Description: "The group's display name.",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
 		},
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
-	}
-)
+		{
+			Name:        "description",
+			DisplayName: "Description",
+			Description: "An extended description to help users determine the purpose of a group. Maximum length is 4,096 characters.",
+			Field:       &config.Field_StringField{},
+			IsRequired:  false,
+		},
+	},
+	ReturnTypes: []*config.Field{
+		{
+			Name:        fieldSuccess,
+			DisplayName: displaySuccess,
+			Description: "Whether the group was created successfully.",
+			Field:       &config.Field_BoolField{},
+		},
+		{
+			Name:        fieldResource,
+			DisplayName: "Created Group",
+			Description: "The created group resource.",
+			Field:       &config.Field_ResourceField{},
+		},
+	},
+	ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
+}
 
-var (
-	modifyGroupSettingsActionSchema = &v2.BatonActionSchema{
-		Name:        "modify_group_settings",
-		DisplayName: "Modify Group Settings",
-		Description: "Update settings for an existing Google Group.",
-		Arguments: append([]*config.Field{
-			{
-				Name:        "group_key",
-				DisplayName: "Group Key",
-				Description: "Email address or unique ID of the group to modify.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "allow_external_members",
-				DisplayName: "Allow External Members",
-				Description: "If provided, controls whether external users can join. Omit to preserve the current setting.",
-				Field:       &config.Field_BoolField{},
-				IsRequired:  false,
-			},
-			{
-				Name:        "allow_web_posting",
-				DisplayName: "Allow Web Posting",
-				Description: "If provided, allows group members to post through the web forum. This does not control external-sender email permission.",
-				Field:       &config.Field_BoolField{},
-				IsRequired:  false,
-			},
-			{
-				Name:        "who_can_post_message",
-				DisplayName: "Who Can Post Messages",
-				Description: "Control who can post messages.",
-				Field: &config.Field_StringField{
-					StringField: &config.StringField{
-						Rules: &config.StringRules{
-							In: []string{
-								"ANYONE_CAN_POST",
-								"ALL_MEMBERS_CAN_POST",
-								"ALL_MANAGERS_CAN_POST",
-								"ALL_OWNERS_CAN_POST",
-								"NONE_CAN_POST",
-								"ALL_IN_DOMAIN_CAN_POST",
-							},
+var modifyGroupSettingsActionSchema = &v2.BatonActionSchema{
+	Name:        "modify_group_settings",
+	DisplayName: "Modify Group Settings",
+	Description: "Update settings for an existing Google Group.",
+	Arguments: append([]*config.Field{
+		{
+			Name:        "group_key",
+			DisplayName: "Group Key",
+			Description: "Email address or unique ID of the group to modify.",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
+		},
+		{
+			Name:        "allow_external_members",
+			DisplayName: "Allow External Members",
+			Description: "If provided, controls whether external users can join. Omit to preserve the current setting.",
+			Field:       &config.Field_BoolField{},
+			IsRequired:  false,
+		},
+		{
+			Name:        "allow_web_posting",
+			DisplayName: "Allow Web Posting",
+			Description: "If provided, allows group members to post through the web forum. This does not control external-sender email permission.",
+			Field:       &config.Field_BoolField{},
+			IsRequired:  false,
+		},
+		{
+			Name:        "who_can_post_message",
+			DisplayName: "Who Can Post Messages",
+			Description: "Control who can post messages.",
+			Field: &config.Field_StringField{
+				StringField: &config.StringField{
+					Rules: &config.StringRules{
+						In: []string{
+							"ANYONE_CAN_POST",
+							"ALL_MEMBERS_CAN_POST",
+							"ALL_MANAGERS_CAN_POST",
+							"ALL_OWNERS_CAN_POST",
+							"NONE_CAN_POST",
+							"ALL_IN_DOMAIN_CAN_POST",
 						},
 					},
 				},
-				IsRequired: false,
 			},
-			{
-				Name:        "message_moderation_level",
-				DisplayName: "Message Moderation Level",
-				Description: "Control moderation.",
-				Field: &config.Field_StringField{
-					StringField: &config.StringField{
-						Rules: &config.StringRules{
-							In: []string{
-								"MODERATE_NONE",
-								"MODERATE_NON_MEMBERS",
-								"MODERATE_ALL_MESSAGES",
-								"MODERATE_NEW_MEMBERS",
-							},
+			IsRequired: false,
+		},
+		{
+			Name:        "message_moderation_level",
+			DisplayName: "Message Moderation Level",
+			Description: "Control moderation.",
+			Field: &config.Field_StringField{
+				StringField: &config.StringField{
+					Rules: &config.StringRules{
+						In: []string{
+							"MODERATE_NONE",
+							"MODERATE_NON_MEMBERS",
+							"MODERATE_ALL_MESSAGES",
+							"MODERATE_NEW_MEMBERS",
 						},
 					},
 				},
-				IsRequired: false,
 			},
-		}, groupPrivacyFields...),
-		ReturnTypes: append([]*config.Field{
-			{
-				Name:        fieldSuccess,
-				DisplayName: displaySuccess,
-				Description: "Whether the settings were updated successfully.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        "group_email",
-				DisplayName: "Group Email",
-				Description: "Email address of the group.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "settings_updated",
-				DisplayName: "Settings Updated",
-				Description: "Whether any settings were changed.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        "previous_allow_external_members",
-				DisplayName: "Previous Allow External Members",
-				Description: "Previous value of allow_external_members setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "new_allow_external_members",
-				DisplayName: "New Allow External Members",
-				Description: "New value of allow_external_members setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "previous_allow_web_posting",
-				DisplayName: "Previous Allow Web Posting",
-				Description: "Previous value of allow_web_posting setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "new_allow_web_posting",
-				DisplayName: "New Allow Web Posting",
-				Description: "New value of allow_web_posting setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "previous_who_can_post_message",
-				DisplayName: "Previous Who Can Post Messages",
-				Description: "Previous value of who_can_post_message setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "new_who_can_post_message",
-				DisplayName: "New Who Can Post Messages",
-				Description: "New value of who_can_post_message setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "previous_message_moderation_level",
-				DisplayName: "Previous Message Moderation Level",
-				Description: "Previous value of message_moderation_level setting.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "new_message_moderation_level",
-				DisplayName: "New Message Moderation Level",
-				Description: "New value of message_moderation_level setting.",
-				Field:       &config.Field_StringField{},
-			},
-		}, groupPrivacyReturnFields()...),
-		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
-	}
-)
+			IsRequired: false,
+		},
+	}, groupPrivacyFields...),
+	ReturnTypes: append([]*config.Field{
+		{
+			Name:        fieldSuccess,
+			DisplayName: displaySuccess,
+			Description: "Whether the settings were updated successfully.",
+			Field:       &config.Field_BoolField{},
+		},
+		{
+			Name:        "group_email",
+			DisplayName: "Group Email",
+			Description: "Email address of the group.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "settings_updated",
+			DisplayName: "Settings Updated",
+			Description: "Whether any settings were changed.",
+			Field:       &config.Field_BoolField{},
+		},
+		{
+			Name:        "previous_allow_external_members",
+			DisplayName: "Previous Allow External Members",
+			Description: "Previous value of allow_external_members setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "new_allow_external_members",
+			DisplayName: "New Allow External Members",
+			Description: "New value of allow_external_members setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "previous_allow_web_posting",
+			DisplayName: "Previous Allow Web Posting",
+			Description: "Previous value of allow_web_posting setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "new_allow_web_posting",
+			DisplayName: "New Allow Web Posting",
+			Description: "New value of allow_web_posting setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "previous_who_can_post_message",
+			DisplayName: "Previous Who Can Post Messages",
+			Description: "Previous value of who_can_post_message setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "new_who_can_post_message",
+			DisplayName: "New Who Can Post Messages",
+			Description: "New value of who_can_post_message setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "previous_message_moderation_level",
+			DisplayName: "Previous Message Moderation Level",
+			Description: "Previous value of message_moderation_level setting.",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "new_message_moderation_level",
+			DisplayName: "New Message Moderation Level",
+			Description: "New value of message_moderation_level setting.",
+			Field:       &config.Field_StringField{},
+		},
+	}, groupPrivacyReturnFields()...),
+	ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_DYNAMIC},
+}
 
 // ResourceActions implements the ResourceActionProvider interface for group resource actions.
 func (o *groupResourceType) ResourceActions(ctx context.Context, registry actions.ActionRegistry) error {
