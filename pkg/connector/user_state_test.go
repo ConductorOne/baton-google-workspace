@@ -58,7 +58,7 @@ func TestUserGetFilteredIsNotAbsence(t *testing.T) {
 	defer server.Close()
 	result, _, err := newTestUserResourceType(t, server).Get(context.Background(), &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "user-id"}, nil)
 	require.Nil(t, result)
-	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Equal(t, codes.NotFound, status.Code(err))
 }
 
 func TestUserListPreservesStateWithoutPerUserReads(t *testing.T) {

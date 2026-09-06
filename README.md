@@ -85,7 +85,7 @@ baton resources
 
 Creation and rotation use protected SDK credential inputs/results, never ordinary password action arguments. Configure encrypted result recipients before requesting generated credentials. A next-login password requirement applies to direct Google authentication, not third-party SSO.
 
-User `Get` and sync pages expose presence-aware `google_user_state` metadata: separate suspension/archive flags, aliases, password-change requirement, mailbox-setup state, and observation time. Omitted fields are unknown. Targeted group `Get` optionally exposes `group_settings` with an observed/unsupported/unknown status; normal listing does not fetch settings per group.
+User `Get` and sync pages expose presence-aware `google_user_state` facts: separate suspension/archive flags, aliases, password-change requirement and mailbox-setup state. Omitted fields are unknown; unchanged facts do not gain a wall-clock profile value. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence. Targeted group `Get` optionally exposes `group_settings`; normal listing does not fetch settings per group.
 
 ## Connector actions
 

@@ -15,6 +15,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -273,11 +274,11 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 			}
 		}
 		if !found {
-			return nil, nil, status.Error(codes.PermissionDenied, "google-workspace: user is excluded by the configured domain filter")
+			return nil, nil, filteredGoogleUserError(resourceId, "domain")
 		}
 	} else if o.customerId != "" {
 		if user.CustomerId != o.customerId {
-			return nil, nil, status.Error(codes.PermissionDenied, "google-workspace: user is excluded by the configured customer filter")
+			return nil, nil, filteredGoogleUserError(resourceId, "customer")
 		}
 	}
 
@@ -290,6 +291,18 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 	}
 
 	return userResource, nil, nil
+}
+
+func filteredGoogleUserError(resourceID *v2.ResourceId, filter string) error {
+	filtered, err := status.New(codes.NotFound, "google-workspace: user excluded by configured filter").WithDetails(&errdetails.ErrorInfo{
+		Reason:   "RESOURCE_FILTERED",
+		Domain:   "baton-google-workspace",
+		Metadata: map[string]string{"resource_type": resourceTypeUser.Id, "resource_id": resourceID.GetResource(), "filter": filter},
+	})
+	if err != nil {
+		return err
+	}
+	return filtered.Err()
 }
 
 func addUserState(resource *v2.Resource, state map[string]any) error {

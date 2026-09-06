@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
 
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
@@ -141,11 +140,10 @@ func (s *UserService) read(ctx context.Context, path string, query url.Values, t
 	return metadata, nil
 }
 
-func (u *UserSnapshot) observed(at string) {
+func (u *UserSnapshot) observed() {
 	if u.State == nil {
 		u.State = make(map[string]any)
 	}
-	u.State["observed_at"] = at
 	// State is provider data, not evidence of SSO, licensing, or employee takeover.
 	u.State["read_status"] = "observed"
 }
@@ -169,12 +167,11 @@ func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerID, domai
 		return nil, wrapGoogleApiErrorWithContext(err, "failed to list users")
 	}
 	result.ServerResponse = resp
-	at := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, user := range result.Users {
 		if user == nil || user.User == nil || user.Id == "" {
 			return nil, fmt.Errorf("google-workspace: user listing contains an entry without provider identity")
 		}
-		user.observed(at)
+		user.observed()
 	}
 	return result, nil
 }
@@ -191,6 +188,6 @@ func (c *GoogleWorkspaceClient) GetUser(ctx context.Context, userID string) (*Us
 	if result.User == nil || result.Id == "" {
 		return nil, fmt.Errorf("google-workspace: user read returned no provider identity")
 	}
-	result.observed(time.Now().UTC().Format(time.RFC3339Nano))
+	result.observed()
 	return result, nil
 }
