@@ -300,7 +300,9 @@ func filteredGoogleUserError(resourceID *v2.ResourceId, filter string) error {
 		Metadata: map[string]string{"resource_type": resourceTypeUser.Id, "resource_id": resourceID.GetResource(), "filter": filter},
 	})
 	if err != nil {
-		return err
+		// An unqualified NotFound would misrepresent filter exclusion as provider
+		// absence. If the qualifier cannot be encoded, fail closed instead.
+		return status.Errorf(codes.Internal, "google-workspace: failed to encode configured-filter exclusion: %v", err)
 	}
 	return filtered.Err()
 }

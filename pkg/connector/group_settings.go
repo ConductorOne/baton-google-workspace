@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"time"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -122,7 +121,6 @@ func addGroupSettings(resource *v2.Resource, settings *groupssettings.Groups, re
 	profile["group_settings_status"] = readStatus
 	if settings != nil {
 		profile["group_settings"] = groupSettingsProfile(settings)
-		profile["group_settings_observed_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	updated, err := structpb.NewStruct(profile)
 	if err != nil {

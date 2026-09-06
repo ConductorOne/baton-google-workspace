@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -126,4 +127,37 @@ func TestGroupPrivacyPreservesOmittedSettingsAndQualifiesDeniedRead(t *testing.T
 	profile = group.GetProfile().AsMap()
 	require.Equal(t, "unknown", profile["group_settings_status"])
 	require.NotContains(t, profile, "group_settings")
+}
+
+func TestGroupReadsStayStableUntilProviderSettingsChange(t *testing.T) {
+	settingsReads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/admin/directory/v1/groups/group-id" {
+			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+			return
+		}
+		settingsReads++
+		if settingsReads < 3 {
+			_, _ = w.Write([]byte(`{"email":"team@example.com","includeInGlobalAddressList":"true"}`))
+		} else {
+			_, _ = w.Write([]byte(`{"email":"team@example.com","includeInGlobalAddressList":"false"}`))
+		}
+	}))
+	defer server.Close()
+	settings, err := groupssettings.NewService(t.Context(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
+	require.NoError(t, err)
+	builder := &groupResourceType{client: &gwclient.GoogleWorkspaceClient{
+		GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings,
+	}}
+	id := &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}
+	first, _, err := builder.Get(t.Context(), id, nil)
+	require.NoError(t, err)
+	second, _, err := builder.Get(t.Context(), id, nil)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(first, second), "unchanged provider facts must not churn the resource")
+	changed, _, err := builder.Get(t.Context(), id, nil)
+	require.NoError(t, err)
+	require.False(t, proto.Equal(first, changed), "an actual provider change must remain visible")
+	require.Equal(t, "false", changed.GetProfile().AsMap()["group_settings"].(map[string]any)["include_in_global_address_list"])
 }

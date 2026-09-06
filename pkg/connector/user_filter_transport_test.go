@@ -103,3 +103,10 @@ func TestGoogleFilteredReadQualifierSurvivesSDKAndGRPC(t *testing.T) {
 		})
 	}
 }
+
+func TestGoogleFilterEncodingFailureCannotClaimAbsence(t *testing.T) {
+	// Invalid UTF-8 cannot be encoded in ErrorInfo. The error path must not
+	// return a bare NotFound that consumers could mistake for provider absence.
+	err := filteredGoogleUserError(&v2.ResourceId{Resource: string([]byte{0xff})}, "domain")
+	require.Equal(t, codes.Internal, status.Code(err))
+}

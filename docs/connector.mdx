@@ -79,6 +79,8 @@ Targeted user reads and user sync pages expose `google_user_state` on the resour
 
 Targeted group reads optionally expose `group_settings` and `group_settings_status`. The status is `observed`, `unsupported`, or `unknown`; a missing scope or denied settings read must not be interpreted as a privacy setting being false. Normal group listing does not fetch settings for every row. Group settings require the existing Groups Settings API scope. `allow_web_posting` controls the web forum, not permission for external email senders.
 
+User and group resource profiles contain stable provider facts, not connector-generated observation clocks. Identical provider reads produce identical resource payloads; C1's owning observation receipt records when the read occurred.
+
 OAuth-token and application-password deletion results retain `deleted_ids`, `already_absent_ids`, `failed_ids`, `skipped_ids`, and `remaining_ids`, together with `inventory_complete` and `observed_at`. A blank skipped ID means an entry could not be identified. If final enumeration fails, an empty `remaining_ids` list is not evidence of absence. Failed actions retain these partial results; consumers must preserve both the error and the result. These are observations at that instant, not proof of global session invalidation. Application grants derived from login activity are not a current credential inventory.
 
 Group membership remains on the existing grant interface. Conflict reconciliation uses an exact member lookup, not a whole-group scan. The connector does not expose an independent point-grant action; callers must not replace unavailable bounded evidence with an incomplete membership enumeration.
