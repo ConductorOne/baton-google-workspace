@@ -271,6 +271,8 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 		settings, err := o.client.GetGroupSettings(ctx, g.Email)
 		switch {
 		case err != nil:
+			ctxzap.Extract(ctx).Warn("google-workspace: group settings read failed; reporting unknown",
+				zap.String("group_id", g.Id), zap.Error(err))
 			readStatus = "unknown"
 			settings = nil
 		case settings == nil:
