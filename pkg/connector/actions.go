@@ -571,7 +571,7 @@ func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *stru
 	if err != nil {
 		return nil, nil, err
 	}
-	if source == target {
+	if strings.EqualFold(source, target) {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be different")
 	}
 	levels, err := parseDrivePrivacyLevels(args)
@@ -592,7 +592,7 @@ func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *struct
 	if err != nil {
 		return nil, nil, err
 	}
-	if source == target {
+	if strings.EqualFold(source, target) {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be different")
 	}
 	var params []*datatransferAdmin.ApplicationTransferParam

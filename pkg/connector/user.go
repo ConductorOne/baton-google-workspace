@@ -507,6 +507,9 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("google-workspace: invalid org_unit_path: %w", err)
 	}
+	if orgUnitPath != nil && *orgUnitPath == "" {
+		orgUnitPath = nil
+	}
 	if orgUnitPath != nil && !strings.HasPrefix(*orgUnitPath, "/") {
 		return nil, nil, nil, fmt.Errorf("google-workspace: org_unit_path must be an absolute organizational unit path")
 	}

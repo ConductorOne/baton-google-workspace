@@ -12,11 +12,13 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	admin "google.golang.org/api/admin/directory/v1"
 	"google.golang.org/api/googleapi"
 	groupssettings "google.golang.org/api/groupssettings/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -593,7 +595,8 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 	for name, requested := range newSettings {
 		if actual[name] != requested {
 			response.Fields[fieldSuccess] = structpb.NewBoolValue(false)
-			return &response, nil, fmt.Errorf("google-workspace: requested %s was not observed after the settings update", name)
+			return &response, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+				fmt.Sprintf("google-workspace: requested %s was not observed after the settings update", name))
 		}
 	}
 	response.Fields[fieldSuccess] = structpb.NewBoolValue(true)

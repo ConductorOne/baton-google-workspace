@@ -267,13 +267,12 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 		return nil, nil, fmt.Errorf("failed to create group resource in Get: %w", err)
 	}
 	readStatus := "unsupported"
-	var settingsErr error
 	if o.client.GroupsSettingsService != nil {
 		settings, err := o.client.GetGroupSettings(ctx, g.Email)
-		settingsErr = err
 		switch {
 		case err != nil:
 			readStatus = "unknown"
+			settings = nil
 		case settings == nil:
 			readStatus = "unknown"
 		default:
@@ -285,10 +284,10 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 	} else if err := addGroupSettings(groupResource, nil, readStatus); err != nil {
 		return nil, nil, err
 	}
-	// Optional enrichment does not make settings authorization a new prerequisite
-	// for reading the directory group. Unknown settings are never negative evidence.
-	if settingsErr != nil && status.Code(settingsErr) != codes.PermissionDenied && status.Code(settingsErr) != codes.NotFound {
-		return groupResource, nil, fmt.Errorf("google-workspace: failed to observe group settings: %w", settingsErr)
+	// Optional enrichment never hides a readable directory group. Cancellation
+	// still terminates the request; all other settings failures remain unknown.
+	if err := ctx.Err(); err != nil {
+		return groupResource, nil, err
 	}
 
 	return groupResource, nil, nil
