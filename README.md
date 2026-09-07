@@ -87,6 +87,8 @@ Creation and rotation use protected SDK credential inputs/results, never ordinar
 
 User `Get` and sync pages expose presence-aware `google_user_state` facts: separate suspension/archive flags, aliases, password-change requirement and mailbox-setup state. Omitted fields are unknown; unchanged facts do not gain a wall-clock profile value. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence. Targeted group `Get` optionally exposes `group_settings`; normal listing does not fetch settings per group.
 
+**Targeted user-read migration:** configured filter exclusions previously returned no resource and no error from the connector hook; they now return `NotFound` with `ErrorInfo` reason `RESOURCE_FILTERED` and domain `baton-google-workspace`. The pinned baton-sdk v0.29.0 builder already converted the old nil resource to `NotFound`, and its targeted-sync consumer skips that code. The public classification stays the same while the local SDK/gRPC fixture verifies the added qualifier survives transport. Lifecycle callers must inspect it and must not treat a filtered result as provider absence. Host-side qualifier handling is an integration requirement, not implemented or certified by this connector PR. No resource or grant IDs change; normal List filtering is unchanged.
+
 ## Connector actions
 
 Connector actions are custom operations invoked on demand from C1 automations:
@@ -118,7 +120,7 @@ Connector actions are custom operations invoked on demand from C1 automations:
 
 > **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
 
-> **Read-modify-write safety:** profile changes that preserve existing names or array entries send the observed ETag as `If-Match`. A missing version or concurrent change fails rather than overwriting unrelated changes. `updated_fields` describes requested changes, not independently verified state.
+> **Read-modify-write limitation:** profile changes that preserve existing names or array entries require an observed ETag and send it as `If-Match`. Missing versions fail before writing, and any provider precondition error is preserved. Directory does not document conditional-write enforcement for `users.update` or `users.patch`; fixtures verify header emission, not protection against concurrent overwrites in a tenant. That protection remains an unverified provider integration gate. `updated_fields` describes requested changes, not independently verified state.
 
 > **Credential cleanup evidence:** check `inventory_complete` before interpreting `remaining_ids`. Failed security actions retain their per-item results. Empty results after a failed enumeration are not absence, and login-derived application grants are not a live credential inventory.
 

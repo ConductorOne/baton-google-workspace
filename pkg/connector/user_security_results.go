@@ -38,13 +38,20 @@ func revokeUserCredentials(ctx context.Context, countField string, list func() (
 	var deleted, absent, failed, skipped, remaining []string
 	var failures []error
 	complete := false
-	ids, err := list()
+	err := ctx.Err()
+	var ids []string
+	if err == nil {
+		ids, err = list()
+	}
 	if err != nil {
 		failures = append(failures, err)
 	} else {
 		waitLoop := newRateLimitWaitLoop(ctx)
 		for _, id := range ids {
-			if id == "" || ctx.Err() != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			if id == "" {
 				skipped = append(skipped, id)
 				continue
 			}
@@ -60,9 +67,11 @@ func revokeUserCredentials(ctx context.Context, countField string, list func() (
 			}
 		}
 		if len(skipped) != 0 {
-			failures = append(failures, fmt.Errorf("google-workspace: skipped %d credential entries with missing identity or cancelled context", len(skipped)))
+			failures = append(failures, fmt.Errorf("google-workspace: skipped %d credential entries with missing identity", len(skipped)))
 		}
-		if len(ids) == 0 {
+		if err := ctx.Err(); err != nil {
+			failures = append(failures, fmt.Errorf("google-workspace: credential revocation interrupted: %w", err))
+		} else if len(ids) == 0 {
 			complete = true
 		} else {
 			remaining, err = list()

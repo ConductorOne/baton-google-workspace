@@ -216,7 +216,9 @@ func (o *userResourceType) removeUserAliasActionHandler(ctx context.Context, arg
 		// A group or another namespace can still own the address.
 		return result(aliasOutcomeAlreadyAbsent), nil, nil
 	}
-	if err := o.client.DeleteUserAlias(ctx, userID, alias); err != nil && status.Code(err) != codes.NotFound {
+	if err := withRateLimitWait(ctx, func() error {
+		return o.client.DeleteUserAlias(ctx, userID, alias)
+	}); err != nil && status.Code(err) != codes.NotFound {
 		return result(aliasOutcomeReadbackUnknown), nil, err
 	}
 	observed, err := readUser(func() (*admin.User, error) { return o.client.GetUserFullForProvisioning(ctx, userID) })
@@ -381,7 +383,8 @@ func (o *userResourceType) addUserAliasActionHandler(ctx context.Context, args *
 	// is the authoritative signal for those.
 
 	insertAttempted = true
-	err = o.client.InsertUserAlias(ctx, userID, alias)
+	// Wait once on a retryable error, then return it without replaying the write.
+	err = withRateLimitWait(ctx, func() error { return o.client.InsertUserAlias(ctx, userID, alias) })
 	if err != nil {
 		if status.Code(err) == codes.Aborted { // provider 409: address owned elsewhere
 			// Bounded qualified readback ONLY to establish same-account replay.

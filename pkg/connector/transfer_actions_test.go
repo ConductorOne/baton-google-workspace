@@ -336,3 +336,234 @@ func newTransferGetServer(state *testServerState) *httptest.Server {
 		http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
 	}))
 }
+
+// TestTransferInsert_UnrelatedAppUnknownStatusDoesNotBlock seeds an ongoing
+// transfer for a DIFFERENT application whose overall status is unrecognized.
+// The requested application has no transfer, so the unrelated record must not
+// block: a fresh insert proceeds.
+func TestTransferInsert_UnrelatedAppUnknownStatusDoesNotBlock(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{"src": {}, "dst": {}},
+		transfers: []*transferRecord{{
+			Id: "tr_other", OldOwner: "src", NewOwner: "dst",
+			AppID:  999999999, // unrelated application
+			Status: "exoticUnknownStatus",
+			Params: map[string][]string{"SOMETHING": {"ELSE"}},
+		}},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dt := newTestDataTransferService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, nil, dt)
+
+	resp, _, err := c.transferUserDriveFiles(context.Background(), driveTransferArgs())
+	if err != nil {
+		t.Fatalf("unrelated application's unknown status must not block the insert: %v", err)
+	}
+	if id := resp.GetFields()["transfer_id"].GetStringValue(); id == "tr_other" {
+		t.Fatalf("the unrelated transfer must not be adopted")
+	}
+	state.mtx.Lock()
+	postCount := state.postCount
+	state.mtx.Unlock()
+	if postCount != 1 {
+		t.Fatalf("expected a fresh insert, got %d POSTs", postCount)
+	}
+}
+
+// TestTransferInsert_RelevantAppUnknownStatusStillRefuses seeds an ongoing
+// transfer FOR THE REQUESTED APPLICATION with an unrecognized overall status:
+// the insert must refuse rather than adopt or blindly continue.
+func TestTransferInsert_RelevantAppUnknownStatusStillRefuses(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{"src": {}, "dst": {}},
+		transfers: []*transferRecord{{
+			Id: "tr_ours", OldOwner: "src", NewOwner: "dst",
+			AppID:  appIdGoogleDocsAndGoogleDrive,
+			Status: "exoticUnknownStatus",
+			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
+		}},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dt := newTestDataTransferService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, nil, dt)
+
+	_, _, err := c.transferUserDriveFiles(context.Background(), driveTransferArgs())
+	if err == nil {
+		t.Fatalf("a covering transfer with unknown status must refuse the insert")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	state.mtx.Lock()
+	postCount := state.postCount
+	state.mtx.Unlock()
+	if postCount != 0 {
+		t.Fatalf("refusal must not insert, got %d POSTs", postCount)
+	}
+}
+
+// TestTransferInsert_PendingIsOngoingNotCompleted seeds a covering ongoing
+// transfer with status "pending": it is adoptable (no second POST) and is
+// never treated as completed by the read path.
+func TestTransferInsert_PendingIsOngoingNotCompleted(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{"src": {}, "dst": {}},
+		transfers: []*transferRecord{{
+			Id: "tr_pending", OldOwner: "src", NewOwner: "dst",
+			AppID:  appIdGoogleDocsAndGoogleDrive,
+			Status: "pending",
+			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
+		}},
+	}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dt := newTestDataTransferService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, nil, dt)
+
+	resp, _, err := c.transferUserDriveFiles(context.Background(), driveTransferArgs())
+	if err != nil {
+		t.Fatalf("pending is an ongoing status and must adopt: %v", err)
+	}
+	if id := resp.GetFields()["transfer_id"].GetStringValue(); id != "tr_pending" {
+		t.Fatalf("expected adoption of tr_pending, got %q", id)
+	}
+	state.mtx.Lock()
+	postCount := state.postCount
+	state.mtx.Unlock()
+	if postCount != 0 {
+		t.Fatalf("adoption must not insert, got %d POSTs", postCount)
+	}
+	if resp.GetFields()["status"].GetStringValue() != "pending" {
+		t.Fatalf("expected pending status passthrough")
+	}
+}
+
+// TestGetUserDataTransfer_PendingObservedNotCompleted reads back a covering
+// pending transfer through the get path: success=true (the record was read and
+// matched) but completed=false (pending is never completion).
+func TestGetUserDataTransfer_PendingObservedNotCompleted(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{"src": {}, "dst": {}},
+		transfers: []*transferRecord{{
+			Id: "tr_x", OldOwner: "src", NewOwner: "dst",
+			AppID:  appIdGoogleDocsAndGoogleDrive,
+			Status: "pending",
+			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
+		}},
+	}
+	getServer := newTransferGetServer(state)
+	defer getServer.Close()
+	dt := newTestDataTransferService(t, getServer.URL, getServer.Client())
+	c := newTestConnector()
+	primeServiceCache(c, nil, dt)
+
+	resp, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
+	if err != nil {
+		t.Fatalf("pending read must verify: %v", err)
+	}
+	if !resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("verified pending record is success=true")
+	}
+	if resp.GetFields()["completed"].GetBoolValue() {
+		t.Fatalf("pending must never be completed")
+	}
+}
+
+// TestGetUserDataTransfer_IdentityMismatchLeaksNoObservedFields covers the
+// evidence gate: a record whose saved ID or expected owners do not match
+// returns ONLY the requested transfer_id, observed_at, success=false and
+// completed=false — no foreign observed identity, status, parameters or
+// request time.
+func TestGetUserDataTransfer_IdentityMismatchLeaksNoObservedFields(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{"src": {}, "dst": {}},
+		transfers: []*transferRecord{{
+			Id: "tr_x", OldOwner: "someone-else", NewOwner: "also-someone-else",
+			AppID:  appIdGoogleDocsAndGoogleDrive,
+			Status: "inProgress",
+			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
+		}},
+	}
+	getServer := newTransferGetServer(state)
+	defer getServer.Close()
+	dt := newTestDataTransferService(t, getServer.URL, getServer.Client())
+	c := newTestConnector()
+	primeServiceCache(c, nil, dt)
+
+	resp, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
+	if err == nil || status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("identity mismatch must be FailedPrecondition, got %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("the minimal mismatch result must still be returned")
+	}
+	if resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("mismatch must be success=false")
+	}
+	if resp.GetFields()["completed"].GetBoolValue() {
+		t.Fatalf("mismatch must be completed=false")
+	}
+	if got := resp.GetFields()["transfer_id"].GetStringValue(); got != "tr_x" {
+		t.Fatalf("only the REQUESTED transfer id may be returned, got %q", got)
+	}
+	if resp.GetFields()["observed_at"].GetStringValue() == "" {
+		t.Fatalf("observed_at must be present")
+	}
+	for _, leaked := range []string{"status", "per_application_status", "parameters", "request_time", "resource_id", "target_resource_id"} {
+		if _, present := resp.GetFields()[leaked]; present {
+			t.Fatalf("identity mismatch must not leak observed field %q", leaked)
+		}
+	}
+}
+
+// TestGetUserDataTransfer_ParamMismatchRetainsExpectedEvidence covers the
+// other half of the gate: an identity-MATCHING record whose parameters differ
+// retains the full observed evidence (statuses, parameters, owners, request
+// time) alongside the FailedPrecondition error.
+func TestGetUserDataTransfer_ParamMismatchRetainsExpectedEvidence(t *testing.T) {
+	state := &testServerState{
+		users: map[string]*testUser{"src": {}, "dst": {}},
+		transfers: []*transferRecord{{
+			Id: "tr_x", OldOwner: "src", NewOwner: "dst",
+			AppID:  appIdGoogleDocsAndGoogleDrive,
+			Status: "inProgress",
+			Params: map[string][]string{"PRIVACY_LEVEL": {"SHARED"}},
+		}},
+	}
+	getServer := newTransferGetServer(state)
+	defer getServer.Close()
+	dt := newTestDataTransferService(t, getServer.URL, getServer.Client())
+	c := newTestConnector()
+	primeServiceCache(c, nil, dt)
+
+	resp, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
+	if err == nil || status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("param mismatch must be FailedPrecondition, got %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("observed evidence must be retained alongside the error")
+	}
+	if got := resp.GetFields()["status"].GetStringValue(); got != "inProgress" {
+		t.Fatalf("observed status must be retained, got %q", got)
+	}
+	if resp.GetFields()["resource_id"].GetStringValue() != "src" || resp.GetFields()["target_resource_id"].GetStringValue() != "dst" {
+		t.Fatalf("matching observed owners must be retained")
+	}
+	if resp.GetFields()["per_application_status"].GetStructValue().GetFields()["55656082996"] == nil {
+		t.Fatalf("observed per-application status must be retained")
+	}
+	if !strings.Contains(resp.GetFields()["parameters"].GetStructValue().GetFields()["55656082996"].GetStringValue(), "PRIVACY_LEVEL") {
+		t.Fatalf("observed parameters must be retained")
+	}
+	if resp.GetFields()["success"].GetBoolValue() {
+		t.Fatalf("param mismatch is success=false")
+	}
+}

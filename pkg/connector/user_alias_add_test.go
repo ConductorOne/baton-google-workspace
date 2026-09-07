@@ -18,7 +18,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"google.golang.org/grpc/codes"
@@ -27,6 +29,7 @@ import (
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 	"github.com/conductorone/baton-sdk/pkg/actions"
+	"github.com/stretchr/testify/require"
 )
 
 type addAliasTestUser struct {
@@ -201,6 +204,80 @@ func newAddAliasTestResourceType(t *testing.T, server *httptest.Server) *userRes
 		},
 		customerId: "C01",
 		domain:     "",
+	}
+}
+
+func TestAliasMutationFailuresWaitWithoutReplaying(t *testing.T) {
+	for _, operation := range []string{"add", "remove"} {
+		for _, failure := range []struct {
+			name   string
+			code   int
+			reason string
+			want   codes.Code
+		}{
+			{name: "throttled", code: http.StatusTooManyRequests, want: codes.Unavailable},
+			{name: "rate-limited permission response", code: http.StatusForbidden, reason: "userRateLimitExceeded", want: codes.Unavailable},
+			{name: "ambiguous server failure", code: http.StatusServiceUnavailable, want: codes.Unavailable},
+			{name: "permission denied", code: http.StatusForbidden, want: codes.PermissionDenied},
+		} {
+			t.Run(operation+"/"+failure.name, func(t *testing.T) {
+				var mutations, lateReads atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					if r.Method != http.MethodGet {
+						mutations.Add(1)
+						w.WriteHeader(failure.code)
+						_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
+							"code": failure.code, "message": "fixture provider error",
+							"errors": []map[string]string{{"reason": failure.reason}},
+						}})
+						return
+					}
+					if mutations.Load() != 0 {
+						lateReads.Add(1)
+					}
+					switch r.URL.Path {
+					case "/admin/directory/v1/users/u1":
+						_, _ = w.Write([]byte(`{"id":"u1","primaryEmail":"target@example.com","customerId":"C01"}`))
+					case "/admin/directory/v1/users/u1/aliases":
+						if operation == "remove" {
+							_, _ = w.Write([]byte(`{"aliases":[{"alias":"new@example.com"}]}`))
+						} else {
+							_, _ = w.Write([]byte(`{"aliases":[]}`))
+						}
+					default:
+						w.WriteHeader(http.StatusNotFound)
+						_, _ = w.Write([]byte(`{"error":{"code":404,"message":"not found"}}`))
+					}
+				}))
+				defer server.Close()
+				o := newAddAliasTestResourceType(t, server)
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+				args := aliasArgs("u1", "new@example.com", "target@example.com", "C01")
+				var result *structpb.Struct
+				var err error
+				if operation == "add" {
+					result, _, err = o.addUserAliasActionHandler(ctx, args)
+				} else {
+					result, _, err = o.removeUserAliasActionHandler(ctx, args)
+				}
+				require.Equal(t, failure.want, status.Code(err), "retain the provider classification after waiting")
+				if failure.want == codes.Unavailable {
+					require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded, "retryable failure must wait until the cancelled rate-limit window")
+				}
+				require.Equal(t, int32(1), mutations.Load(), "never replay an unknown mutation")
+				require.Zero(t, lateReads.Load(), "failed mutation must not invent a confirming post-state")
+				require.Equal(t, aliasOutcomeReadbackUnknown, result.GetFields()["outcome"].GetStringValue())
+				require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
+				require.False(t, result.GetFields()["observation_complete"].GetBoolValue())
+				require.NotContains(t, result.AsMap(), "alias_present_after")
+				if operation == "add" {
+					require.True(t, result.GetFields()["insert_attempted"].GetBoolValue())
+					require.False(t, result.GetFields()["insert_acknowledged"].GetBoolValue())
+				}
+			})
+		}
 	}
 }
 

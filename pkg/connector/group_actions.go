@@ -538,13 +538,10 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 		hasAllowWebPosting,
 		additional,
 	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to update group settings: %w", err)
-	}
 
 	// Build response with previous and new values
 	response := structpb.Struct{Fields: map[string]*structpb.Value{
-		fieldSuccess:       {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		fieldSuccess:       {Kind: &structpb.Value_BoolValue{BoolValue: false}},
 		"group_email":      {Kind: &structpb.Value_StringValue{StringValue: group.Email}},
 		"settings_updated": {Kind: &structpb.Value_BoolValue{BoolValue: settingsUpdated}},
 	}}
@@ -569,6 +566,9 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 		if newVal, ok := newSettings[settingName]; ok {
 			response.Fields["new_"+settingName] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: newVal}}
 		}
+	}
+	if err != nil {
+		return &response, nil, fmt.Errorf("google-workspace: failed to update group settings: %w", err)
 	}
 	observed, err := o.client.GetGroupSettings(ctx, group.Email)
 	if err != nil {

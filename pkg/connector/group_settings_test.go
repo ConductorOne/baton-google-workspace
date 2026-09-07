@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/stretchr/testify/require"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
@@ -44,6 +46,47 @@ func TestGroupPrivacyReadbackRejectsProviderMismatch(t *testing.T) {
 	require.Equal(t, map[string]any{"whoCanViewGroup": "ALL_MEMBERS_CAN_VIEW", "includeInGlobalAddressList": "false"}, patch)
 	require.Equal(t, "ALL_MEMBERS_CAN_VIEW", result.GetFields()["new_who_can_view_group"].GetStringValue())
 	require.Contains(t, result.AsMap(), fieldResource, "retain the observed group alongside the failed verification")
+}
+
+func TestGroupSettingsPatchFailureRetainsEvidenceThroughSDK(t *testing.T) {
+	var patches, settingsReads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/admin/directory/v1/groups/group-id":
+			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+		case r.Method == http.MethodPatch:
+			patches.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":503,"message":"temporarily unavailable"}}`))
+		default:
+			settingsReads.Add(1)
+			_, _ = w.Write([]byte(`{"email":"team@example.com","whoCanViewGroup":"ANYONE_CAN_VIEW"}`))
+		}
+	}))
+	defer server.Close()
+	settings, err := groupssettings.NewService(t.Context(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
+	require.NoError(t, err)
+	o := &groupResourceType{resourceType: resourceTypeGroup, client: &gwclient.GoogleWorkspaceClient{
+		GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings,
+	}}
+	manager := actions.NewActionManager(t.Context())
+	registry, err := manager.GetTypeRegistry(t.Context(), resourceTypeGroup.Id)
+	require.NoError(t, err)
+	require.NoError(t, o.ResourceActions(t.Context(), registry))
+	args, err := structpb.NewStruct(map[string]any{"group_key": "group-id", "who_can_view_group": "ALL_MEMBERS_CAN_VIEW"})
+	require.NoError(t, err)
+	_, outcome, result, _, err := manager.InvokeAction(t.Context(), "modify_group_settings", resourceTypeGroup.Id, args)
+	require.NoError(t, err)
+	require.Equal(t, v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, outcome)
+	require.NotNil(t, result)
+	require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
+	require.Equal(t, "ANYONE_CAN_VIEW", result.GetFields()["previous_who_can_view_group"].GetStringValue())
+	require.Equal(t, "ALL_MEMBERS_CAN_VIEW", result.GetFields()["new_who_can_view_group"].GetStringValue())
+	require.Contains(t, result.GetFields()["error"].GetStringValue(), "Unavailable")
+	require.NotContains(t, result.AsMap(), fieldResource, "failed write must not fabricate a verified post-state")
+	require.Equal(t, int32(1), patches.Load(), "unknown mutation must not be replayed")
+	require.Equal(t, int32(1), settingsReads.Load())
 }
 
 func TestGroupGrantConflictUsesExactMemberRead(t *testing.T) {

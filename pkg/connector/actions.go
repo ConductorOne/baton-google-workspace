@@ -609,11 +609,9 @@ func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *struct
 // Idempotency contract: an existing ONGOING transfer may only be adopted when
 // it matches the requested source, recipient, application AND the complete
 // parameter set (every key and value, no unknown or duplicate parameters).
-// A conflicting, unknown-parameter, or incomplete ongoing transfer — or more
-// than one match — returns FailedPrecondition listing the available transfer
-// IDs instead of starting a second concurrent transfer. Historical completed
-// records are never adopted as this operation's result; the durable caller
-// reconciles those via the saved transfer ID and get_user_data_transfer.
+// Only a transfer covering the requested application can block on unknown status.
+// Conflicting parameters, incomplete discovery or ambiguous matches refuse insert.
+// Terminal history is never adopted; reconcile saved IDs via get_user_data_transfer.
 func (c *GoogleWorkspace) dataTransferInsert(
 	ctx context.Context,
 	appID int64,
@@ -642,12 +640,10 @@ func (c *GoogleWorkspace) dataTransferInsert(
 			if candidate == nil || candidate.Id == "" || candidate.OldOwnerUserId != oldOwnerUserId || candidate.NewOwnerUserId != newOwnerUserId {
 				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer discovery returned incomplete or mismatched identity; refusing to insert")
 			}
-			switch strings.ToLower(candidate.OverallTransferStatusCode) {
-			case transferStatusComplete, "failed":
+			status := strings.ToLower(candidate.OverallTransferStatusCode)
+			if status == transferStatusComplete || status == "failed" {
+				// Terminal history: never adopted as this operation.
 				continue
-			case "new", "inprogress":
-			default:
-				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfer %s has unknown status; refusing to insert", candidate.Id))
 			}
 			if len(candidate.ApplicationDataTransfers) == 0 {
 				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfer %s has no application evidence", candidate.Id))
@@ -665,7 +661,12 @@ func (c *GoogleWorkspace) dataTransferInsert(
 				}
 			}
 			if application == nil {
+				// Unrelated applications cannot block on unrecognized status.
 				continue
+			}
+			// Unknown status for this application is not safe to adopt or replay.
+			if !isOngoingTransferStatus(status) {
+				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfer %s has unknown status; refusing to insert", candidate.Id))
 			}
 			if len(candidate.ApplicationDataTransfers) != 1 || !transferParamsMatch(application.ApplicationTransferParams, params) {
 				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: ongoing transfer %s has different or incomplete parameters", candidate.Id))
@@ -713,8 +714,10 @@ func (c *GoogleWorkspace) dataTransferInsert(
 
 // isOngoingTransferStatus reports whether the provider status string means the
 // transfer is still running (adoptable) rather than terminal or unknown.
+// "new", "inProgress" and "pending" are the provider's in-flight states; none
+// of them is ever evidence of completion.
 func isOngoingTransferStatus(status string) bool {
-	return strings.EqualFold(status, "new") || strings.EqualFold(status, "inProgress")
+	return strings.EqualFold(status, "new") || strings.EqualFold(status, "inProgress") || strings.EqualFold(status, "pending")
 }
 
 // transferParamsMatch compares complete parameter sets, including the documented
@@ -843,11 +846,17 @@ const (
 // wait via withRateLimitWaitValue but is never retried in a loop here) and
 // never mutates or restarts anything.
 //
-// Mismatch and unreadable state are explicit: a record whose ID, source,
-// recipient, application or complete parameter set does not match the request
-// returns FailedPrecondition WITH the observed record fields where available,
-// so a caller can reconcile from the returned data instead of re-submitting.
-// Unknown/missing statuses or parameters are never reported as completed.
+// Evidence gating: a saved-ID or expected-owner mismatch returns only the
+// REQUESTED transfer ID, the observation time, and explicit
+// success=false/completed=false — the foreign record's observed identity,
+// status, parameters and request time are not this caller's evidence and
+// never leak. A record whose identity MATCHES but whose application,
+// parameters or statuses differ retains the full observed evidence
+// alongside the FailedPrecondition error so a caller can reconcile instead
+// of re-submitting. "pending" is accepted as an ongoing status in both the
+// insert-adoption and read paths and is never reported as completed;
+// unknown/missing statuses never resolve to completed, and nil/malformed
+// provider responses remain non-success with their error codes preserved.
 func (c *GoogleWorkspace) getUserDataTransfer(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	// Required scalar arguments.
 	transferID, err := requiredStringArg(args, fieldTransferID)
@@ -930,13 +939,19 @@ func (c *GoogleWorkspace) getUserDataTransfer(ctx context.Context, args *structp
 		return nil, nil, fmt.Errorf("google-workspace: failed to read data transfer: %w", err)
 	}
 
+	// Withhold observed fields until the saved ID and both owners match.
+	if transfer == nil {
+		return requestedTransferFields(transferID), nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
+	}
+	if transfer.Id != transferID ||
+		transfer.OldOwnerUserId != expectedSource || transfer.NewOwnerUserId != expectedTarget {
+		return requestedTransferFields(transferID), nil,
+			uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer record does not match the saved ID and expected owners")
+	}
+
 	observed, err := observedTransferReturnFields(transfer, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return observed, nil, err
-	}
-	if transfer == nil || transfer.Id != transferID ||
-		transfer.OldOwnerUserId != expectedSource || transfer.NewOwnerUserId != expectedTarget {
-		return observed, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer record does not match the saved ID and expected owners")
 	}
 	var application *datatransferAdmin.ApplicationDataTransfer
 	completed := strings.EqualFold(transfer.OverallTransferStatusCode, transferStatusComplete)
@@ -961,6 +976,16 @@ func (c *GoogleWorkspace) getUserDataTransfer(ctx context.Context, args *structp
 	observed.Fields[fieldSuccess] = structpb.NewBoolValue(true)
 	observed.Fields[fieldCompleted] = structpb.NewBoolValue(completed)
 	return observed, nil, nil
+}
+
+// requestedTransferFields contains caller-supplied correlation only, not provider evidence.
+func requestedTransferFields(transferID string) *structpb.Struct {
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		fieldSuccess:    structpb.NewBoolValue(false),
+		fieldCompleted:  structpb.NewBoolValue(false),
+		fieldTransferID: structpb.NewStringValue(transferID),
+		fieldObservedAt: structpb.NewStringValue(time.Now().UTC().Format(time.RFC3339Nano)),
+	}}
 }
 
 // requiredStringArg extracts a required non-empty string argument. Split from

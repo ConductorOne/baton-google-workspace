@@ -18,20 +18,25 @@ func TestTransferReadRequiresVerifiedCompletion(t *testing.T) {
 		name   string
 		change func(*datatransfer.DataTransfer)
 		code   codes.Code
+		// identityMismatch marks sub-cases where the observed record is NOT the
+		// caller's record: the evidence gate returns only the requested
+		// transfer_id/observed_at/success=false/completed=false, so no observed
+		// owner fields may be asserted (or leaked).
+		identityMismatch bool
 	}{
-		{"complete", func(*datatransfer.DataTransfer) {}, codes.OK},
-		{"different saved ID", func(v *datatransfer.DataTransfer) { v.Id = "another-transfer" }, codes.FailedPrecondition},
-		{"different owner", func(v *datatransfer.DataTransfer) { v.NewOwnerUserId = "other" }, codes.FailedPrecondition},
-		{"failed application", func(v *datatransfer.DataTransfer) { v.ApplicationDataTransfers[0].ApplicationTransferStatus = "failed" }, codes.FailedPrecondition},
-		{"missing application status", func(v *datatransfer.DataTransfer) { v.ApplicationDataTransfers[0].ApplicationTransferStatus = "" }, codes.FailedPrecondition},
-		{"unknown overall status", func(v *datatransfer.DataTransfer) { v.OverallTransferStatusCode = "unrecognized" }, codes.FailedPrecondition},
-		{"missing parameters", func(v *datatransfer.DataTransfer) { v.ApplicationDataTransfers[0].ApplicationTransferParams = nil }, codes.FailedPrecondition},
+		{"complete", func(*datatransfer.DataTransfer) {}, codes.OK, false},
+		{"different saved ID", func(v *datatransfer.DataTransfer) { v.Id = "another-transfer" }, codes.FailedPrecondition, true},
+		{"different owner", func(v *datatransfer.DataTransfer) { v.NewOwnerUserId = "other" }, codes.FailedPrecondition, true},
+		{"failed application", func(v *datatransfer.DataTransfer) { v.ApplicationDataTransfers[0].ApplicationTransferStatus = "failed" }, codes.FailedPrecondition, false},
+		{"missing application status", func(v *datatransfer.DataTransfer) { v.ApplicationDataTransfers[0].ApplicationTransferStatus = "" }, codes.FailedPrecondition, false},
+		{"unknown overall status", func(v *datatransfer.DataTransfer) { v.OverallTransferStatusCode = "unrecognized" }, codes.FailedPrecondition, false},
+		{"missing parameters", func(v *datatransfer.DataTransfer) { v.ApplicationDataTransfers[0].ApplicationTransferParams = nil }, codes.FailedPrecondition, false},
 		{"duplicate application", func(v *datatransfer.DataTransfer) {
 			v.ApplicationDataTransfers = append(v.ApplicationDataTransfers, v.ApplicationDataTransfers[0])
-		}, codes.FailedPrecondition},
+		}, codes.FailedPrecondition, false},
 		{"nil application", func(v *datatransfer.DataTransfer) {
 			v.ApplicationDataTransfers = append(v.ApplicationDataTransfers, nil)
-		}, codes.DataLoss},
+		}, codes.DataLoss, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			record := &datatransfer.DataTransfer{
@@ -55,8 +60,17 @@ func TestTransferReadRequiresVerifiedCompletion(t *testing.T) {
 			result, _, err := connector.getUserDataTransfer(t.Context(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
 			require.Equal(t, test.code, status.Code(err))
 			require.Equal(t, test.code == codes.OK, result.GetFields()[fieldCompleted].GetBoolValue())
-			require.Equal(t, "src", result.GetFields()[argResourceID].GetStringValue())
-			require.Equal(t, record.NewOwnerUserId, result.GetFields()[argTargetResourceID].GetStringValue())
+			if test.identityMismatch {
+				// Evidence gate: only the requested ID/observed_at may return;
+				// the foreign record's observed owners must not be present.
+				require.Equal(t, "tr_x", result.GetFields()[fieldTransferID].GetStringValue())
+				require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
+				require.NotContains(t, result.GetFields(), argResourceID)
+				require.NotContains(t, result.GetFields(), argTargetResourceID)
+			} else {
+				require.Equal(t, "src", result.GetFields()[argResourceID].GetStringValue())
+				require.Equal(t, record.NewOwnerUserId, result.GetFields()[argTargetResourceID].GetStringValue())
+			}
 			require.Equal(t, 1, calls)
 		})
 	}

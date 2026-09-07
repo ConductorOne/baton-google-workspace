@@ -141,7 +141,9 @@ func (c *GoogleWorkspaceClient) InsertUser(ctx context.Context, user *directoryA
 // object sent via Update has the same problem as Patch. Callers relying on
 // that shrink-to-empty guarantee must pass the full current user (fields they
 // don't intend to change included). Read-modify-write callers must supply the
-// observed ETag; it is sent as If-Match so a concurrent change rejects the write.
+// observed ETag; it is sent as If-Match. The Directory API does not document
+// conditional-write enforcement on users.update or users.patch, so sending this
+// header is not a verified guarantee against concurrent overwrites.
 // Callers only touching
 // scalar fields (as most existing call sites in pkg/connector do - suspend,
 // primary email, org unit, manager relation, etc.) are unaffected and can keep

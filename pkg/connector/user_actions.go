@@ -1028,8 +1028,8 @@ func applyUserProfilePatch(
 	// it when given the genuinely complete object. So whenever ExternalIds is
 	// actually shrinking - per externalIDsWillShrink above, which is not
 	// limited to the empty-clear case - start from a full copy of `current` and
-	// send the result via Update instead of Patch. The conditional If-Match
-	// below protects this read-modify-write from concurrent profile changes.
+	// send the result via Update instead of Patch. The observed ETag is sent
+	// as If-Match, but Directory conditional-write enforcement is not verified.
 	// Every other case keeps the narrower Patch.
 	usePut := externalIDsWillShrink
 	var update *admin.User

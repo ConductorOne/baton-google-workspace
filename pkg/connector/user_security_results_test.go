@@ -71,3 +71,43 @@ func TestApplicationPasswordRevocationRequiresFinalRead(t *testing.T) {
 	require.Equal(t, float64(1), result.GetFields()["passwords_deleted"].GetNumberValue())
 	require.Equal(t, []any{"42"}, result.AsMap()["deleted_ids"])
 }
+
+func TestCredentialRevocationCancellationRetainsCompletedWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var lists int
+	var revoked []string
+	result, err := revokeUserCredentials(ctx, "tokens_deleted", func() ([]string, error) {
+		lists++
+		return []string{"first", "unattempted", ""}, nil
+	}, func(id string) error {
+		revoked = append(revoked, id)
+		cancel()
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, lists, "cancelled work must not enumerate again")
+	require.Equal(t, []string{"first"}, revoked)
+	require.Equal(t, []any{"first"}, result.AsMap()["deleted_ids"])
+	require.Empty(t, result.AsMap()["skipped_ids"], "unattempted entries are not missing identities")
+	require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
+	require.False(t, result.GetFields()["inventory_complete"].GetBoolValue())
+}
+
+func TestCredentialRevocationCancelledBeforeReadDoesNoWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var lists, mutations int
+	result, err := revokeUserCredentials(ctx, "tokens_deleted", func() ([]string, error) {
+		lists++
+		return nil, nil
+	}, func(string) error {
+		mutations++
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, lists)
+	require.Zero(t, mutations)
+	require.False(t, result.GetFields()["inventory_complete"].GetBoolValue(), "cancelled empty inventory is unknown")
+	require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
+}
