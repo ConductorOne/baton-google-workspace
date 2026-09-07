@@ -43,6 +43,7 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | transfer_user_calendar | `resource_id` (string, required)<br/>`target_resource_id` (string, required)<br/>`release_resources` (boolean, optional) | Transfers Google Calendar data from one user to another |
 | get_user_data_transfer | `transfer_id`, `resource_id`, `target_resource_id`, `application_id` (strings, required)<br/>`privacy_levels` (required for Drive) or `release_resources` (required for Calendar) | Reads one saved provider operation and verifies its ID, owners, application, and complete parameters. Returns actual owner IDs, parameters, and overall/per-application statuses. Never starts a transfer. |
 | remove_user_alias | `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` (strings, required) | Removes an editable alias from the exact account after checking ownership and primary/customer preconditions. Missing users, another owner, and unreadable post-state are not successful absence. |
+| add_user_alias | stable `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` (strings, required) | Adds an alias to the pinned account within the configured customer, then verifies its dedicated alias collection. Same-account replay is idempotent; foreign-user/group conflicts never move or remove an address. |
 | change_user_org_unit | `user_id` (string, required)<br/>`org_unit_path` (string, required) | Moves a user to a different organizational unit |
 | offboarding_profile_update | `user_id` (string, required)<br/>`archive_account` (boolean, optional) | Comprehensive offboarding: removes from GAL, clears recovery details, deletes addresses/phones, optionally archives |
 | sign_out_user | `user_id` (string, required) | Signs user out of all sessions and resets sign-in cookies |
@@ -94,6 +95,20 @@ Drive privacy inputs remain case-insensitive and default to both private and sha
 Calendar Data Transfer covers future, non-private events in the source user's primary calendar with a guest or resource. It does not migrate all past, private, or secondary-calendar content. Operation completion is not independent per-file ownership or reservation-release evidence. Required broader postconditions need separate verification.
 
 Alias removal uses the dedicated alias collection before and after a deletion, not absence of an optional user-profile field. It rejects primary addresses, known non-editable aliases, account-precondition changes, and an alias resolving to a different user. `alias_present_after` is omitted when readback is unknown. An alias absent from the selected account is not proof that the address is globally available; another user, group, or namespace may own it.
+
+### Requestable alias creation
+
+`add_user_alias` is a user-resource action using the existing Directory API user-provisioning scope. It requires a stable Google user ID rather than an email or alias selector, plus the expected current primary email and customer ID. Those submitted preconditions must match the observed target; the configured connector customer provides an independent tenant boundary. The provider enforces whether the alias namespace belongs to that customer. Provider-verified secondary domains are supported even if they differ from the connector's sync-selection domain; that filter is not a new alias authorization policy.
+
+Success requires observed attachment in the same pinned account's dedicated alias collection, not merely an accepted insert. `already_present` can be a zero-write same-account replay. A conflicting user, group, or namespace never triggers deletion, transfer, or adoption. Primary addresses and known non-editable aliases are rejected. Provider permission failures and uncertain readbacks remain errors with qualified evidence.
+
+Inspect `alias_present_before` and `alias_present_after`; an unread observation is omitted rather than reported false. `observation_complete` describes the alias post-state observation, not the absence of an error. `insert_attempted` records that the insert was attempted; `insert_acknowledged` records provider acknowledgment, not confirmed attachment. A false acknowledgment is not proof that no mutation occurred. Preserve those fields and the error when readback is unknown, and do not blindly replay an uncertain insert.
+
+<Warning>
+**A connector action does not grant self-service permission.** An administrator may expose it through an existing C1 requestable Action, but must bind the target account from the authorized requester/resource relationship and enforce the permitted alias/domain and approval policy through the Action's audience, policy, and trusted form/resource bindings. A user-supplied `user_id`, primary-email pin, or customer pin is not authorization evidence. The connector neither infers requester identity nor implements a new C1 approval system.
+
+Publishing the connector capability does not automatically create or enable a customer-facing Action. Configuration tests proving that a requester cannot substitute another target or escape the administrator's alias/domain policy are separate from connector fixtures. No C1 requestable-Action UI/backend change, deployment, or live provider certification is claimed here.
+</Warning>
 
 ## Before you begin
 

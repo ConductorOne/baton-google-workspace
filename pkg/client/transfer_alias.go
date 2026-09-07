@@ -43,6 +43,24 @@ func (c *GoogleWorkspaceClient) DeleteUserAlias(ctx context.Context, userKey, al
 	return nil
 }
 
+// InsertUserAlias adds an email alias to a user via Users.Aliases.Insert on
+// the EXISTING user provisioning service. No new service or scope is
+// introduced: the broader admin.directory.user scope that already authorizes
+// user provisioning covers alias insertion. A 409 from the provider is the
+// authoritative signal that the address is already owned by another user or
+// namespace (e.g. a group); callers qualify it with a bounded readback rather
+// than retrying.
+func (c *GoogleWorkspaceClient) InsertUserAlias(ctx context.Context, userKey, alias string) error {
+	if c.UserProvisioningService == nil {
+		return errServiceNotAvailable("user provisioning service")
+	}
+	_, err := c.UserProvisioningService.Users.Aliases.Insert(userKey, &directoryAdmin.Alias{Alias: alias}).Context(ctx).Do()
+	if err != nil {
+		return wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to insert alias %s for user: %s", alias, userKey))
+	}
+	return nil
+}
+
 // ListUserAliases reads the dedicated, complete alias collection for one user.
 func (c *GoogleWorkspaceClient) ListUserAliases(ctx context.Context, userID string) ([]string, error) {
 	if c.UserProvisioningService == nil {

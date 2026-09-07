@@ -108,6 +108,7 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | `transfer_user_calendar` | `resource_id`, `target_resource_id`, `release_resources` | Transfer Google Calendar data to another user |
 | `get_user_data_transfer` | `transfer_id`, expected `resource_id`, `target_resource_id`, `application_id`, and application parameters | Read a saved transfer; verify owners and complete parameters; return overall/per-application status without mutation |
 | `remove_user_alias` | `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` | Verify the exact owner and account preconditions; remove an editable alias and read back; never claim global address availability |
+| `add_user_alias` | stable `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` | Add an alias to a pinned account in the configured customer and verify attachment; same-account replay is idempotent, foreign-user/group collisions never move or remove an alias |
 | `create_group` | `email`, `name`, `description` | Create a new Google Group |
 | `modify_group_settings` | `group_key`, plus settings flags | Update supplied privacy/membership/discovery/join/GAL settings and return an independently observed group resource |
 
@@ -122,6 +123,14 @@ Connector actions are custom operations invoked on demand from C1 automations:
 > **Credential cleanup evidence:** check `inventory_complete` before interpreting `remaining_ids`. Failed security actions retain their per-item results. Empty results after a failed enumeration are not absence, and login-derived application grants are not a live credential inventory.
 
 > **Transfers:** submission is acknowledgement, not completion. Keep the provider transfer ID and approved parameters, then use `get_user_data_transfer`; never poll by replaying a mutation. Drive wire privacy values are uppercase and preserve the existing default of both private/shared. Calendar retain-resources uses the documented empty parameter set. Conflicting, unknown, or truncated discovery never triggers a new insert.
+
+### Requestable alias creation
+
+`add_user_alias` is a user-resource action. The target must be a stable Google user ID, not an email/alias selector; the primary-email and customer preconditions must match the observed account. The configured customer is an independent boundary, not a value supplied by the requester. The provider validates alias namespace ownership, including secondary domains in that customer; the configured sync-selection domain is not an alias write allowlist.
+
+Check `outcome`, `alias_present_before`, `alias_present_after`, and `observation_complete`. Presence is omitted when unreadable, not defaulted to false. `insert_attempted` and `insert_acknowledged` distinguish a provider call/acknowledgment from verified attachment; no acknowledgment does not prove no mutation. A same-account replay can be already satisfied without inserting. Foreign-user/group ownership, primary-address misuse, non-editable aliases, and mismatched account preconditions fail without moving/removing anything. Unknown inserts are not retried automatically.
+
+**Self-service authorization is separate.** Publishing this connector action does not create or enable a customer-facing C1 requestable Action. Administrators must configure its audience, approval policy, and trusted form/resource bindings so the target comes from the authorized requester/resource relationship and the alias/domain is allowed. Arbitrary submitted `user_id` or `expected_customer_id` values are not ownership or authorization evidence. Verifying that requesters cannot substitute another account or escape alias/domain policy is a separate C1 configuration acceptance gate; this connector implements no new C1 UI/backend or approval system.
 
 # Credentials Setup
 
