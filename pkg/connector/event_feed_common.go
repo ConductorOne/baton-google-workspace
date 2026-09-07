@@ -33,10 +33,15 @@ import (
 // of blocking on the shared 250/min quota for an entire directory page (up to 500 users).
 const usersPerEventFeedCall = 25
 
+// pendingUser.Retries caps the attempt count for this user lookup operation to prevent
+// a repeatedly failing user from blocking the batch. The user is skipped after 2 failures.
 type pendingUser struct {
-	Email string `json:"email"`
-	ID    string `json:"id"`
+	Email   string `json:"email"`
+	ID      string `json:"id"`
+	Retries int    `json:"retries,omitempty"`
 }
+
+const maxUserLookupRetries = 2
 
 // userScanCursor tracks progress through a rolling, continuous walk of the user directory.
 // PendingUsers holds users fetched from the current directory page not yet processed;
@@ -142,12 +147,21 @@ func scanUsersForEvents(
 	}
 
 	events := []*v2.Event{}
-	for _, u := range batch {
+	for i := range batch {
+		u := batch[i]
+		if u.Retries >= maxUserLookupRetries {
+			// Failed too many times already: skip instead of retrying forever.
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: user exceeded lookup retry limit for event feed, skipping",
+				zap.String("user", u.Email), zap.Int("retries", u.Retries))
+			continue
+		}
+
 		userEvents, err := lookup(ctx, client, u)
 		if err != nil {
 			// Don't remove `batch` from cursor.PendingUsers until every lookup in it has
 			// succeeded, so a single user's Reports API blip doesn't lose the remaining
 			// unprocessed users and restart the walk from the beginning on retry.
+			batch[i].Retries++
 			cursorToken, marshalErr := cursor.marshal()
 			if marshalErr != nil {
 				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
