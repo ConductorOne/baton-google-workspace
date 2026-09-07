@@ -30,6 +30,9 @@ const samlAppLookupMaxResults = 50
 // listActivitiesRateLimitedBounded has room to complete.
 const samlAppLookupTimeout = 60 * time.Second
 
+// samlHungSkips is the running total of errHungLookup skips, for the log line below.
+var samlHungSkips hungLookupSkipCounter
+
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
 type samlEventFeed struct {
 	client     *gwclient.GoogleWorkspaceClient
@@ -71,11 +74,11 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 
 	r, err := listActivitiesRateLimitedBounded(lookupCtx, client, user.Email, reportsAppSAML, "login_success", startTime, "", samlAppLookupMaxResults)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			// Our sub-deadline fired, not the caller's context: skip this user instead of
-			// failing the whole batch.
+		if errors.Is(err, errHungLookup) && ctx.Err() == nil {
+			// Genuinely hung, not quota starvation or a real error: skip this user.
 			l.Debug("google-workspace-connector: timed out listing saml login activities, skipping",
-				zap.String("user", user.Email))
+				zap.String("user", user.Email), zap.Error(err),
+				zap.Int64("total_occurrences", samlHungSkips.incr()))
 			return nil, nil
 		}
 		return nil, fmt.Errorf("google-workspace-connector: failed to list saml login activities for %s: %w", user.Email, err)

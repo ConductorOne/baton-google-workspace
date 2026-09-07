@@ -17,6 +17,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
@@ -24,6 +25,20 @@ import (
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
+
+// errHungLookup marks retries exhausted on a genuinely stuck attempt, distinct from quota
+// starvation or a persistent real error — only this case is safe to skip silently.
+var errHungLookup = errors.New("google-workspace-connector: reports api lookup hung on every attempt")
+
+// hungLookupSkipCounter gives a per-feed running total of errHungLookup skips for log lines.
+type hungLookupSkipCounter struct {
+	count atomic.Int64
+}
+
+// incr records one more skip and returns the running total.
+func (c *hungLookupSkipCounter) incr() int64 {
+	return c.count.Add(1)
+}
 
 const (
 	// reportsFilterQueryQuotaPerMinute mirrors Google's documented 250/min filter-query cap.
@@ -187,6 +202,10 @@ func retryListActivities(
 		// treat that like a retryable 429/503 rather than "out of time."
 		hungAttempt := applyPerAttemptTimeout && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
 		if attempt >= maxRetries || (!isRetryableReportsError(err) && !hungAttempt) {
+			if attempt >= maxRetries && hungAttempt {
+				// Final attempt was itself hung, not a real error: tag distinctly.
+				return nil, fmt.Errorf("%w: %w", errHungLookup, err)
+			}
 			return nil, err
 		}
 

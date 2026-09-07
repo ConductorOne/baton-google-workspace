@@ -33,6 +33,9 @@ const oauthAppLookupMaxResults = 50
 // in listActivitiesFilteredRateLimitedBounded has room to complete.
 const oauthAppLookupTimeout = 60 * time.Second
 
+// oauthHungSkips is the running total of errHungLookup skips, for the log line below.
+var oauthHungSkips hungLookupSkipCounter
+
 type usageEventFeed struct {
 	c          *gwclient.GoogleWorkspaceClient
 	customerID string
@@ -142,11 +145,11 @@ func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.Go
 
 	r, err := listActivitiesFilteredRateLimitedBounded(lookupCtx, client, user.Email, "token", "authorize", startTime, "", filters, oauthAppLookupMaxResults)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			// Our sub-deadline fired, not the caller's context: skip this one app instead of
-			// failing the whole batch.
+		if errors.Is(err, errHungLookup) && ctx.Err() == nil {
+			// Genuinely hung, not quota starvation or a real error: skip this one app.
 			l.Debug("google-workspace: timed out listing token activities, skipping",
-				zap.String("user", user.Email), zap.String("client_id", clientID))
+				zap.String("user", user.Email), zap.String("client_id", clientID), zap.Error(err),
+				zap.Int64("total_occurrences", oauthHungSkips.incr()))
 			return nil, nil
 		}
 		return nil, fmt.Errorf("google-workspace: failed to list token activities for %s app %s: %w", user.Email, clientID, err)

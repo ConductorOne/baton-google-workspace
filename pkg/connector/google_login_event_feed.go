@@ -33,6 +33,9 @@ const googleLoginLookupMaxResults = 50
 // listActivitiesRateLimitedBounded has room to complete.
 const googleLoginLookupTimeout = 60 * time.Second
 
+// googleLoginHungSkips is the running total of errHungLookup skips, for the log line below.
+var googleLoginHungSkips hungLookupSkipCounter
+
 // googleLoginEventFeed emits UsageEvents from Google Workspace sign-in activity.
 // Unlike SAML/OAuth feeds, the target resource is always Google Workspace itself.
 type googleLoginEventFeed struct {
@@ -63,11 +66,11 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 
 	r, err := listActivitiesRateLimitedBounded(lookupCtx, client, user.Email, reportsAppLogin, "login_success", startTime, "", googleLoginLookupMaxResults)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			// Our sub-deadline fired, not the caller's context: skip this user instead of
-			// failing the whole batch.
+		if errors.Is(err, errHungLookup) && ctx.Err() == nil {
+			// Genuinely hung, not quota starvation or a real error: skip this user.
 			l.Debug("google-workspace-connector: timed out listing google login activities, skipping",
-				zap.String("user", user.Email))
+				zap.String("user", user.Email), zap.Error(err),
+				zap.Int64("total_occurrences", googleLoginHungSkips.incr()))
 			return nil, nil
 		}
 		return nil, fmt.Errorf("google-workspace-connector: failed to list google login activities for %s: %w", user.Email, err)
