@@ -69,8 +69,8 @@ func revokeUserCredentials(ctx context.Context, countField string, list func() (
 		if len(skipped) != 0 {
 			failures = append(failures, fmt.Errorf("google-workspace: skipped %d credential entries with missing identity", len(skipped)))
 		}
-		if err := ctx.Err(); err != nil {
-			failures = append(failures, fmt.Errorf("google-workspace: credential revocation interrupted: %w", err))
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			failures = append(failures, fmt.Errorf("google-workspace: credential revocation interrupted: %w", cancelErr))
 		} else if len(ids) == 0 {
 			complete = true
 		} else {

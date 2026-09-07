@@ -207,7 +207,7 @@ func newAddAliasTestResourceType(t *testing.T, server *httptest.Server) *userRes
 	}
 }
 
-func TestAliasMutationFailuresWaitWithoutReplaying(t *testing.T) {
+func TestAliasMutationFailuresDoNotReplayOrClaimPostState(t *testing.T) {
 	for _, operation := range []string{"add", "remove"} {
 		for _, failure := range []struct {
 			name   string
@@ -252,6 +252,8 @@ func TestAliasMutationFailuresWaitWithoutReplaying(t *testing.T) {
 				}))
 				defer server.Close()
 				o := newAddAliasTestResourceType(t, server)
+				// Bound the test without asserting production delay defaults.
+				// Wait timing is covered by the existing fast-config TestWaitOnce.
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 				args := aliasArgs("u1", "new@example.com", "target@example.com", "C01")
@@ -262,10 +264,7 @@ func TestAliasMutationFailuresWaitWithoutReplaying(t *testing.T) {
 				} else {
 					result, _, err = o.removeUserAliasActionHandler(ctx, args)
 				}
-				require.Equal(t, failure.want, status.Code(err), "retain the provider classification after waiting")
-				if failure.want == codes.Unavailable {
-					require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded, "retryable failure must wait until the cancelled rate-limit window")
-				}
+				require.Equal(t, failure.want, status.Code(err), "retain the provider classification")
 				require.Equal(t, int32(1), mutations.Load(), "never replay an unknown mutation")
 				require.Zero(t, lateReads.Load(), "failed mutation must not invent a confirming post-state")
 				require.Equal(t, aliasOutcomeReadbackUnknown, result.GetFields()["outcome"].GetStringValue())
