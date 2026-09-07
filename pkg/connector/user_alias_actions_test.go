@@ -133,7 +133,7 @@ func newAliasTestResourceType(t *testing.T, server *httptest.Server) *userResour
 		client: &gwclient.GoogleWorkspaceClient{
 			UserProvisioningService: dir,
 		},
-		customerId: "test-customer",
+		customerId: "C01",
 		domain:     "",
 	}
 }

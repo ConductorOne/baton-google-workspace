@@ -960,3 +960,76 @@ func TestAddUserAlias_SDKConflictReadbackFailureIsUnknown(t *testing.T) {
 		t.Fatalf("conflict reconciliation replayed mutation: inserts=%d mutations=%d", state.inserts, state.mutations)
 	}
 }
+
+func TestAddUserAlias_SDKNoneditableAlreadyAttachedIsReadOnly(t *testing.T) {
+	state := &addAliasTestState{users: map[string]*addAliasTestUser{
+		"u1": {
+			Id: "u1", PrimaryEmail: "target@example.com", CustomerId: "C01",
+			Aliases: []string{"existing@example.com"}, NonEditableAliases: []string{"existing@example.com"},
+		},
+	}}
+	server := newAddAliasTestServer(state)
+	defer server.Close()
+	actionStatus, result, err := invokeAddUserAlias(t, newAddAliasTestResourceType(t, server), sdkAddArgs("u1", "existing@example.com", "target@example.com", "C01"))
+	if err != nil {
+		t.Fatalf("SDK invocation failed: %v", err)
+	}
+	if actionStatus != v2.BatonActionStatus_BATON_ACTION_STATUS_COMPLETE || result.GetFields()["outcome"].GetStringValue() != aliasOutcomeAlreadyPresent {
+		t.Fatal("verified same-account attachment must be a read-only already-present result")
+	}
+	if !result.GetFields()["alias_present_after"].GetBoolValue() || result.GetFields()["insert_attempted"].GetBoolValue() {
+		t.Fatal("observed attachment must not imply an insert")
+	}
+	state.mtx.Lock()
+	defer state.mtx.Unlock()
+	if state.mutations != 0 {
+		t.Fatalf("already-attached noneditable alias caused %d mutations", state.mutations)
+	}
+}
+
+func TestAliasActionsRequireConcreteConfiguredCustomer(t *testing.T) {
+	for _, operation := range []string{"add", "remove"} {
+		for _, test := range []struct {
+			name, configured, observed string
+			code                       codes.Code
+		}{
+			{"missing customer", "", "C01", codes.FailedPrecondition},
+			{"selector-only customer", "my_customer", "C01", codes.FailedPrecondition},
+			{"foreign customer despite matching pin", "C01", "FOREIGN-CUSTOMER", codes.PermissionDenied},
+		} {
+			t.Run(operation+"/"+test.name, func(t *testing.T) {
+				state := &addAliasTestState{users: map[string]*addAliasTestUser{
+					"u1": {Id: "u1", PrimaryEmail: "private@example.com", CustomerId: test.observed, Aliases: []string{"existing@example.com"}},
+				}}
+				server := newAddAliasTestServer(state)
+				defer server.Close()
+				resourceType := newAddAliasTestResourceType(t, server)
+				resourceType.customerId = test.configured
+				handler := resourceType.addUserAliasActionHandler
+				if operation == "remove" {
+					handler = resourceType.removeUserAliasActionHandler
+				}
+				result, _, err := handler(t.Context(), sdkAddArgs("u1", "existing@example.com", "private@example.com", test.observed))
+				if status.Code(err) != test.code {
+					t.Fatalf("error code = %v, want %v", status.Code(err), test.code)
+				}
+				if result.GetFields()["outcome"].GetStringValue() != aliasOutcomePreconditionFailed {
+					t.Fatal("invalid configured customer must fail its precondition")
+				}
+				for _, field := range []string{"primary_email", "customer_id"} {
+					if _, present := result.GetFields()[field]; present {
+						t.Fatalf("denial exposed untrusted observed field %s", field)
+					}
+				}
+				if strings.Contains(err.Error(), "FOREIGN-CUSTOMER") || strings.Contains(err.Error(), "private@example.com") {
+					t.Fatal("denial diagnostic exposed unrelated account details")
+				}
+				state.mtx.Lock()
+				defer state.mtx.Unlock()
+				if state.mutations != 0 || state.deleteHits != 0 {
+					t.Fatalf("customer rejection mutated provider: mutations=%d deletes=%d", state.mutations, state.deleteHits)
+				}
+			})
+		}
+	}
+}

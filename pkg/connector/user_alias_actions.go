@@ -138,6 +138,7 @@ func (o *userResourceType) removeUserAliasActionHandler(ctx context.Context, arg
 	}
 	var user *admin.User
 	var before, after *bool
+	var trustedAccount bool
 	result := func(outcome string) *structpb.Struct {
 		fields := map[string]*structpb.Value{
 			fieldSuccess:           structpb.NewBoolValue(after != nil && !*after && (outcome == aliasOutcomeDeleted || outcome == aliasOutcomeAlreadyAbsent)),
@@ -145,7 +146,7 @@ func (o *userResourceType) removeUserAliasActionHandler(ctx context.Context, arg
 			"observation_complete": structpb.NewBoolValue(after != nil),
 			argUserID:              structpb.NewStringValue(userID),
 		}
-		if user != nil {
+		if trustedAccount {
 			fields["primary_email"] = structpb.NewStringValue(user.PrimaryEmail)
 			fields["customer_id"] = structpb.NewStringValue(user.CustomerId)
 		}
@@ -160,6 +161,9 @@ func (o *userResourceType) removeUserAliasActionHandler(ctx context.Context, arg
 	if strings.EqualFold(alias, primary) {
 		return result(aliasOutcomePrimaryRejected), nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: cannot remove a primary address as an alias")
 	}
+	if o.customerId == "" || strings.EqualFold(o.customerId, "my_customer") {
+		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: alias actions require a concrete configured customer ID")
+	}
 	if o.client == nil || o.client.UserProvisioningService == nil {
 		return result(aliasOutcomeReadbackUnknown), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: user provisioning service is required for alias removal")
 	}
@@ -171,12 +175,19 @@ func (o *userResourceType) removeUserAliasActionHandler(ctx context.Context, arg
 		}
 		return result(aliasOutcomeReadbackUnknown), nil, err
 	}
+	if user == nil || user.Id == "" || user.PrimaryEmail == "" || user.CustomerId == "" {
+		return result(aliasOutcomeReadbackUnknown), nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: alias target response is incomplete")
+	}
+	if user.CustomerId != o.customerId {
+		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.PermissionDenied, "google-workspace: alias target is outside the configured customer")
+	}
 	matchesAccount := func(candidate *admin.User) bool {
 		return candidate != nil && candidate.Id == userID && candidate.CustomerId == customer && strings.EqualFold(candidate.PrimaryEmail, primary)
 	}
 	if !matchesAccount(user) {
 		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: alias target does not match the pinned account")
 	}
+	trustedAccount = true
 	if aliasListHas(user.NonEditableAliases, alias) {
 		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: non-editable aliases cannot be removed")
 	}
@@ -263,6 +274,7 @@ func (o *userResourceType) addUserAliasActionHandler(ctx context.Context, args *
 	var user *admin.User
 	var before, after *bool
 	var insertAttempted, insertAcknowledged bool
+	var trustedAccount bool
 	result := func(outcome string) *structpb.Struct {
 		fields := map[string]*structpb.Value{
 			fieldSuccess:           structpb.NewBoolValue(after != nil && *after && (outcome == aliasOutcomeAdded || outcome == aliasOutcomeAlreadyPresent)),
@@ -272,10 +284,8 @@ func (o *userResourceType) addUserAliasActionHandler(ctx context.Context, args *
 			"insert_acknowledged":  structpb.NewBoolValue(insertAcknowledged),
 			argUserID:              structpb.NewStringValue(userID),
 		}
-		if user != nil && user.PrimaryEmail != "" {
+		if trustedAccount {
 			fields["primary_email"] = structpb.NewStringValue(user.PrimaryEmail)
-		}
-		if user != nil && user.CustomerId != "" {
 			fields["customer_id"] = structpb.NewStringValue(user.CustomerId)
 		}
 		if before != nil {
@@ -289,8 +299,8 @@ func (o *userResourceType) addUserAliasActionHandler(ctx context.Context, args *
 	if strings.EqualFold(alias, primary) {
 		return result(aliasOutcomePrimaryRejected), nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: cannot add the primary address as an alias")
 	}
-	if o.customerId == "" {
-		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: configured customer is required for alias addition")
+	if o.customerId == "" || strings.EqualFold(o.customerId, "my_customer") {
+		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: alias actions require a concrete configured customer ID")
 	}
 	completeAccount := func(candidate *admin.User) bool {
 		return candidate != nil && candidate.Id != "" && candidate.PrimaryEmail != "" && candidate.CustomerId != ""
@@ -318,8 +328,7 @@ func (o *userResourceType) addUserAliasActionHandler(ctx context.Context, args *
 	// domain is deliberately NOT checked against the configured sync domain:
 	// provider-verified secondary domains in the same customer are allowed.
 	if user.CustomerId != o.customerId {
-		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.PermissionDenied,
-			fmt.Sprintf("google-workspace: alias target belongs to customer %s, not the configured customer", user.CustomerId))
+		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.PermissionDenied, "google-workspace: alias target is outside the configured customer")
 	}
 	matchesAccount := func(candidate *admin.User) bool {
 		return candidate != nil && candidate.Id == userID && candidate.CustomerId == customer && strings.EqualFold(candidate.PrimaryEmail, primary)
@@ -327,6 +336,7 @@ func (o *userResourceType) addUserAliasActionHandler(ctx context.Context, args *
 	if !matchesAccount(user) {
 		return result(aliasOutcomePreconditionFailed), nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: alias target does not match the pinned account")
 	}
+	trustedAccount = true
 
 	// A dedicated alias collection read is authoritative; omission of the
 	// optional User.Aliases profile field is not evidence of absence.
