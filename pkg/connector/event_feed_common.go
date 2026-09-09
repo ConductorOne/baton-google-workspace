@@ -144,14 +144,10 @@ func scanUsersForEvents(
 	}
 
 	// Quota already drained: fail fast with a classified error so the SDK backs off, instead of
-	// burning the per-user retry budget against a wall we already know is up.
+	// burning the per-user retry budget against a wall we already know is up. The SDK discards
+	// streamState on error, so there's no cursor to compute here.
 	if sharedReportsRateLimiter.AvailableTokens() < 1 {
-		cursorToken, marshalErr := cursor.marshal()
-		if marshalErr != nil {
-			return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
-		}
-		return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true},
-			uhttp.WrapErrors(codes.ResourceExhausted, "google-workspace-connector: reports api quota exhausted, deferring")
+		return nil, nil, uhttp.WrapErrors(codes.ResourceExhausted, "google-workspace-connector: reports api quota exhausted, deferring")
 	}
 
 	batch := cursor.PendingUsers

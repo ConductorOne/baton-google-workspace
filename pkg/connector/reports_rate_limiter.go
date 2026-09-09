@@ -44,11 +44,16 @@ const (
 	// reportsFilterQueryQuotaPerMinute mirrors Google's documented 250/min filter-query cap.
 	// A small safety margin is left below the hard limit to tolerate clock/measurement jitter.
 	reportsFilterQueryQuotaPerMinute = 220
-	// reportsMaxRetries caps attempts at 3 total (this value + the first try): past that, letting
-	// a persistent failure keep retrying isn't worth the added delay.
-	reportsMaxRetries     = 2
-	reportsInitialBackoff = 500 * time.Millisecond
-	reportsMaxBackoff     = 30 * time.Second
+	// reportsMaxRetries caps attempts at 3 total (this value + the first try) for the bounded
+	// event-feed path: past that, letting a persistent failure keep retrying isn't worth the
+	// added delay.
+	reportsMaxRetries = 2
+	// reportsUnboundedMaxRetries is the original retry budget (6 attempts total), kept for
+	// listActivitiesRateLimited's unbounded (no per-attempt timeout, no lookupCtx) callers, which
+	// don't share the bounded path's tight time budget.
+	reportsUnboundedMaxRetries = 5
+	reportsInitialBackoff      = 500 * time.Millisecond
+	reportsMaxBackoff          = 30 * time.Second
 
 	// reportsPerAttemptTimeout bounds a single ListActivities call, not the retry loop as a
 	// whole, so a genuinely hung request is retried like any other transient error instead of
@@ -142,7 +147,7 @@ func listActivitiesRateLimited(
 ) (*reportsAdmin.Activities, error) {
 	return retryListActivities(
 		ctx, sharedReportsRateLimiter, client.ListActivities,
-		0, reportsMaxRetries, reportsInitialBackoff, reportsMaxBackoff,
+		0, reportsUnboundedMaxRetries, reportsInitialBackoff, reportsMaxBackoff,
 		userKey, applicationName, eventName, startTime, pageToken, "", maxResults,
 	)
 }
