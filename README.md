@@ -89,6 +89,8 @@ User `Get` and sync pages expose presence-aware `google_user_state` facts: separ
 
 Targeted group `Get` includes `group_settings` and requires the Groups Settings API and `apps.groups.settings` scope. A settings failure fails the group read; it does not return a successful partial resource. Normal listing does not fetch settings per group.
 
+Before upgrading an installation with group-read access, enable the Groups Settings API and authorize `apps.groups.settings`. Missing settings authorization now fails client initialization when group reads are enabled, rather than leaving a partially usable group connector.
+
 **Targeted user-read migration:** configured filter exclusions previously returned no resource and no error from the connector hook; they now return `NotFound` with `ErrorInfo` reason `RESOURCE_FILTERED` and domain `baton-google-workspace`. The pinned baton-sdk v0.29.0 builder already converted the old nil resource to `NotFound`, and its targeted-sync consumer skips that code. The public classification stays the same while the local SDK/gRPC fixture verifies the added qualifier survives transport. Lifecycle callers must inspect it and must not treat a filtered result as provider absence. Host-side qualifier handling is an integration requirement, not implemented or certified by this connector PR. No resource or grant IDs change; normal List filtering is unchanged.
 
 ## Connector actions

@@ -53,6 +53,12 @@ func TestGroupGetRejectsSettingsFailures(t *testing.T) {
 			wantCode:   codes.DataLoss,
 		},
 		{
+			name:       "identity without settings",
+			statusCode: http.StatusOK,
+			body:       `{"email":"team@example.com"}`,
+			wantCode:   codes.DataLoss,
+		},
+		{
 			name:       "different group settings",
 			statusCode: http.StatusOK,
 			body:       `{"email":"other@example.com"}`,

@@ -7,16 +7,21 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func testPrivateKey(t *testing.T) string {
@@ -148,6 +153,45 @@ func TestGetClientAllowsAuthorizationInitErrors(t *testing.T) {
 	if len(syncers) != 0 {
 		t.Fatalf("expected no syncers for missing scopes, got %d", len(syncers))
 	}
+}
+
+func TestGetClientRequiresSettingsForReadableGroups(t *testing.T) {
+	tokenServer, _ := newTokenStatusServer(http.StatusUnauthorized)
+	defer tokenServer.Close()
+
+	directory := newTestDirectoryService(t, tokenServer.URL, tokenServer.Client())
+	service := &gwclient.UserService{Service: directory, HTTPClient: tokenServer.Client()}
+	c := &GoogleWorkspace{
+		customerID:         "customer",
+		administratorEmail: "admin@example.com",
+		credentials:        testCredentials(t, tokenServer.URL),
+		serviceCache: map[string]any{
+			directoryAdmin.AdminDirectoryGroupReadonlyScope:       service,
+			directoryAdmin.AdminDirectoryGroupMemberReadonlyScope: service,
+		},
+	}
+	client, err := c.getClient(t.Context())
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected settings authorization to fail initialization, got %v", err)
+	}
+	if client != nil {
+		t.Fatal("failed initialization returned a partial client")
+	}
+	var authorizationError *GoogleWorkspaceOAuthUnauthorizedError
+	if !errors.As(err, &authorizationError) {
+		t.Fatalf("expected the original authorization error, got %v", err)
+	}
+	for _, syncer := range c.ResourceSyncers(t.Context()) {
+		if syncer.ResourceType(t.Context()).GetId() != resourceTypeGroup.Id {
+			continue
+		}
+		resources, _, err := syncer.List(t.Context(), nil, rs.SyncOpAttrs{})
+		if status.Code(err) != codes.PermissionDenied || len(resources) != 0 {
+			t.Fatalf("group sync must expose the initialization failure, got resources=%v error=%v", resources, err)
+		}
+		return
+	}
+	t.Fatal("group syncer was silently omitted after initialization failed")
 }
 
 // TestGetClientLogsSkippedServicesAtDebugLevel guards that a missing-scope

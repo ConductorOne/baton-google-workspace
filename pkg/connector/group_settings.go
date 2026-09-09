@@ -8,6 +8,8 @@ import (
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	groupssettings "google.golang.org/api/groupssettings/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -117,8 +119,12 @@ func groupSettingsProfile(settings *groupssettings.Groups) map[string]any {
 }
 
 func addGroupSettings(resource *v2.Resource, settings *groupssettings.Groups) error {
+	settingsProfile := groupSettingsProfile(settings)
+	if len(settingsProfile) == 0 {
+		return status.Error(codes.DataLoss, "google-workspace: group settings response contains no supported settings")
+	}
 	profile := resource.GetProfile().AsMap()
-	profile["group_settings"] = groupSettingsProfile(settings)
+	profile["group_settings"] = settingsProfile
 	updated, err := structpb.NewStruct(profile)
 	if err != nil {
 		return err
