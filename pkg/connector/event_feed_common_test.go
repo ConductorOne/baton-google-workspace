@@ -325,3 +325,66 @@ func TestUsageEventFeed_DedupesRepeatedClientIDsInTokens(t *testing.T) {
 		t.Fatalf("expected exactly 1 event for the deduped app, got %d", len(events))
 	}
 }
+
+// TestScanUsersForEvents_RetriesFailingUserThenSkipsWithoutBlockingOthers pins the per-user
+// retry cap: a deterministically failing user is retried across separate calls up to
+// maxUserLookupRetries, then permanently skipped, all without ever returning an error (which
+// would make the SDK discard the cursor carrying the retry count) and without blocking or
+// re-processing the other, succeeding users in the batch.
+func TestScanUsersForEvents_RetriesFailingUserThenSkipsWithoutBlockingOthers(t *testing.T) {
+	const failingEmail = "user-2@example.com"
+	users := []*directoryAdmin.User{
+		{Id: "user-1", PrimaryEmail: "user-1@example.com"},
+		{Id: "user-2", PrimaryEmail: failingEmail},
+		{Id: "user-3", PrimaryEmail: "user-3@example.com"},
+	}
+	server := newDirectoryUsersOnlyServer(t, users, 10, func(string) *reportsAdmin.Activities {
+		return &reportsAdmin.Activities{}
+	})
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	rep := newReportsServiceForTest(t, server.URL, server.Client())
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}
+
+	lookupCalls := map[string]int{}
+	lookup := func(ctx context.Context, c *gwclient.GoogleWorkspaceClient, u pendingUser) ([]*v2.Event, error) {
+		lookupCalls[u.Email]++
+		if u.Email == failingEmail {
+			return nil, fmt.Errorf("simulated persistent lookup failure")
+		}
+		return []*v2.Event{{Id: u.Email}}, nil
+	}
+
+	var cursor string
+	var allEvents []*v2.Event
+	hasMore := true
+	iterations := 0
+	const maxIterations = 20
+	for hasMore {
+		iterations++
+		if iterations > maxIterations {
+			t.Fatalf("did not terminate after %d iterations (possible infinite loop)", maxIterations)
+		}
+		events, state, err := scanUsersForEvents(context.Background(), client, "customer", "", nil, &pagination.StreamToken{Cursor: cursor}, lookup)
+		if err != nil {
+			t.Fatalf("call %d: expected a nil error (per-user failures must not fail the whole call), got %v", iterations, err)
+		}
+		allEvents = append(allEvents, events...)
+		cursor = state.Cursor
+		hasMore = state.HasMore
+	}
+
+	if got := lookupCalls["user-1@example.com"]; got != 1 {
+		t.Fatalf("expected user-1 to be looked up exactly once, got %d", got)
+	}
+	if got := lookupCalls["user-3@example.com"]; got != 1 {
+		t.Fatalf("expected user-3 to be looked up exactly once, got %d", got)
+	}
+	if got := lookupCalls[failingEmail]; got != maxUserLookupRetries {
+		t.Fatalf("expected the failing user to be attempted exactly maxUserLookupRetries (%d) times before being skipped, got %d", maxUserLookupRetries, got)
+	}
+	if len(allEvents) != 2 {
+		t.Fatalf("expected events only from the 2 succeeding users, got %d", len(allEvents))
+	}
+}

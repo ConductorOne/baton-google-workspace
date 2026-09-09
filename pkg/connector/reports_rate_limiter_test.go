@@ -243,6 +243,50 @@ func TestRetryListActivities(t *testing.T) {
 		}
 	})
 
+	t.Run("tags errHungLookup when the outer ctx cuts the final attempt short after prior hangs", func(t *testing.T) {
+		// attempt 0 hangs past its own 20ms attemptCtx (outer ctx has 33ms, still alive: a
+		// genuine hungAttempt). By the time attempt 1 starts (~23-26ms in, given a 3-6ms
+		// backoff), only ~7-10ms remain on the outer ctx — clearly under its own 20ms budget, so
+		// attempt 1's attemptCtx is clipped by the outer ctx, and ctx.Err() is non-nil when checked.
+		const localInitialBackoff = 3 * time.Millisecond
+		const localMaxBackoff = 10 * time.Millisecond
+		call, calls := blockingCallWithDelays([]time.Duration{perAttemptTimeout * 3, perAttemptTimeout * 3})
+		ctx, cancel := context.WithTimeout(context.Background(), 33*time.Millisecond)
+		defer cancel()
+
+		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, perAttemptTimeout, 5, localInitialBackoff, localMaxBackoff, "u", "app", "event", "", "", "", 10)
+		if !errors.Is(err, errHungLookup) {
+			t.Fatalf("expected errHungLookup (every attempt was a hang, outer ctx just ran out), got %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected errHungLookup to still wrap the underlying DeadlineExceeded, got %v", err)
+		}
+		if got := atomic.LoadInt32(calls); got != 2 {
+			t.Fatalf("expected 2 calls (initial hung attempt + a second cut short by the outer ctx), got %d", got)
+		}
+	})
+
+	t.Run("does not tag errHungLookup when a real error preceded the final hang", func(t *testing.T) {
+		// attempt 0 returns a real, fast 429 (not timeout-shaped) — allHungSoFar flips false and
+		// stays false. attempt 1 then hangs past its own attemptCtx with the outer ctx (1s) still
+		// alive, exhausting maxRetries=1: the bare, untagged error must come back even though the
+		// final failure looks identical to the positive case above.
+		call, calls := blockingCallWithDelays([]time.Duration{0, perAttemptTimeout * 3}, rateLimitedGoogleErr())
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, perAttemptTimeout, 1, initialBackoff, maxBackoff, "u", "app", "event", "", "", "", 10)
+		if errors.Is(err, errHungLookup) {
+			t.Fatalf("expected the bare error, not errHungLookup, since a real error preceded the hang: %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected the final error to still be DeadlineExceeded-shaped, got %v", err)
+		}
+		if got := atomic.LoadInt32(calls); got != 2 {
+			t.Fatalf("expected 2 calls (1 real error + 1 hung attempt exhausting maxRetries=1), got %d", got)
+		}
+	})
+
 	t.Run("stops after maxRetries and returns the last error", func(t *testing.T) {
 		retryable := rateLimitedGoogleErr()
 		call, calls := blockingCall(0, retryable, retryable, retryable)
@@ -257,4 +301,36 @@ func TestRetryListActivities(t *testing.T) {
 			t.Fatalf("expected 3 calls (1 initial + 2 retries), got %d", got)
 		}
 	})
+}
+
+// TestReportsRateLimiter_AvailableTokens drives the limiter with a fake clock so refill math is
+// exact, pinning that AvailableTokens() reflects spends and refills without spending a token
+// itself, and caps at maxTokens.
+func TestReportsRateLimiter_AvailableTokens(t *testing.T) {
+	l := newReportsRateLimiter(60) // 1 token/second, easy math
+	fakeNow := l.lastRefill
+	l.now = func() time.Time { return fakeNow }
+
+	if got := l.AvailableTokens(); got != 60 {
+		t.Fatalf("expected a fresh limiter to start full, got %v", got)
+	}
+
+	for i := 0; i < 10; i++ {
+		if err := l.Wait(context.Background()); err != nil {
+			t.Fatalf("unexpected error spending token %d: %v", i, err)
+		}
+	}
+	if got := l.AvailableTokens(); got != 50 {
+		t.Fatalf("expected 50 tokens after spending 10 (peek must not itself spend one), got %v", got)
+	}
+
+	fakeNow = fakeNow.Add(5 * time.Second)
+	if got := l.AvailableTokens(); got != 55 {
+		t.Fatalf("expected refill to add 5 tokens after 5s at 1/s, got %v", got)
+	}
+
+	fakeNow = fakeNow.Add(time.Hour)
+	if got := l.AvailableTokens(); got != 60 {
+		t.Fatalf("expected refill to cap at maxTokens (60), got %v", got)
+	}
 }
