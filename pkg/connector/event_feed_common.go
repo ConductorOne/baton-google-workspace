@@ -147,26 +147,26 @@ func scanUsersForEvents(
 	}
 
 	events := []*v2.Event{}
-	for i := range batch {
-		u := batch[i]
+	// retryQueue holds batch users whose lookup failed but haven't hit maxUserLookupRetries yet,
+	// so they stay queued for the next call instead of being dropped.
+	retryQueue := make([]pendingUser, 0, len(batch))
+	for _, u := range batch {
 		if u.Retries >= maxUserLookupRetries {
 			// Failed too many times already: skip instead of retrying forever.
-			ctxzap.Extract(ctx).Debug("google-workspace-connector: user exceeded lookup retry limit for event feed, skipping",
+			ctxzap.Extract(ctx).Warn("google-workspace-connector: user exceeded lookup retry limit for event feed, skipping",
 				zap.String("user", u.Email), zap.Int("retries", u.Retries))
 			continue
 		}
 
 		userEvents, err := lookup(ctx, client, u)
 		if err != nil {
-			// Don't remove `batch` from cursor.PendingUsers until every lookup in it has
-			// succeeded, so a single user's Reports API blip doesn't lose the remaining
-			// unprocessed users and restart the walk from the beginning on retry.
-			batch[i].Retries++
-			cursorToken, marshalErr := cursor.marshal()
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
-			}
-			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true}, err
+			// Must return with a nil error: the SDK discards streamState.
+			// Track the failure and retry this user on the next call.
+			u.Retries++
+			ctxzap.Extract(ctx).Warn("google-workspace-connector: user lookup failed for event feed, will retry",
+				zap.String("user", u.Email), zap.Int("retries", u.Retries), zap.Error(err))
+			retryQueue = append(retryQueue, u)
+			continue
 		}
 		for _, e := range userEvents {
 			if earliestEvent != nil && e.GetOccurredAt() != nil && e.GetOccurredAt().AsTime().Before(earliestEvent.AsTime()) {
@@ -175,7 +175,7 @@ func scanUsersForEvents(
 			events = append(events, e)
 		}
 	}
-	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
+	cursor.PendingUsers = append(retryQueue, cursor.PendingUsers[len(batch):]...)
 
 	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""
 	if !hasMore {
