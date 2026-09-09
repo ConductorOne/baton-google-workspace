@@ -1016,18 +1016,8 @@ func applyUserProfilePatch(
 		externalIDsWillShrink = len(updatedExternalIDs) < len(currentExtIDs)
 	}
 
-	// Users.Patch does not reliably shrink a repeated field down to empty:
-	// confirmed against a live tenant that clearing the sole ExternalIds entry
-	// via Patch (empty slice, with or without ForceSendFields/NullFields)
-	// silently leaves the existing entry in place, even though the same patch
-	// correctly overwrites a *sub-field* of a retained Organizations entry (and
-	// Organizations/Relations never shrink here - buildUpdatedOrganizations only
-	// ever preserves or appends, buildManagerRelations only ever appends the
-	// manager entry - so neither needs this workaround). A *sparse* Update
-	// (PUT) has the same problem - also confirmed live - so Update only clears
-	// it when given the genuinely complete object. So whenever ExternalIds is
-	// actually shrinking - per externalIDsWillShrink above, which is not
-	// limited to the empty-clear case - start from a full copy of `current` and
+	// Shrinking ExternalIds needs a full-object Users.Update; sparse updates and
+	// Users.Patch can leave removed entries behind. Other changes use Patch.
 	usePut := externalIDsWillShrink
 	var update *admin.User
 	if usePut {

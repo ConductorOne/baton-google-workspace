@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
@@ -21,6 +23,36 @@ func driveTransferArgs() *structpb.Struct {
 		"resource_id":        {Kind: &structpb.Value_StringValue{StringValue: "src"}},
 		"target_resource_id": {Kind: &structpb.Value_StringValue{StringValue: "dst"}},
 	}}
+}
+
+func TestTransferDiscoveryCannotInsertAfterTruncation(t *testing.T) {
+	var reads, writes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			writes.Add(1)
+			http.Error(w, "unexpected mutation", http.StatusBadRequest)
+			return
+		}
+		page := reads.Add(1)
+		if page > 10 {
+			http.Error(w, "discovery exceeded its limit", http.StatusBadRequest)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"nextPageToken": strconv.Itoa(int(page))}); err != nil {
+			t.Errorf("encoding transfer page: %v", err)
+		}
+	}))
+	defer server.Close()
+	connector := newTestConnector()
+	primeServiceCache(connector, nil, newTestDataTransferService(t, server.URL, server.Client()))
+	result, _, err := connector.transferUserDriveFiles(t.Context(), driveTransferArgs())
+	if status.Code(err) != codes.FailedPrecondition || result != nil {
+		t.Fatalf("incomplete discovery must fail without a result: result=%v error=%v", result, err)
+	}
+	if writes.Load() != 0 || reads.Load() == 0 || reads.Load() > 10 {
+		t.Fatalf("incomplete discovery must stay bounded and never mutate: reads=%d writes=%d", reads.Load(), writes.Load())
+	}
 }
 
 // TestTransferDrive_DifferentParams_NoSecondPost seeds an ongoing transfer

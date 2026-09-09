@@ -31,6 +31,7 @@ func TestUserAliasActionsThroughSDK(t *testing.T) {
 		{"conflict", "add_user_alias", false, "conflict", "", "Aborted", 1},
 		{"concurrent attachment", "add_user_alias", false, "concurrent", "already_present", "", 1},
 		{"write failure", "add_user_alias", false, "write error", "", "Unavailable", 1},
+		{"throttled insert", "add_user_alias", false, "throttled", "", "Unavailable", 1},
 		{"read failure", "add_user_alias", false, "read error", "", "PermissionDenied", 0},
 		{"readback failure", "add_user_alias", false, "readback error", "", "PermissionDenied", 1},
 		{"foreign customer", "add_user_alias", false, "foreign customer", "", "PermissionDenied", 0},
@@ -40,6 +41,7 @@ func TestUserAliasActionsThroughSDK(t *testing.T) {
 		{"remove noneditable", "remove_user_alias", true, "noneditable", "", "FailedPrecondition", 0},
 		{"remove noneditable only", "remove_user_alias", false, "noneditable", "", "FailedPrecondition", 0},
 		{"delete failure", "remove_user_alias", true, "write error", "", "Unavailable", 1},
+		{"throttled delete", "remove_user_alias", true, "throttled", "", "Unavailable", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const alias = "alias@example.com"
@@ -97,6 +99,12 @@ func TestUserAliasActionsThroughSDK(t *testing.T) {
 						http.Error(w, "invalid alias", http.StatusBadRequest)
 						return
 					}
+				}
+				if tc.scenario == "throttled" {
+					w.Header().Set("Retry-After", "1")
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limit exceeded"}}`))
+					return
 				}
 				if tc.scenario == "write error" {
 					w.WriteHeader(http.StatusServiceUnavailable)
