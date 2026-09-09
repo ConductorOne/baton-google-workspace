@@ -21,8 +21,10 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
@@ -139,6 +141,17 @@ func scanUsersForEvents(
 			// page: the walk is complete. Reset so the next call starts a fresh pass.
 			return []*v2.Event{}, &pagination.StreamState{Cursor: "", HasMore: false}, nil
 		}
+	}
+
+	// Quota already drained: fail fast with a classified error so the SDK backs off, instead of
+	// burning the per-user retry budget against a wall we already know is up.
+	if sharedReportsRateLimiter.AvailableTokens() < 1 {
+		cursorToken, marshalErr := cursor.marshal()
+		if marshalErr != nil {
+			return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
+		}
+		return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true},
+			uhttp.WrapErrors(codes.ResourceExhausted, "google-workspace-connector: reports api quota exhausted, deferring")
 	}
 
 	batch := cursor.PendingUsers

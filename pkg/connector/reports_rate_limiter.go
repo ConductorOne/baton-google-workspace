@@ -105,6 +105,14 @@ func (l *reportsRateLimiter) Wait(ctx context.Context) error {
 	}
 }
 
+// AvailableTokens peeks at the current token count after refill, without spending one.
+func (l *reportsRateLimiter) AvailableTokens() float64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refillLocked()
+	return l.tokens
+}
+
 func (l *reportsRateLimiter) refillLocked() {
 	elapsed := l.now().Sub(l.lastRefill)
 	if elapsed <= 0 {
