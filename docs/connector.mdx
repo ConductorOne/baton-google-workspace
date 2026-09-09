@@ -80,7 +80,7 @@ Targeted user reads and user sync pages expose `google_user_state` on the resour
 
 This changes the direct user `Get` hook for configured exclusions from no resource/no error to qualified `NotFound`. In pinned baton-sdk v0.29.0, `pkg/connectorbuilder/resource_syncer.go:GetResource` already converted the old nil resource to `NotFound`, and `pkg/sync/syncer.go:getResourceFromConnector` skips that code. Public skip classification is preserved, not newly introduced. `TestGoogleFilteredReadQualifierSurvivesSDKAndGRPC` separately verifies that `NotFound` and its added `RESOURCE_FILTERED` detail survive the local SDK/gRPC boundary. Transport evidence does not establish that every lifecycle host inspects the qualifier. Callers must inspect it before making absence decisions; that host integration is not implemented or certified here. SDK upgrades must rerun the transport fixtures and recheck the targeted-sync consumer. Existing resource/grant identities and normal List filtering are unchanged.
 
-Targeted group reads optionally expose `group_settings` and `group_settings_status`. The status is `observed`, `unsupported`, or `unknown`; a missing scope or denied settings read must not be interpreted as a privacy setting being false. Normal group listing does not fetch settings for every row. Group settings require the existing Groups Settings API scope. `allow_web_posting` controls the web forum, not permission for external email senders.
+Targeted group reads include `group_settings` and require the Groups Settings API and `apps.groups.settings` scope. Missing authorization, a failed settings request, or an invalid settings response fails the group read rather than returning a successful partial resource. Normal group listing does not fetch settings for every row. `allow_web_posting` controls the web forum, not permission for external email senders.
 
 `modify_group_settings` retains observed `previous_*` and requested `new_*` values even when the settings write fails. Requested values are not verified post-state; only a successful independent readback confirms the requested settings. Unknown write outcomes are not replayed by the handler.
 
@@ -191,13 +191,13 @@ The Workspace APIs this connector uses don't require a billing account.
 
 ### Enable the APIs
 
-Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise application IDs, and the Groups Settings API if you use group settings.
+Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise application IDs. Targeted group reads and settings changes also require the Groups Settings API.
 
 | API | Service ID | Required? | Used for |
 | :--- | :--- | :--- | :--- |
 | Admin SDK API | `admin.googleapis.com` | Required | Syncing users, groups, roles, and audit events, and running provisioning and data transfer actions |
 | Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. |
-| Groups Settings API | `groupssettings.googleapis.com` | Optional | The `modify_group_settings` connector action |
+| Groups Settings API | `groupssettings.googleapis.com` | Required for targeted group reads and settings changes | Group `Get` and the `modify_group_settings` connector action |
 
 <Note>
 The Admin SDK API covers the Directory, Reports, and Data Transfer APIs. Enabling it once is enough. There is no separate Data Transfer API to enable, even though the connector requests the `admin.datatransfer` scope.
@@ -214,7 +214,7 @@ Search for and select the **Admin SDK API**, then click **Enable**.
 Repeat for the **Cloud Identity API**.
 </Step>
 <Step>
-**Optional.** If you want to use the group settings connector action, repeat for the **Groups Settings API**.
+Repeat for the **Groups Settings API** to enable targeted group reads and settings changes.
 </Step>
 </Steps>
 
@@ -421,12 +421,14 @@ Click **AUTHORIZE**.
 
 Choose one of the two sets below. Read-only access lets C1 sync access data. Read/write access lets C1 sync access data and provision access.
 
+Google has no read-only Groups Settings scope. Both sets include `apps.groups.settings` because targeted group reads require it; this scope also permits editing group settings. Directory group-read permission alone does not grant access to settings.
+
 <Tabs>
 <Tab title="Read-only">
 Paste this comma-separated list into the **OAuth Scopes** field:
 
 ```bash
-https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
+https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
 ```
 
 | Scope | Purpose |
@@ -438,6 +440,7 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `admin.directory.user.readonly` | Read and sync users |
 | `admin.reports.audit.readonly` | Sync usage and admin events for continuous sync. Also required to sync enterprise applications |
 | `admin.directory.user.security` | Discover OAuth apps through per-user token listing. Also required to sync enterprise applications, and permits three actions that revoke a user's access. See the warning below |
+| `apps.groups.settings` | Read group settings. Google provides no read-only scope for this API; this scope also permits editing settings |
 | `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
 </Tab>
 
@@ -459,7 +462,7 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `admin.datatransfer` | Write. Transfer user data between Google accounts |
 | `admin.directory.group` | Write. Provision groups |
 | `admin.directory.user.security` | Write. Discover OAuth apps, sync enterprise applications, and run actions that remove a user's access, such as sign out and deleting auth tokens and app passwords |
-| `apps.groups.settings` | Write. Edit group settings. Requires the Groups Settings API |
+| `apps.groups.settings` | Read and edit group settings. Requires the Groups Settings API |
 | `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
 </Tab>
 </Tabs>

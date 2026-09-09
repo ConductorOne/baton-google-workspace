@@ -116,12 +116,9 @@ func groupSettingsProfile(settings *groupssettings.Groups) map[string]any {
 	return profile
 }
 
-func addGroupSettings(resource *v2.Resource, settings *groupssettings.Groups, readStatus string) error {
+func addGroupSettings(resource *v2.Resource, settings *groupssettings.Groups) error {
 	profile := resource.GetProfile().AsMap()
-	profile["group_settings_status"] = readStatus
-	if settings != nil {
-		profile["group_settings"] = groupSettingsProfile(settings)
-	}
+	profile["group_settings"] = groupSettingsProfile(settings)
 	updated, err := structpb.NewStruct(profile)
 	if err != nil {
 		return err

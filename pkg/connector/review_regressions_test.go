@@ -36,28 +36,6 @@ func TestCreateAccountBlankOptionalOUUsesProviderDefault(t *testing.T) {
 	require.NotContains(t, body, "orgUnitPath")
 }
 
-func TestGroupGetKeepsDirectoryResourceOnSettings503(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/admin/directory/v1/groups/group-id" {
-			_, _ = w.Write([]byte(`{"id":"group-id","email":"group@example.com","name":"Group"}`))
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"error":{"code":503,"message":"temporarily unavailable"}}`))
-	}))
-	defer server.Close()
-	settings, err := groupssettings.NewService(t.Context(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
-	require.NoError(t, err)
-	builder := &groupResourceType{client: &gwclient.GoogleWorkspaceClient{GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings}}
-	resource, _, err := builder.Get(t.Context(), &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}, nil)
-	require.NoError(t, err)
-	require.Equal(t, "group-id", resource.GetId().GetResource())
-	profile := resource.GetProfile().AsMap()
-	require.Equal(t, "unknown", profile["group_settings_status"])
-	require.NotContains(t, profile, "group_settings")
-}
-
 func TestTransfersRejectCaseInsensitiveSelfTarget(t *testing.T) {
 	for _, operation := range []string{"drive", "calendar"} {
 		t.Run(operation, func(t *testing.T) {

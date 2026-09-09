@@ -583,7 +583,7 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 	if observed == nil {
 		return &response, nil, fmt.Errorf("google-workspace: settings readback returned no response")
 	}
-	if err := addGroupSettings(resource, observed, "observed"); err != nil {
+	if err := addGroupSettings(resource, observed); err != nil {
 		return &response, nil, err
 	}
 	resourceResult, err := actions.NewResourceReturnField(fieldResource, resource)

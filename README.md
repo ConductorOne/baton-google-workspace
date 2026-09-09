@@ -9,7 +9,7 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 # Prerequisites
 
 - A Google Workspace account with **Super Admin** access.
-- A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**; **Groups Settings API** is optional, only needed for the group-settings action).
+- A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**). The **Groups Settings API** is required for targeted group reads and the group-settings action.
 - A **service account** with a downloaded JSON key, authorized for **domain-wide delegation** against your Workspace.
 - The Workspace **Customer ID** and a **super-admin email** for the service account to impersonate.
 - The relevant OAuth scopes authorized on the delegation (read-only for sync, read/write for provisioning + actions).
@@ -85,7 +85,9 @@ baton resources
 
 Creation and rotation use protected SDK credential inputs/results, never ordinary password action arguments. Configure encrypted result recipients before requesting generated credentials. A next-login password requirement applies to direct Google authentication, not third-party SSO.
 
-User `Get` and sync pages expose presence-aware `google_user_state` facts: separate suspension/archive flags, aliases, password-change requirement and mailbox-setup state. Omitted fields are unknown; unchanged facts do not gain a wall-clock profile value. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence. Targeted group `Get` optionally exposes `group_settings`; normal listing does not fetch settings per group.
+User `Get` and sync pages expose presence-aware `google_user_state` facts: separate suspension/archive flags, aliases, password-change requirement and mailbox-setup state. Omitted fields are unknown; unchanged facts do not gain a wall-clock profile value. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence.
+
+Targeted group `Get` includes `group_settings` and requires the Groups Settings API and `apps.groups.settings` scope. A settings failure fails the group read; it does not return a successful partial resource. Normal listing does not fetch settings per group.
 
 **Targeted user-read migration:** configured filter exclusions previously returned no resource and no error from the connector hook; they now return `NotFound` with `ErrorInfo` reason `RESOURCE_FILTERED` and domain `baton-google-workspace`. The pinned baton-sdk v0.29.0 builder already converted the old nil resource to `NotFound`, and its targeted-sync consumer skips that code. The public classification stays the same while the local SDK/gRPC fixture verifies the added qualifier survives transport. Lifecycle callers must inspect it and must not treat a filtered result as provider absence. Host-side qualifier handling is an integration requirement, not implemented or certified by this connector PR. No resource or grant IDs change; normal List filtering is unchanged.
 
@@ -139,7 +141,7 @@ Check `outcome`, `alias_present_before`, `alias_present_after`, and `observation
 A user with the **Super Admin** role in Google Workspace must perform this setup.
 
 1. Sign in to the [Google Cloud Console](https://console.cloud.google.com) and create a project (e.g. "C1 Integration").
-2. In **APIs & Services > Library**, enable the **Admin SDK API** and **Cloud Identity API** (and **Groups Settings API** if you plan to use the group-settings action).
+2. In **APIs & Services > Library**, enable the **Admin SDK API** and **Cloud Identity API**. Enable the **Groups Settings API** for targeted group reads and the group-settings action.
 3. In **APIs & Services > Credentials**, create a **service account**. Under **Keys > Add key > Create new key**, choose **JSON** and download it — this is `--credentials-json-file-path`. Note the service account's **Unique ID (Client ID)**.
 4. In the [Admin Console](https://admin.google.com) (as Super Admin), go to **Security > Access and data control > API Controls > Manage Domain Wide Delegation > Add new**, enter the service account's **Client ID** and authorize the scopes below.
 5. Copy your **Customer ID** from **Account > Account settings** (`--customer-id`).
@@ -150,8 +152,10 @@ A user with the **Super Admin** role in Google Workspace must perform this setup
 **Read-only (sync):**
 
 ```
-https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
+https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
 ```
+
+Google has no read-only Groups Settings scope. The `apps.groups.settings` scope is required to read settings and also permits editing them; Directory group-read permission alone is insufficient.
 
 **Read/Write (sync + provisioning + actions):**
 

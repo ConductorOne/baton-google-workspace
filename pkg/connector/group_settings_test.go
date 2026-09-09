@@ -14,9 +14,82 @@ import (
 	"github.com/stretchr/testify/require"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestGroupGetRejectsSettingsFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		statusCode     int
+		body           string
+		missingService bool
+		wantCode       codes.Code
+	}{
+		{
+			name:       "permission denied",
+			statusCode: http.StatusForbidden,
+			body:       `{"error":{"code":403,"message":"permission denied"}}`,
+			wantCode:   codes.PermissionDenied,
+		},
+		{
+			name:       "service unavailable",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"error":{"code":503,"message":"temporarily unavailable"}}`,
+			wantCode:   codes.Unavailable,
+		},
+		{
+			name:       "settings missing is not group absence",
+			statusCode: http.StatusNotFound,
+			body:       `{"error":{"code":404,"message":"settings not found"}}`,
+			wantCode:   codes.FailedPrecondition,
+		},
+		{
+			name:       "empty settings response",
+			statusCode: http.StatusOK,
+			body:       `{}`,
+			wantCode:   codes.DataLoss,
+		},
+		{
+			name:       "different group settings",
+			statusCode: http.StatusOK,
+			body:       `{"email":"other@example.com"}`,
+			wantCode:   codes.DataLoss,
+		},
+		{
+			name:           "settings service missing",
+			missingService: true,
+			wantCode:       codes.FailedPrecondition,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/admin/directory/v1/groups/group-id" {
+					_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+					return
+				}
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client := &gwclient.GoogleWorkspaceClient{
+				GroupService: newTestDirectoryService(t, server.URL, server.Client()),
+			}
+			if !tc.missingService {
+				settings, err := groupssettings.NewService(t.Context(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
+				require.NoError(t, err)
+				client.GroupsSettingsService = settings
+			}
+			builder := &groupResourceType{client: client}
+			resource, _, err := builder.Get(t.Context(), &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}, nil)
+			require.Equal(t, tc.wantCode, status.Code(err))
+			require.Nil(t, resource, "a failed settings read must not return a successful partial group")
+		})
+	}
+}
 
 func TestGroupPrivacyReadbackRejectsProviderMismatch(t *testing.T) {
 	var patch map[string]any
@@ -113,23 +186,17 @@ func TestGroupGrantConflictUsesExactMemberRead(t *testing.T) {
 	require.Equal(t, []string{"POST /admin/directory/v1/groups/group-id/members", "GET /admin/directory/v1/groups/group-id/members/expected-user"}, paths)
 }
 
-func TestGroupPrivacyPreservesOmittedSettingsAndQualifiesDeniedRead(t *testing.T) {
+func TestGroupPrivacyPreservesOmittedSettings(t *testing.T) {
 	current := map[string]any{
 		"email": "team@example.com", "allowExternalMembers": "true",
 		"whoCanViewGroup": "ANYONE_CAN_VIEW", "whoCanViewMembership": "ALL_IN_DOMAIN_CAN_VIEW",
 		"whoCanDiscoverGroup": "ANYONE_CAN_DISCOVER", "includeInGlobalAddressList": "true",
 		"whoCanJoin": "ANYONE_CAN_JOIN",
 	}
-	deny := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/admin/directory/v1/groups/group-id" {
 			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
-			return
-		}
-		if deny {
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":{"code":403,"message":"permission denied"}}`))
 			return
 		}
 		if r.Method == http.MethodPatch {
@@ -161,15 +228,8 @@ func TestGroupPrivacyPreservesOmittedSettingsAndQualifiesDeniedRead(t *testing.T
 	group, _, err := o.Get(context.Background(), id, nil)
 	require.NoError(t, err)
 	profile := group.GetProfile().AsMap()
-	require.Equal(t, "observed", profile["group_settings_status"])
 	require.Equal(t, "INVITED_CAN_JOIN", profile["group_settings"].(map[string]any)["who_can_join"])
 	require.Equal(t, "false", profile["group_settings"].(map[string]any)["include_in_global_address_list"])
-	deny = true
-	group, _, err = o.Get(context.Background(), id, nil)
-	require.NoError(t, err, "optional settings permission must not hide the directory group")
-	profile = group.GetProfile().AsMap()
-	require.Equal(t, "unknown", profile["group_settings_status"])
-	require.NotContains(t, profile, "group_settings")
 }
 
 func TestGroupReadsStayStableUntilProviderSettingsChange(t *testing.T) {

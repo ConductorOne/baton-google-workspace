@@ -76,7 +76,7 @@
    In **APIs & Services > Library**, enable:
    - **Admin SDK API** (required — Directory + Reports)
    - **Cloud Identity API** (used to resolve SAML app IDs to stable identifiers)
-   - **Groups Settings API** (optional — only needed for the `modify_group_settings` action)
+   - **Groups Settings API** (required for targeted group reads and the `modify_group_settings` action)
 
    **Step 3: Create a service account and JSON key**
 
@@ -107,6 +107,7 @@
    | `admin.directory.user.readonly` | Sync users |
    | `admin.reports.audit.readonly` | Sync usage/admin events (incremental sync) |
    | `admin.directory.user.security` | Discover OAuth apps via per-user token listing |
+   | `apps.groups.settings` | Read group settings; Google has no read-only scope for this API, so this also permits editing settings |
    | `cloud-identity.inboundsso.readonly` | (Optional) Resolve SAML app IDs to stable identifiers |
 
    **Read/Write (sync + provisioning + actions):** all of the above (with the write variants below) plus:
@@ -119,7 +120,7 @@
    | `admin.directory.rolemanagement` | Manage role assignments |
    | `admin.datatransfer` | Transfer Drive/Calendar data between users |
    | `admin.directory.user.security` | Sign out users, delete OAuth tokens / app passwords |
-   | `apps.groups.settings` | Edit group settings (`modify_group_settings`) |
+   | `apps.groups.settings` | Read group settings and edit them with `modify_group_settings` |
 
    > Setting custom-schema **values** uses `admin.directory.user`. Managing schema **definitions** (`admin.directory.userschema`) is intentionally out of scope — the connector assumes definitions already exist in the tenant.
 

@@ -262,34 +262,29 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 	// TODO: If o.domainId is set, check if the group is still in the domain.
 	//       There is not a straight forward way to do this when getting a single group.
 
+	if o.client.GroupsSettingsService == nil {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			"google-workspace: group reads require the Groups Settings API and apps.groups.settings scope")
+	}
+	settings, err := o.client.GetGroupSettings(ctx, g.Email)
+	if err != nil {
+		// A settings failure must not tell the syncer that the Directory group is absent.
+		if status.Code(err) == codes.NotFound {
+			return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition,
+				"google-workspace: settings are unavailable for the Directory group", err)
+		}
+		return nil, nil, fmt.Errorf("google-workspace: failed to read group settings: %w", err)
+	}
+	if settings == nil || settings.Email == "" || !strings.EqualFold(settings.Email, g.Email) {
+		return nil, nil, uhttp.WrapErrors(codes.DataLoss,
+			"google-workspace: group settings response did not identify the requested group")
+	}
 	groupResource, err := groupToResource(ctx, g)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create group resource in Get: %w", err)
 	}
-	readStatus := "unsupported"
-	if o.client.GroupsSettingsService != nil {
-		settings, err := o.client.GetGroupSettings(ctx, g.Email)
-		switch {
-		case err != nil:
-			ctxzap.Extract(ctx).Warn("google-workspace: group settings read failed; reporting unknown",
-				zap.String("group_id", g.Id), zap.Error(err))
-			readStatus = "unknown"
-			settings = nil
-		case settings == nil:
-			readStatus = "unknown"
-		default:
-			readStatus = "observed"
-		}
-		if err := addGroupSettings(groupResource, settings, readStatus); err != nil {
-			return nil, nil, err
-		}
-	} else if err := addGroupSettings(groupResource, nil, readStatus); err != nil {
+	if err := addGroupSettings(groupResource, settings); err != nil {
 		return nil, nil, err
-	}
-	// Optional enrichment never hides a readable directory group. Cancellation
-	// still terminates the request; all other settings failures remain unknown.
-	if err := ctx.Err(); err != nil {
-		return groupResource, nil, err
 	}
 
 	return groupResource, nil, nil
