@@ -219,82 +219,71 @@ func TestTransferCalendar_ReleaseResourcesParamMatch(t *testing.T) {
 	}
 }
 
-func getTransferArgs(appID string, levels []string, release *structpb.Value) *structpb.Struct {
-	fields := map[string]*structpb.Value{
-		"transfer_id":        {Kind: &structpb.Value_StringValue{StringValue: "tr_x"}},
-		"resource_id":        {Kind: &structpb.Value_StringValue{StringValue: "src"}},
-		"target_resource_id": {Kind: &structpb.Value_StringValue{StringValue: "dst"}},
-		"application_id":     {Kind: &structpb.Value_StringValue{StringValue: appID}},
-	}
-	if levels != nil {
-		lv := &structpb.ListValue{}
-		for _, l := range levels {
-			lv.Values = append(lv.Values, &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: l}})
-		}
-		fields["privacy_levels"] = &structpb.Value{Kind: &structpb.Value_ListValue{ListValue: lv}}
-	}
-	if release != nil {
-		fields["release_resources"] = release
-	}
-	return &structpb.Struct{Fields: fields}
+func getTransferArgs() *structpb.Struct {
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		"transfer_id": structpb.NewStringValue("tr_x"),
+	}}
 }
 
-// TestGetUserDataTransfer_ReadsAndVerifies covers the saved-operation read against
-// a fake provider: matched Drive transfer returns success with completed
-// derived from the provider status; mismatched identity/params return
-// FailedPrecondition WITH the observed record; wrong-application arguments
-// are rejected at the schema level.
-func TestGetUserDataTransfer_ReadsAndVerifies(t *testing.T) {
+func TestGetUserDataTransfer_ReadsProviderState(t *testing.T) {
 	state := &testServerState{
 		users: map[string]*testUser{"src": {}, "dst": {}},
 		transfers: []*transferRecord{{
 			Id: "tr_x", OldOwner: "src", NewOwner: "dst",
-			AppID:  appIdGoogleDocsAndGoogleDrive,
-			Status: "inProgress",
-			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
+			AppID: appIdGoogleDocsAndGoogleDrive, Status: "inProgress",
 		}},
 	}
-	getServer := newTransferGetServer(state)
-	defer getServer.Close()
-	dt2 := newTestDataTransferService(t, getServer.URL, getServer.Client())
-	c2 := newTestConnector()
-	primeServiceCache(c2, nil, dt2)
+	server := newTransferGetServer(state)
+	defer server.Close()
+	c := newTestConnector()
+	primeServiceCache(c, nil, newTestDataTransferService(t, server.URL, server.Client()))
 
-	// Matched: success, not completed, per-app status present.
-	resp, _, err := c2.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
+	result, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs())
 	if err != nil {
-		t.Fatalf("matched read must succeed: %v", err)
+		t.Fatalf("read transfer: %v", err)
 	}
-	if !resp.GetFields()["success"].GetBoolValue() {
-		t.Fatalf("expected success=true")
+	if !result.GetFields()[fieldSuccess].GetBoolValue() {
+		t.Fatal("expected successful provider read")
 	}
-	if resp.GetFields()["completed"].GetBoolValue() {
-		t.Fatalf("inProgress is not completed")
+	if result.GetFields()[argResourceID].GetStringValue() != "src" || result.GetFields()[argTargetResourceID].GetStringValue() != "dst" {
+		t.Fatalf("expected provider owner IDs, got %v", result.AsMap())
 	}
-	if got := resp.GetFields()["status"].GetStringValue(); got != "inProgress" {
-		t.Fatalf("expected provider status inProgress, got %q", got)
+	if result.GetFields()[fieldStatus].GetStringValue() != "inProgress" {
+		t.Fatalf("expected actual provider status, got %q", result.GetFields()[fieldStatus].GetStringValue())
 	}
-	perApp := resp.GetFields()["per_application_status"].GetStructValue()
-	if perApp.GetFields()["55656082996"] == nil {
-		t.Fatalf("expected per-application status entry")
+	if result.GetFields()[fieldPerAppStatus].GetStructValue().GetFields()["55656082996"] == nil {
+		t.Fatal("expected provider application status")
 	}
+}
 
-	// Param mismatch: FailedPrecondition with observed data retained.
-	_, _, err = c2.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"shared"}, nil))
-	if err == nil || status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("param mismatch must be FailedPrecondition, got %v", err)
-	}
-
-	// Wrong application for the parameter set: release_resources on Drive is rejected.
-	_, _, err = c2.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private"}, &structpb.Value{Kind: &structpb.Value_BoolValue{BoolValue: true}}))
-	if err == nil || status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("release_resources on Drive must be InvalidArgument, got %v", err)
-	}
-
-	// Calendar without release_resources is rejected.
-	_, _, err = c2.getUserDataTransfer(context.Background(), getTransferArgs("435070579839", nil, nil))
-	if err == nil || status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("Calendar without release_resources must be InvalidArgument, got %v", err)
+func TestGetUserDataTransferDoesNotHideReadFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		code   codes.Code
+	}{
+		{"permission denied", http.StatusForbidden, `{"error":{"code":403,"message":"denied"}}`, codes.PermissionDenied},
+		{"different transfer", http.StatusOK, `{"id":"other-transfer","oldOwnerUserId":"other-user"}`, codes.FailedPrecondition},
+		{"invalid application data", http.StatusOK, `{"id":"tr_x","applicationDataTransfers":[null]}`, codes.DataLoss},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("transfer lookup attempted mutation: %s", r.Method)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			connector := newTestConnector()
+			primeServiceCache(connector, nil, newTestDataTransferService(t, server.URL, server.Client()))
+			result, _, err := connector.getUserDataTransfer(t.Context(), getTransferArgs())
+			if status.Code(err) != tc.code || result != nil {
+				t.Fatalf("expected failed lookup with %v and no result, got result=%v error=%v", tc.code, result, err)
+			}
+		})
 	}
 }
 
@@ -443,127 +432,5 @@ func TestTransferInsert_PendingIsOngoingNotCompleted(t *testing.T) {
 	}
 	if resp.GetFields()["status"].GetStringValue() != "pending" {
 		t.Fatalf("expected pending status passthrough")
-	}
-}
-
-// TestGetUserDataTransfer_PendingObservedNotCompleted reads back a covering
-// pending transfer through the get path: success=true (the record was read and
-// matched) but completed=false (pending is never completion).
-func TestGetUserDataTransfer_PendingObservedNotCompleted(t *testing.T) {
-	state := &testServerState{
-		users: map[string]*testUser{"src": {}, "dst": {}},
-		transfers: []*transferRecord{{
-			Id: "tr_x", OldOwner: "src", NewOwner: "dst",
-			AppID:  appIdGoogleDocsAndGoogleDrive,
-			Status: "pending",
-			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
-		}},
-	}
-	getServer := newTransferGetServer(state)
-	defer getServer.Close()
-	dt := newTestDataTransferService(t, getServer.URL, getServer.Client())
-	c := newTestConnector()
-	primeServiceCache(c, nil, dt)
-
-	resp, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
-	if err != nil {
-		t.Fatalf("pending read must verify: %v", err)
-	}
-	if !resp.GetFields()["success"].GetBoolValue() {
-		t.Fatalf("verified pending record is success=true")
-	}
-	if resp.GetFields()["completed"].GetBoolValue() {
-		t.Fatalf("pending must never be completed")
-	}
-}
-
-// TestGetUserDataTransfer_IdentityMismatchLeaksNoObservedFields covers the
-// evidence gate: a record whose saved ID or expected owners do not match
-// returns ONLY the requested transfer_id, observed_at, success=false and
-// completed=false — no foreign observed identity, status, parameters or
-// request time.
-func TestGetUserDataTransfer_IdentityMismatchLeaksNoObservedFields(t *testing.T) {
-	state := &testServerState{
-		users: map[string]*testUser{"src": {}, "dst": {}},
-		transfers: []*transferRecord{{
-			Id: "tr_x", OldOwner: "someone-else", NewOwner: "also-someone-else",
-			AppID:  appIdGoogleDocsAndGoogleDrive,
-			Status: "inProgress",
-			Params: map[string][]string{"PRIVACY_LEVEL": {"PRIVATE", "SHARED"}},
-		}},
-	}
-	getServer := newTransferGetServer(state)
-	defer getServer.Close()
-	dt := newTestDataTransferService(t, getServer.URL, getServer.Client())
-	c := newTestConnector()
-	primeServiceCache(c, nil, dt)
-
-	resp, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
-	if err == nil || status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("identity mismatch must be FailedPrecondition, got %v", err)
-	}
-	if resp == nil {
-		t.Fatalf("the minimal mismatch result must still be returned")
-	}
-	if resp.GetFields()["success"].GetBoolValue() {
-		t.Fatalf("mismatch must be success=false")
-	}
-	if resp.GetFields()["completed"].GetBoolValue() {
-		t.Fatalf("mismatch must be completed=false")
-	}
-	if got := resp.GetFields()["transfer_id"].GetStringValue(); got != "tr_x" {
-		t.Fatalf("only the REQUESTED transfer id may be returned, got %q", got)
-	}
-	if resp.GetFields()["observed_at"].GetStringValue() == "" {
-		t.Fatalf("observed_at must be present")
-	}
-	for _, leaked := range []string{"status", "per_application_status", "parameters", "request_time", "resource_id", "target_resource_id"} {
-		if _, present := resp.GetFields()[leaked]; present {
-			t.Fatalf("identity mismatch must not leak observed field %q", leaked)
-		}
-	}
-}
-
-// TestGetUserDataTransfer_ParamMismatchRetainsExpectedEvidence covers the
-// other half of the gate: an identity-MATCHING record whose parameters differ
-// retains the full observed evidence (statuses, parameters, owners, request
-// time) alongside the FailedPrecondition error.
-func TestGetUserDataTransfer_ParamMismatchRetainsExpectedEvidence(t *testing.T) {
-	state := &testServerState{
-		users: map[string]*testUser{"src": {}, "dst": {}},
-		transfers: []*transferRecord{{
-			Id: "tr_x", OldOwner: "src", NewOwner: "dst",
-			AppID:  appIdGoogleDocsAndGoogleDrive,
-			Status: "inProgress",
-			Params: map[string][]string{"PRIVACY_LEVEL": {"SHARED"}},
-		}},
-	}
-	getServer := newTransferGetServer(state)
-	defer getServer.Close()
-	dt := newTestDataTransferService(t, getServer.URL, getServer.Client())
-	c := newTestConnector()
-	primeServiceCache(c, nil, dt)
-
-	resp, _, err := c.getUserDataTransfer(context.Background(), getTransferArgs("55656082996", []string{"private", "shared"}, nil))
-	if err == nil || status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("param mismatch must be FailedPrecondition, got %v", err)
-	}
-	if resp == nil {
-		t.Fatalf("observed evidence must be retained alongside the error")
-	}
-	if got := resp.GetFields()["status"].GetStringValue(); got != "inProgress" {
-		t.Fatalf("observed status must be retained, got %q", got)
-	}
-	if resp.GetFields()["resource_id"].GetStringValue() != "src" || resp.GetFields()["target_resource_id"].GetStringValue() != "dst" {
-		t.Fatalf("matching observed owners must be retained")
-	}
-	if resp.GetFields()["per_application_status"].GetStructValue().GetFields()["55656082996"] == nil {
-		t.Fatalf("observed per-application status must be retained")
-	}
-	if !strings.Contains(resp.GetFields()["parameters"].GetStructValue().GetFields()["55656082996"].GetStringValue(), "PRIVACY_LEVEL") {
-		t.Fatalf("observed parameters must be retained")
-	}
-	if resp.GetFields()["success"].GetBoolValue() {
-		t.Fatalf("param mismatch is success=false")
 	}
 }

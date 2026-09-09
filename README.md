@@ -85,7 +85,7 @@ baton resources
 
 Creation and rotation use protected SDK credential inputs/results, never ordinary password action arguments. Configure encrypted result recipients before requesting generated credentials. A next-login password requirement applies to direct Google authentication, not third-party SSO.
 
-User `Get` and sync pages expose presence-aware `google_user_state` facts: separate suspension/archive flags, aliases, password-change requirement and mailbox-setup state. Omitted fields are unknown; unchanged facts do not gain a wall-clock profile value. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence.
+User reads use native Google Directory user objects. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence.
 
 Targeted group `Get` includes `group_settings` and requires the Groups Settings API and `apps.groups.settings` scope. Settings request failures and responses with no supported settings fail the group read. Returned settings contain only values supplied by Google; omitted fields remain unknown, not defaulted. Normal listing does not fetch settings per group.
 
@@ -112,9 +112,9 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | `delete_all_application_passwords` | `user_id` | Delete app-specific passwords and enumerate remaining entries; partial cleanup remains an error |
 | `transfer_user_drive_files` | `resource_id`, `target_resource_id`, `privacy_levels` | Transfer Google Drive ownership to another user |
 | `transfer_user_calendar` | `resource_id`, `target_resource_id`, `release_resources` | Transfer Google Calendar data to another user |
-| `get_user_data_transfer` | `transfer_id`, expected `resource_id`, `target_resource_id`, `application_id`, and application parameters | Read a saved transfer; verify owners and complete parameters; return overall/per-application status without mutation |
-| `remove_user_alias` | `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` | Verify the exact owner and account preconditions; remove an editable alias and read back; never claim global address availability |
-| `add_user_alias` | stable `user_id`, `alias`, `expected_primary_email`, `expected_customer_id` | Add an alias to a pinned account in the configured customer and verify attachment; same-account replay is idempotent, foreign-user/group collisions never move or remove an alias |
+| `get_user_data_transfer` | `transfer_id` | Read the provider transfer's actual owners, status, and per-application status without mutation |
+| `remove_user_alias` | `user_id`, `alias` | Remove an editable alias from the selected user and read back the selected user's aliases |
+| `add_user_alias` | stable `user_id`, `alias` | Add an alias to the selected user; same-user replays are idempotent and conflicts never move or remove an alias |
 | `create_group` | `email`, `name`, `description` | Create a new Google Group |
 | `modify_group_settings` | `group_key`, plus settings flags | Update supplied privacy/membership/discovery/join/GAL settings and return an independently observed group resource |
 
@@ -124,19 +124,15 @@ Connector actions are custom operations invoked on demand from C1 automations:
 
 > **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
 
-> **Read-modify-write limitation:** profile changes that preserve existing names or array entries require an observed ETag and send it as `If-Match`. Missing versions fail before writing, and any provider precondition error is preserved. Directory does not document conditional-write enforcement for `users.update` or `users.patch`; fixtures verify header emission, not protection against concurrent overwrites in a tenant. That protection remains an unverified provider integration gate. `updated_fields` describes requested changes, not independently verified state.
+> **Read-modify-write limitation:** an `employee_id` change that reduces external IDs uses the complete current user with `users.update`, because Google does not reliably shrink that repeated field through patch. `updated_fields` describes requested changes, not independently verified state.
 
 > **Credential cleanup evidence:** check `inventory_complete` before interpreting `remaining_ids`. Failed security actions retain their per-item results. Empty results after a failed enumeration are not absence, and login-derived application grants are not a live credential inventory.
 
-> **Transfers:** submission is acknowledgement, not completion. Keep the provider transfer ID and approved parameters, then use `get_user_data_transfer`; never poll by replaying a mutation. Drive wire privacy values are uppercase and preserve the existing default of both private/shared. Calendar retain-resources uses the documented empty parameter set. Conflicting, unknown, or truncated discovery never triggers a new insert.
+> **Transfers:** submission is acknowledgement, not completion. Keep the provider transfer ID and use `get_user_data_transfer` to observe its current provider status; never poll by replaying a mutation. Conflicting, unknown, or truncated discovery never triggers a new insert.
 
 ### Requestable alias creation
 
-Both alias actions require a concrete Google customer ID in connector configuration, not the `my_customer` selector, and compare it with the observed account independently of submitted pins. No additional scope or selector-resolution service is introduced. `add_user_alias` is a user-resource action whose target must be a stable Google user ID, not an email/alias selector; the primary-email and customer preconditions must also match the observed account. The provider validates alias namespace ownership, including secondary domains in that customer; the configured sync-selection domain is not an alias write allowlist.
-
-Check `outcome`, `alias_present_before`, `alias_present_after`, and `observation_complete`. Presence is omitted when unreadable, not defaulted to false. `insert_attempted` and `insert_acknowledged` distinguish a provider call/acknowledgment from verified attachment; no acknowledgment does not prove no mutation. A same-account alias verified in the dedicated collection is an attachment-only, zero-write `already_present` result even if also listed as noneditable; this does not make it editable. New insertion/replacement of a noneditable-only alias, foreign-user/group ownership, primary-address misuse, and mismatched account preconditions fail without moving/removing anything. Unknown inserts are not retried automatically.
-
-**Self-service authorization is separate.** Publishing this connector action does not create or enable a customer-facing C1 requestable Action. Administrators must configure its audience, approval policy, and trusted form/resource bindings so the target comes from the authorized requester/resource relationship and the alias/domain is allowed. Arbitrary submitted `user_id` or `expected_customer_id` values are not ownership or authorization evidence. Verifying that requesters cannot substitute another account or escape alias/domain policy is a separate C1 configuration acceptance gate; this connector implements no new C1 UI/backend or approval system.
+Both alias actions require a concrete configured Google customer ID, not the `my_customer` selector. The connector verifies the provider target belongs to that customer, derives primary/noneditable checks from that target, reads the target alias collection before and after a mutation, and never moves or removes a conflicting alias. Publishing an action does not grant self-service permission; administrators configure any request policy separately.
 
 # Credentials Setup
 

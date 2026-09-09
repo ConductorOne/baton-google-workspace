@@ -18,7 +18,6 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -85,12 +84,9 @@ func (o *userResourceType) List(ctx context.Context, _ *v2.ResourceId, attrs rs.
 
 	rv := make([]*v2.Resource, 0, len(users.Users))
 	for _, user := range users.Users {
-		userResource, err := o.userResource(ctx, user.User)
+		userResource, err := o.userResource(ctx, user)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to build user resource in List: %w", err)
-		}
-		if err := addUserState(userResource, user.State); err != nil {
-			return nil, nil, err
 		}
 		rv = append(rv, userResource)
 	}
@@ -282,12 +278,9 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 		}
 	}
 
-	userResource, err := o.userResource(ctx, user.User)
+	userResource, err := o.userResource(ctx, user)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build user resource in Get: %w", err)
-	}
-	if err := addUserState(userResource, user.State); err != nil {
-		return nil, nil, err
 	}
 
 	return userResource, nil, nil
@@ -305,17 +298,6 @@ func filteredGoogleUserError(resourceID *v2.ResourceId, filter string) error {
 		return status.Errorf(codes.Internal, "google-workspace: failed to encode configured-filter exclusion: %v", err)
 	}
 	return filtered.Err()
-}
-
-func addUserState(resource *v2.Resource, state map[string]any) error {
-	value, err := structpb.NewStruct(state)
-	if err != nil {
-		return fmt.Errorf("google-workspace: failed to encode observed user state: %w", err)
-	}
-	// Set after custom-schema flattening so a custom profile cannot impersonate
-	// provider-observed security state.
-	resource.Profile.Fields["google_user_state"] = structpb.NewStructValue(value)
-	return nil
 }
 
 func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (*v2.Resource, error) {

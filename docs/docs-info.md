@@ -1,7 +1,7 @@
 ## Connector capabilities
 
 1. What resources does the connector sync?
-   - **Users** (`user`) — Workspace users via Directory API `users.list`, including identity, aggregate status, name, organizational unit, manager relation and custom-schema values. Presence-aware `google_user_state` separately exposes reported suspension/archive, aliases, password-change and mailbox-setup facts; omitted fields are unknown.
+   - **Users** (`user`) — Workspace users via native Directory API `users.list`, including identity, aggregate status, name, organizational unit, manager relation and custom-schema values.
    - **Groups** (`group`) — All Google Groups via the Directory API (`groups.list`, `members.list`). Each group exposes a `member` entitlement representing membership (granted to users and nested groups).
    - **Roles** (`role`) — All admin roles via the Directory API role-management endpoints (`roles.list`, `roleAssignments.list`). Each role exposes a `member` entitlement representing role assignment (granted to users and groups).
    - **Enterprise Applications** (`enterprise_application`) — SAML/OIDC apps discovered via the Cloud Identity API and OAuth apps discovered via per-user token listing (`tokens.list`). Each application exposes an assignment entitlement granted to users. **Read-only** (no provisioning).
@@ -33,13 +33,13 @@
    | `transfer_user_calendar` | Data Transfer API | Transfer Google Calendar data to another user |
    | `create_group` | `groups.insert` | Create a new Google Group |
    | `modify_group_settings` | Groups Settings API | Update settings of an existing group |
-   | `get_user_data_transfer` | `transfers.get` | Verify a saved operation's ID, owners and complete parameters; report overall and per-application state without mutation |
-   | `remove_user_alias` | `users.get`, `users.aliases.list`, `users.aliases.delete` | Verify the exact account and alias owner, prohibit primary/non-editable aliases, and qualify post-removal readback |
-   | `add_user_alias` | `users.get`, `users.aliases.list`, `users.aliases.insert` | Verify the pinned account and concrete configured customer, insert once, and confirm attachment in the dedicated alias collection; same-account replay is read-only and foreign conflicts never move/remove an alias |
+   | `get_user_data_transfer` | `transfers.get` | Read a saved provider operation's actual ID, owners, overall status, and per-application statuses without mutation |
+   | `remove_user_alias` | `users.get`, `users.aliases.list`, `users.aliases.delete` | Remove an editable alias from the selected user and read back its alias collection |
+   | `add_user_alias` | `users.get`, `users.aliases.list`, `users.aliases.insert` | Add an alias to the selected user; same-user replay is idempotent and conflicts never move/remove an alias |
 
-   Transfer acknowledgement is not completion. Unknown or incomplete discovery never triggers an insert; keep the saved ID rather than replaying a mutation to poll. Security cleanup retains per-item outcomes and final enumeration completeness. Group settings appear on targeted Get without per-group fetches during normal listing. Profile read-modify-write changes send the observed ETag as `If-Match`, but Directory conditional-write enforcement is not documented; tenant concurrency protection remains an unverified integration gate.
+   Transfer acknowledgement is not completion. Unknown or incomplete discovery never triggers an insert; keep the saved ID rather than replaying a mutation to poll. Security cleanup retains per-item outcomes and final enumeration completeness. Group settings appear on targeted Get without per-group fetches during normal listing.
 
-   Both alias actions require a concrete configured customer ID (not the `my_customer` selector), independently verify the observed customer, and retain submitted primary/customer pins as additional consistency checks. These checks are not C1 requester authorization. `add_user_alias` can be exposed through an administrator-configured requestable Action only with trusted requester/resource target binding, allowed alias/domain policy, and approval; publication alone does not enable a customer-facing Action. A verified same-account alias already in the dedicated collection is an attachment-only no-op, including a noneditable overlap; new insertion/replacement of a noneditable-only alias remains rejected.
+   Both alias actions require a concrete configured customer ID (not the `my_customer` selector) and verify the provider target is in that customer. Primary and noneditable checks come from that target; submitted pins are not accepted.
 
    **Custom schemas:** the profile-update actions (`update_user_profile`, `update_user`) can write values into custom-schema attributes via the Directory API `customSchemas` field. The connector only **sets values**; the schema **definitions must already exist** in the Workspace tenant (managed by the customer in Admin Console — the connector does not create or delete schema definitions and does not request the `admin.directory.userschema` scope).
 

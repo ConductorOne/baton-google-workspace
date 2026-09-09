@@ -115,7 +115,7 @@ func TestScanUsersForEvents_PaginatesAcrossMultipleCallsWithoutLoss(t *testing.T
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	client := &gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, ReportService: rep}
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}
 
 	var cursor string
 	seenAny := true
@@ -159,7 +159,7 @@ func TestScanUsersForEvents_FiltersEventsBeforeEarliestEvent(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	client := &gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, ReportService: rep}
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir, ReportService: rep}
 
 	now := time.Now().UTC()
 	floor := timestamppb.New(now.Add(-1 * time.Hour))
@@ -244,7 +244,7 @@ func TestUsageEventFeed_PicksLatestPerAppAndFiltersPrivateApps(t *testing.T) {
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
 	feed := newUsageEventFeed(
-		&gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, UserSecurityService: dir, ReportService: rep},
+		&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep},
 		"customer",
 		"",
 	)
@@ -317,7 +317,7 @@ func TestUsageEventFeed_DedupesRepeatedClientIDsInTokens(t *testing.T) {
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
 	feed := newUsageEventFeed(
-		&gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, UserSecurityService: dir, ReportService: rep},
+		&gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep},
 		"customer",
 		"",
 	)

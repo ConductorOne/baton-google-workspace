@@ -179,7 +179,7 @@ func TestApplicationResourceList_PaginatesWithoutDuplicatingApps(t *testing.T) {
 
 	dir := newTestDirectoryService(t, server.URL, server.Client())
 	rep := newReportsServiceForTest(t, server.URL, server.Client())
-	client := &gwclient.GoogleWorkspaceClient{UserService: &gwclient.UserService{Service: dir, HTTPClient: server.Client()}, UserSecurityService: dir, ReportService: rep}
+	client := &gwclient.GoogleWorkspaceClient{UserService: dir, UserSecurityService: dir, ReportService: rep}
 
 	ar := newApplicationResource(client, "customer", "")
 	ss := newFakeSessionStore()

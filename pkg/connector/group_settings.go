@@ -44,28 +44,12 @@ var groupPrivacyFields = []*config.Field{
 }
 
 func groupPrivacyReturnFields() []*config.Field {
-	fields := []*config.Field{
-		{
-			Name:        fieldResource,
-			DisplayName: "Observed Group",
-			Description: "Group resource with settings observed after the update, not an echo of requested values.",
-			Field:       &config.Field_ResourceField{},
-		},
-	}
-	for _, field := range groupPrivacyFields {
-		for _, prefix := range []string{"previous_", "new_"} {
-			fields = append(
-				fields,
-				&config.Field{
-					Name:        prefix + field.Name,
-					DisplayName: prefix + field.DisplayName,
-					Description: "Previous or requested value. See the returned resource for observed settings.",
-					Field:       &config.Field_StringField{},
-				},
-			)
-		}
-	}
-	return fields
+	return []*config.Field{{
+		Name:        fieldResource,
+		DisplayName: "Observed Group",
+		Description: "Group resource with settings observed after the update.",
+		Field:       &config.Field_ResourceField{},
+	}}
 }
 
 func parseGroupPrivacy(args *structpb.Struct) (map[string]string, error) {

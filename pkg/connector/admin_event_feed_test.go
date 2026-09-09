@@ -124,7 +124,7 @@ func TestAdminEventFeed_GroupAndUserEvents(t *testing.T) {
 	rep := newReportsService(t, server.URL, server.Client())
 
 	client := &gwclient.GoogleWorkspaceClient{
-		UserService:   &gwclient.UserService{Service: dir, HTTPClient: server.Client()},
+		UserService:   dir,
 		GroupService:  dir,
 		ReportService: rep,
 	}

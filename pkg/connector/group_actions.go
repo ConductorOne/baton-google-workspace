@@ -552,11 +552,6 @@ func (o *groupResourceType) modifyGroupSettingsActionHandler(ctx context.Context
 		"allow_web_posting",
 		"who_can_post_message",
 		"message_moderation_level",
-		"who_can_view_group",
-		"who_can_view_membership",
-		"who_can_discover_group",
-		"include_in_global_address_list",
-		"who_can_join",
 	}
 
 	for _, settingName := range settingNames {

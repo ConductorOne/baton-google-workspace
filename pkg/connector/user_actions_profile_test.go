@@ -93,10 +93,6 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 				Relations:     extractRelations(u),
 			})
 		case http.MethodPatch, http.MethodPut:
-			if match := r.Header.Get("If-Match"); match != "" && match != u.Etag {
-				http.Error(w, "stale user version", http.StatusPreconditionFailed)
-				return
-			}
 			state.patchCount++
 			state.lastMethod = r.Method
 			raw, _ := io.ReadAll(r.Body)

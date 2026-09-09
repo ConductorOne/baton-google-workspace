@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -180,7 +179,7 @@ func TestMissingGroupSettingsDoesNotBlockOtherResourceReads(t *testing.T) {
 	defer apiServer.Close()
 
 	directory := newTestDirectoryService(t, apiServer.URL, apiServer.Client())
-	service := &gwclient.UserService{Service: directory, HTTPClient: apiServer.Client()}
+	service := directory
 	c := &GoogleWorkspace{
 		customerID:         "customer",
 		administratorEmail: "admin@example.com",

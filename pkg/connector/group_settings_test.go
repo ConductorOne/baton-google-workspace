@@ -123,7 +123,6 @@ func TestGroupPrivacyReadbackRejectsProviderMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
 	require.Equal(t, map[string]any{"whoCanViewGroup": "ALL_MEMBERS_CAN_VIEW", "includeInGlobalAddressList": "false"}, patch)
-	require.Equal(t, "ALL_MEMBERS_CAN_VIEW", result.GetFields()["new_who_can_view_group"].GetStringValue())
 	require.Contains(t, result.AsMap(), fieldResource, "retain the observed group alongside the failed verification")
 }
 
@@ -140,7 +139,7 @@ func TestGroupSettingsPatchFailureRetainsEvidenceThroughSDK(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"code":503,"message":"temporarily unavailable"}}`))
 		default:
 			settingsReads.Add(1)
-			_, _ = w.Write([]byte(`{"email":"team@example.com","whoCanViewGroup":"ANYONE_CAN_VIEW"}`))
+			_, _ = w.Write([]byte(`{"email":"team@example.com","allowExternalMembers":"true"}`))
 		}
 	}))
 	defer server.Close()
@@ -153,15 +152,15 @@ func TestGroupSettingsPatchFailureRetainsEvidenceThroughSDK(t *testing.T) {
 	registry, err := manager.GetTypeRegistry(t.Context(), resourceTypeGroup.Id)
 	require.NoError(t, err)
 	require.NoError(t, o.ResourceActions(t.Context(), registry))
-	args, err := structpb.NewStruct(map[string]any{"group_key": "group-id", "who_can_view_group": "ALL_MEMBERS_CAN_VIEW"})
+	args, err := structpb.NewStruct(map[string]any{"group_key": "group-id", "allow_external_members": false})
 	require.NoError(t, err)
 	_, outcome, result, _, err := manager.InvokeAction(t.Context(), "modify_group_settings", resourceTypeGroup.Id, args)
 	require.NoError(t, err)
 	require.Equal(t, v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, outcome)
 	require.NotNil(t, result)
 	require.False(t, result.GetFields()[fieldSuccess].GetBoolValue())
-	require.Equal(t, "ANYONE_CAN_VIEW", result.GetFields()["previous_who_can_view_group"].GetStringValue())
-	require.Equal(t, "ALL_MEMBERS_CAN_VIEW", result.GetFields()["new_who_can_view_group"].GetStringValue())
+	require.Equal(t, "true", result.GetFields()["previous_allow_external_members"].GetStringValue())
+	require.Equal(t, "false", result.GetFields()["new_allow_external_members"].GetStringValue())
 	require.Contains(t, result.GetFields()["error"].GetStringValue(), "Unavailable")
 	require.NotContains(t, result.AsMap(), fieldResource, "failed write must not fabricate a verified post-state")
 	require.Equal(t, int32(1), patches.Load(), "unknown mutation must not be replayed")

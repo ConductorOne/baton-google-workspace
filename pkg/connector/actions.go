@@ -2,12 +2,10 @@ package connector
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/mail"
 	"strconv"
 	"strings"
-	"time"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -185,99 +183,17 @@ var (
 	getUserDataTransferActionSchema = &v2.BatonActionSchema{
 		Name:        "get_user_data_transfer",
 		DisplayName: "Get User Data Transfer",
-		Description: "Read a saved data-transfer operation by its provider transfer ID and verify it against the " +
-			"expected source, recipient, application and parameters. Returns the provider's overall and per-application " +
-			"status. Read-only: never creates, restarts or mutates a transfer.",
+		Description: "Read a saved data-transfer operation by its provider transfer ID. This action never creates or restarts a transfer.",
 		Arguments: []*config.Field{
-			{
-				Name:        fieldTransferID,
-				DisplayName: "Transfer ID",
-				Description: "The provider-assigned data transfer ID returned when the transfer was requested.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        argResourceID,
-				DisplayName: "Expected Source User Resource ID",
-				Description: "The stable user ID the transfer is expected to move data from.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        argTargetResourceID,
-				DisplayName: "Expected Target User Resource ID",
-				Description: "The stable user ID the transfer is expected to move data to.",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "application_id",
-				DisplayName: "Application ID",
-				Description: "The expected Google application ID as a numeric string (Drive: 55656082996, Calendar: 435070579839).",
-				Field:       &config.Field_StringField{},
-				IsRequired:  true,
-			},
-			{
-				Name:        "privacy_levels",
-				DisplayName: "Drive Privacy Levels",
-				Description: "Required for Drive transfers: one or more of private, shared that the transfer must cover.",
-				Field:       &config.Field_StringSliceField{},
-				IsRequired:  false,
-			},
-			{
-				Name:        "release_resources",
-				DisplayName: "Release Resources",
-				Description: "Required for Calendar transfers: the release_resources setting the transfer must carry.",
-				Field:       &config.Field_BoolField{},
-				IsRequired:  false,
-			},
+			{Name: fieldTransferID, DisplayName: "Transfer ID", Description: "The provider-assigned data transfer ID.", Field: &config.Field_StringField{}, IsRequired: true},
 		},
 		ReturnTypes: []*config.Field{
-			{
-				Name:        fieldSuccess,
-				DisplayName: displaySuccess,
-				Description: "Whether the transfer record was read and matched the expected identity and parameters.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        fieldTransferID,
-				DisplayName: "Transfer ID",
-				Description: "The provider transfer ID that was read.",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        fieldStatus,
-				DisplayName: "Transfer Status",
-				Description: "The overall status code reported by the provider (e.g., completed, inProgress).",
-				Field:       &config.Field_StringField{},
-			},
-			{
-				Name:        "completed",
-				DisplayName: "Completed",
-				Description: "Whether the verified provider record reports completion overall and for every application. An error or missing status is never completed.",
-				Field:       &config.Field_BoolField{},
-			},
-			{
-				Name:        "per_application_status",
-				DisplayName: "Per-Application Status",
-				Description: "Map of application ID to its transfer status code as reported by the provider.",
-				Field:       &config.Field_StringMapField{},
-			},
-			{
-				Name:        "parameters",
-				DisplayName: "Parameters",
-				Description: "Map of application ID to the JSON-encoded application transfer parameters recorded by the provider.",
-				Field:       &config.Field_StringMapField{},
-			},
-			{
-				Name:        "observed_at",
-				DisplayName: "Observed At",
-				Description: "RFC 3339 timestamp of when the provider record was read.",
-				Field:       &config.Field_StringField{},
-			},
-			{Name: argResourceID, DisplayName: "Observed Source User ID", Field: &config.Field_StringField{}},
-			{Name: argTargetResourceID, DisplayName: "Observed Target User ID", Field: &config.Field_StringField{}},
-			{Name: "request_time", DisplayName: "Provider Request Time", Field: &config.Field_StringField{}},
+			{Name: fieldSuccess, DisplayName: displaySuccess, Field: &config.Field_BoolField{}},
+			{Name: fieldTransferID, DisplayName: "Transfer ID", Field: &config.Field_StringField{}},
+			{Name: argResourceID, DisplayName: "Source User ID", Field: &config.Field_StringField{}},
+			{Name: argTargetResourceID, DisplayName: "Target User ID", Field: &config.Field_StringField{}},
+			{Name: fieldStatus, DisplayName: "Transfer Status", Field: &config.Field_StringField{}},
+			{Name: fieldPerAppStatus, DisplayName: "Per-Application Status", Field: &config.Field_StringMapField{}},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
 	}
@@ -830,162 +746,40 @@ func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
 	return levels, nil
 }
 
-// argApplicationID / return-field literals for get_user_data_transfer.
 const (
-	argApplicationID       = "application_id"
-	fieldCompleted         = "completed"
 	fieldPerAppStatus      = "per_application_status"
-	fieldParameters        = "parameters"
-	fieldObservedAt        = "observed_at"
 	transferStatusComplete = "completed"
 )
 
-// getUserDataTransfer reads one saved data-transfer record by its provider ID
-// and verifies it against the caller's expected identity and parameters. It
-// performs exactly one provider read (Transfers.Get; a throttled read may
-// wait via withRateLimitWaitValue but is never retried in a loop here) and
-// never mutates or restarts anything.
-//
-// Evidence gating: a saved-ID or expected-owner mismatch returns only the
-// REQUESTED transfer ID, the observation time, and explicit
-// success=false/completed=false — the foreign record's observed identity,
-// status, parameters and request time are not this caller's evidence and
-// never leak. A record whose identity MATCHES but whose application,
-// parameters or statuses differ retains the full observed evidence
-// alongside the FailedPrecondition error so a caller can reconcile instead
-// of re-submitting. "pending" is accepted as an ongoing status in both the
-// insert-adoption and read paths and is never reported as completed;
-// unknown/missing statuses never resolve to completed, and nil/malformed
-// provider responses remain non-success with their error codes preserved.
+// getUserDataTransfer reads one provider transfer. A successful read reports
+// current provider state; it does not assert that the transfer is complete.
 func (c *GoogleWorkspace) getUserDataTransfer(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	// Required scalar arguments.
 	transferID, err := requiredStringArg(args, fieldTransferID)
 	if err != nil {
 		return nil, nil, err
 	}
-	expectedSource, err := requiredStringArg(args, argResourceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	expectedTarget, err := requiredStringArg(args, argTargetResourceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	appIDStr, err := requiredStringArg(args, argApplicationID)
-	if err != nil {
-		return nil, nil, err
-	}
-	appID, err := strconv.ParseInt(strings.TrimSpace(appIDStr), 10, 64)
-	if err != nil {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-			fmt.Sprintf("application_id must be a numeric Google application ID string (Drive: %d, Calendar: %d)", appIdGoogleDocsAndGoogleDrive, appIdGoogleCalendar))
-	}
-
-	// Application-specific expected parameters. privacy_levels is required
-	// for Drive; release_resources is required for Calendar; the wrong
-	// application's parameter is rejected outright.
-	var expectedParams []*datatransferAdmin.ApplicationTransferParam
-	switch appID {
-	case appIdGoogleDocsAndGoogleDrive:
-		if _, present := args.Fields["release_resources"]; present {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-				fmt.Sprintf("release_resources applies to Calendar transfers (application %d), not Drive (application %d)", appIdGoogleCalendar, appIdGoogleDocsAndGoogleDrive))
-		}
-		if _, present := args.GetFields()["privacy_levels"]; !present {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels is required for Drive transfer verification")
-		}
-		levels, err := parseDrivePrivacyLevels(args)
-		if err != nil {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels is required for Drive transfers: ", err)
-		}
-		expectedParams = append(expectedParams, &datatransferAdmin.ApplicationTransferParam{Key: "PRIVACY_LEVEL", Value: levels})
-	case appIdGoogleCalendar:
-		v, present := args.Fields["release_resources"]
-		if !present {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "release_resources is required for Calendar transfers")
-		}
-		b, ok := v.GetKind().(*structpb.Value_BoolValue)
-		if !ok {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "release_resources must be a boolean")
-		}
-		if _, present := args.Fields["privacy_levels"]; present {
-			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-				fmt.Sprintf("privacy_levels applies to Drive transfers (application %d), not Calendar (application %d)", appIdGoogleDocsAndGoogleDrive, appIdGoogleCalendar))
-		}
-		if b.BoolValue {
-			expectedParams = append(expectedParams, &datatransferAdmin.ApplicationTransferParam{Key: "RELEASE_RESOURCES", Value: []string{"TRUE"}})
-		} else {
-			// The absence of RELEASE_RESOURCES=TRUE is the wire expression of
-			// release_resources=false. An expected-false verification can only
-			// assert the parameter is absent from the provider record.
-			expectedParams = nil
-		}
-	default:
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument,
-			fmt.Sprintf("unsupported application_id %s: supported values are Drive (%d) and Calendar (%d)", strings.TrimSpace(appIDStr), appIdGoogleDocsAndGoogleDrive, appIdGoogleCalendar))
-	}
-
 	client, err := c.getClient(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// Exactly one bounded provider read. 403/404 preserve their codes via
-	// wrapGoogleApiErrorWithContext inside the client helper.
 	transfer, err := withRateLimitWaitValue(ctx, func() (*datatransferAdmin.DataTransfer, error) {
 		return client.GetDataTransfer(ctx, transferID)
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("google-workspace: failed to read data transfer: %w", err)
 	}
-
-	// Withhold observed fields until the saved ID and both owners match.
 	if transfer == nil {
-		return requestedTransferFields(transferID), nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
+		return nil, nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
 	}
-	if transfer.Id != transferID ||
-		transfer.OldOwnerUserId != expectedSource || transfer.NewOwnerUserId != expectedTarget {
-		return requestedTransferFields(transferID), nil,
-			uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer record does not match the saved ID and expected owners")
+	if transfer.Id != transferID {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer response does not match the requested transfer ID")
 	}
-
-	observed, err := observedTransferReturnFields(transfer, time.Now().UTC().Format(time.RFC3339Nano))
+	result, err := observedTransferReturnFields(transfer)
 	if err != nil {
-		return observed, nil, err
+		return nil, nil, err
 	}
-	var application *datatransferAdmin.ApplicationDataTransfer
-	completed := strings.EqualFold(transfer.OverallTransferStatusCode, transferStatusComplete)
-	if !completed && !isOngoingTransferStatus(transfer.OverallTransferStatusCode) {
-		return observed, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer status is failed, missing, or unknown")
-	}
-	for _, item := range transfer.ApplicationDataTransfers {
-		if item.ApplicationId == appID {
-			application = item
-		}
-		if strings.EqualFold(item.ApplicationTransferStatus, transferStatusComplete) {
-			continue
-		}
-		completed = false
-		if !isOngoingTransferStatus(item.ApplicationTransferStatus) {
-			return observed, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: application transfer status is failed, missing, or unknown")
-		}
-	}
-	if application == nil || !transferParamsMatch(application.ApplicationTransferParams, expectedParams) {
-		return observed, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer application or parameters do not match the captured request")
-	}
-	observed.Fields[fieldSuccess] = structpb.NewBoolValue(true)
-	observed.Fields[fieldCompleted] = structpb.NewBoolValue(completed)
-	return observed, nil, nil
-}
-
-// requestedTransferFields contains caller-supplied correlation only, not provider evidence.
-func requestedTransferFields(transferID string) *structpb.Struct {
-	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		fieldSuccess:    structpb.NewBoolValue(false),
-		fieldCompleted:  structpb.NewBoolValue(false),
-		fieldTransferID: structpb.NewStringValue(transferID),
-		fieldObservedAt: structpb.NewStringValue(time.Now().UTC().Format(time.RFC3339Nano)),
-	}}
+	result.Fields[fieldSuccess] = structpb.NewBoolValue(true)
+	return result, nil, nil
 }
 
 // requiredStringArg extracts a required non-empty string argument. Split from
@@ -1003,40 +797,28 @@ func requiredStringArg(args *structpb.Struct, name string) (string, error) {
 	return value, nil
 }
 
-// observedTransferReturnFields maps a provider DataTransfer record onto the
-// action's return fields without asserting anything about completion.
-func observedTransferReturnFields(transfer *datatransferAdmin.DataTransfer, observedAt string) (*structpb.Struct, error) {
-	perAppStatus := map[string]*structpb.Value{}
-	parameters := map[string]*structpb.Value{}
-	result := &structpb.Struct{Fields: map[string]*structpb.Value{
-		fieldSuccess:      structpb.NewBoolValue(false),
-		fieldCompleted:    structpb.NewBoolValue(false),
-		fieldPerAppStatus: structpb.NewStructValue(&structpb.Struct{Fields: perAppStatus}),
-		fieldParameters:   structpb.NewStructValue(&structpb.Struct{Fields: parameters}),
-		fieldObservedAt:   structpb.NewStringValue(observedAt),
-	}}
+// observedTransferReturnFields maps current provider state without asserting
+// anything about completion.
+func observedTransferReturnFields(transfer *datatransferAdmin.DataTransfer) (*structpb.Struct, error) {
 	if transfer == nil {
-		return result, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
+		return nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
 	}
-	result.Fields[fieldTransferID] = structpb.NewStringValue(transfer.Id)
-	result.Fields[fieldStatus] = structpb.NewStringValue(transfer.OverallTransferStatusCode)
-	result.Fields[argResourceID] = structpb.NewStringValue(transfer.OldOwnerUserId)
-	result.Fields[argTargetResourceID] = structpb.NewStringValue(transfer.NewOwnerUserId)
-	result.Fields["request_time"] = structpb.NewStringValue(transfer.RequestTime)
+	perAppStatus := map[string]*structpb.Value{}
 	for _, item := range transfer.ApplicationDataTransfers {
 		if item == nil || item.ApplicationId == 0 {
-			return result, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer contains invalid application data")
+			return nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer contains invalid application data")
 		}
 		key := strconv.FormatInt(item.ApplicationId, 10)
 		if _, duplicate := perAppStatus[key]; duplicate {
-			return result, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer contains duplicate application identities")
+			return nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer contains duplicate application identities")
 		}
 		perAppStatus[key] = structpb.NewStringValue(item.ApplicationTransferStatus)
-		encoded, err := json.Marshal(item.ApplicationTransferParams)
-		if err != nil {
-			return result, uhttp.WrapErrors(codes.DataLoss, "google-workspace: invalid transfer parameters", err)
-		}
-		parameters[key] = structpb.NewStringValue(string(encoded))
 	}
-	return result, nil
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		fieldTransferID:     structpb.NewStringValue(transfer.Id),
+		argResourceID:       structpb.NewStringValue(transfer.OldOwnerUserId),
+		argTargetResourceID: structpb.NewStringValue(transfer.NewOwnerUserId),
+		fieldStatus:         structpb.NewStringValue(transfer.OverallTransferStatusCode),
+		fieldPerAppStatus:   structpb.NewStructValue(&structpb.Struct{Fields: perAppStatus}),
+	}}, nil
 }

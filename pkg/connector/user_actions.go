@@ -1028,9 +1028,6 @@ func applyUserProfilePatch(
 	// it when given the genuinely complete object. So whenever ExternalIds is
 	// actually shrinking - per externalIDsWillShrink above, which is not
 	// limited to the empty-clear case - start from a full copy of `current` and
-	// send the result via Update instead of Patch. The observed ETag is sent
-	// as If-Match, but Directory conditional-write enforcement is not verified.
-	// Every other case keeps the narrower Patch.
 	usePut := externalIDsWillShrink
 	var update *admin.User
 	if usePut {
@@ -1163,13 +1160,6 @@ func applyUserProfilePatch(
 	}
 
 	update.ForceSendFields = forceSend
-	if needCurrent && (len(forceSend) != 0 || customSchemasSet) {
-		if current.Etag == "" {
-			return nil, nil, skippedFields, uhttp.WrapErrors(codes.FailedPrecondition,
-				"google-workspace: profile read did not include an ETag; refusing an unconditional read-modify-write")
-		}
-		update.Etag = current.Etag
-	}
 
 	var updatedUser *admin.User
 	var err error

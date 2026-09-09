@@ -163,11 +163,7 @@ func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.S
 }
 
 func (c *GoogleWorkspace) getDirectoryService(ctx context.Context, scope string) (*directoryAdmin.Service, error) {
-	service, err := getService(ctx, c, scope, gwclient.NewUserService)
-	if err != nil {
-		return nil, err
-	}
-	return service.Service, nil
+	return getService(ctx, c, scope, directoryAdmin.NewService)
 }
 
 func (c *GoogleWorkspace) getGroupsSettingsService(ctx context.Context) (*groupssettings.Service, error) {
@@ -399,7 +395,7 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 		return nil, err
 	}
 
-	client.UserService, err = getService(ctx, c, directoryAdmin.AdminDirectoryUserReadonlyScope, gwclient.NewUserService)
+	client.UserService, err = c.getDirectoryService(ctx, directoryAdmin.AdminDirectoryUserReadonlyScope)
 	if err := recordServiceInit(l, err, directoryAdmin.AdminDirectoryUserReadonlyScope, "user resource synchronization", &skippedServices); err != nil {
 		return nil, err
 	}
