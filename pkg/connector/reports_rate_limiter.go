@@ -44,9 +44,11 @@ const (
 	// reportsFilterQueryQuotaPerMinute mirrors Google's documented 250/min filter-query cap.
 	// A small safety margin is left below the hard limit to tolerate clock/measurement jitter.
 	reportsFilterQueryQuotaPerMinute = 220
-	reportsMaxRetries                = 5
-	reportsInitialBackoff            = 500 * time.Millisecond
-	reportsMaxBackoff                = 30 * time.Second
+	// reportsMaxRetries caps attempts at 3 total (this value + the first try): past that, letting
+	// a persistent failure keep retrying isn't worth the added delay.
+	reportsMaxRetries     = 2
+	reportsInitialBackoff = 500 * time.Millisecond
+	reportsMaxBackoff     = 30 * time.Second
 
 	// reportsPerAttemptTimeout bounds a single ListActivities call, not the retry loop as a
 	// whole, so a genuinely hung request is retried like any other transient error instead of
@@ -182,6 +184,11 @@ func retryListActivities(
 ) (*reportsAdmin.Activities, error) {
 	applyPerAttemptTimeout := perAttemptTimeout > 0
 	backoff := initialBackoff
+	// allHungSoFar stays true only as long as every failed attempt has been timeout-shaped (no
+	// real 429/503/other error seen yet), so a hung endpoint is tagged as errHungLookup even if
+	// the caller's own ctx happens to be what cuts off the final attempt — not just when a hung
+	// attempt lines up exactly with the last retry.
+	allHungSoFar := true
 	for attempt := 0; ; attempt++ {
 		if err := limiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("google-workspace-connector: context cancelled waiting for reports api quota: %w", err)
@@ -198,12 +205,15 @@ func retryListActivities(
 			return resp, nil
 		}
 
+		timeoutShaped := errors.Is(err, context.DeadlineExceeded)
+		allHungSoFar = allHungSoFar && timeoutShaped
 		// ctx still being live means attemptCtx's own timeout fired, not the caller's deadline —
 		// treat that like a retryable 429/503 rather than "out of time."
-		hungAttempt := applyPerAttemptTimeout && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		hungAttempt := applyPerAttemptTimeout && timeoutShaped && ctx.Err() == nil
 		if attempt >= maxRetries || (!isRetryableReportsError(err) && !hungAttempt) {
-			if attempt >= maxRetries && hungAttempt {
-				// Final attempt was itself hung, not a real error: tag distinctly.
+			if applyPerAttemptTimeout && allHungSoFar {
+				// Every attempt so far has been a genuine hang, not a real error: tag distinctly,
+				// whether retries ran out on a hung attempt or ctx itself cut this one short too.
 				return nil, fmt.Errorf("%w: %w", errHungLookup, err)
 			}
 			return nil, err
@@ -213,6 +223,9 @@ func retryListActivities(
 		select {
 		case <-time.After(sleep):
 		case <-ctx.Done():
+			if applyPerAttemptTimeout && allHungSoFar {
+				return nil, fmt.Errorf("%w: %w", errHungLookup, ctx.Err())
+			}
 			return nil, ctx.Err()
 		}
 		backoff *= 2

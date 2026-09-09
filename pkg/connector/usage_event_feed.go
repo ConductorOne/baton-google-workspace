@@ -28,9 +28,9 @@ var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 // is picked client-side, so this just needs to be large enough to avoid pagination.
 const oauthAppLookupMaxResults = 50
 
-// oauthAppLookupTimeout caps a single (user, app) lookup, including retries. Kept above the
-// worst case of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry
-// in listActivitiesFilteredRateLimitedBounded has room to complete.
+// oauthAppLookupTimeout caps a single (user, app) lookup, including retries. Room for 2 hung
+// attempts (~51s of reportsMaxRetries); a 3rd still-hung attempt is cut short by this deadline
+// and tagged as errHungLookup rather than retried further.
 const oauthAppLookupTimeout = 60 * time.Second
 
 // oauthHungSkips is the running total of errHungLookup skips, for the log line below.

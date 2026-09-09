@@ -25,9 +25,9 @@ import (
 // by resolved app ID, keeping only the newest event per app.
 const samlAppLookupMaxResults = 50
 
-// samlAppLookupTimeout caps a single user's lookup, including retries. Kept above the worst case
-// of a hung attempt plus backoff plus a full retry (~51s) so the hung-attempt retry in
-// listActivitiesRateLimitedBounded has room to complete.
+// samlAppLookupTimeout caps a single user's lookup, including retries. Room for 2 hung attempts
+// (~51s of reportsMaxRetries); a 3rd still-hung attempt is cut short by this deadline and tagged
+// as errHungLookup rather than retried further.
 const samlAppLookupTimeout = 60 * time.Second
 
 // samlHungSkips is the running total of errHungLookup skips, for the log line below.
