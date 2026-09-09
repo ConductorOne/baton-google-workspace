@@ -244,17 +244,17 @@ func TestRetryListActivities(t *testing.T) {
 	})
 
 	t.Run("tags errHungLookup when the outer ctx cuts the final attempt short after prior hangs", func(t *testing.T) {
-		// attempt 0 hangs past its own 20ms attemptCtx (outer ctx has 33ms, still alive: a
-		// genuine hungAttempt). By the time attempt 1 starts (~23-26ms in, given a 3-6ms
-		// backoff), only ~7-10ms remain on the outer ctx — clearly under its own 20ms budget, so
-		// attempt 1's attemptCtx is clipped by the outer ctx, and ctx.Err() is non-nil when checked.
-		const localInitialBackoff = 3 * time.Millisecond
-		const localMaxBackoff = 10 * time.Millisecond
-		call, calls := blockingCallWithDelays([]time.Duration{perAttemptTimeout * 3, perAttemptTimeout * 3})
-		ctx, cancel := context.WithTimeout(context.Background(), 33*time.Millisecond)
+		// attempt 0 hangs (genuine hungAttempt); by attempt 1 the outer ctx has too little time
+		// left for its own 200ms budget, so it gets clipped by the outer ctx instead. Durations
+		// are scaled up 10x so scheduler/GC jitter can't flip which deadline fires first.
+		const localPerAttemptTimeout = 200 * time.Millisecond
+		const localInitialBackoff = 30 * time.Millisecond
+		const localMaxBackoff = 100 * time.Millisecond
+		call, calls := blockingCallWithDelays([]time.Duration{localPerAttemptTimeout * 3, localPerAttemptTimeout * 3})
+		ctx, cancel := context.WithTimeout(context.Background(), 330*time.Millisecond)
 		defer cancel()
 
-		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, perAttemptTimeout, 5, localInitialBackoff, localMaxBackoff, "u", "app", "event", "", "", "", 10)
+		_, err := retryListActivities(ctx, unlimitedRateLimiter(), call, localPerAttemptTimeout, 5, localInitialBackoff, localMaxBackoff, "u", "app", "event", "", "", "", 10)
 		if !errors.Is(err, errHungLookup) {
 			t.Fatalf("expected errHungLookup (every attempt was a hang, outer ctx just ran out), got %v", err)
 		}
@@ -267,10 +267,8 @@ func TestRetryListActivities(t *testing.T) {
 	})
 
 	t.Run("does not tag errHungLookup when a real error preceded the final hang", func(t *testing.T) {
-		// attempt 0 returns a real, fast 429 (not timeout-shaped) — allHungSoFar flips false and
-		// stays false. attempt 1 then hangs past its own attemptCtx with the outer ctx (1s) still
-		// alive, exhausting maxRetries=1: the bare, untagged error must come back even though the
-		// final failure looks identical to the positive case above.
+		// A real 429 on attempt 0 flips allHungSoFar false; attempt 1 then hangs and exhausts
+		// maxRetries=1 — the bare, untagged error must come back despite looking like the case above.
 		call, calls := blockingCallWithDelays([]time.Duration{0, perAttemptTimeout * 3}, rateLimitedGoogleErr())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

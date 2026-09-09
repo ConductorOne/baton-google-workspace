@@ -327,10 +327,8 @@ func TestUsageEventFeed_DedupesRepeatedClientIDsInTokens(t *testing.T) {
 }
 
 // TestScanUsersForEvents_RetriesFailingUserThenSkipsWithoutBlockingOthers pins the per-user
-// retry cap: a deterministically failing user is retried across separate calls up to
-// maxUserLookupRetries, then permanently skipped, all without ever returning an error (which
-// would make the SDK discard the cursor carrying the retry count) and without blocking or
-// re-processing the other, succeeding users in the batch.
+// retry cap: a failing user is retried up to maxUserLookupRetries then skipped, without ever
+// returning an error (which would drop the cursor) or blocking the batch's other users.
 func TestScanUsersForEvents_RetriesFailingUserThenSkipsWithoutBlockingOthers(t *testing.T) {
 	const failingEmail = "user-2@example.com"
 	users := []*directoryAdmin.User{

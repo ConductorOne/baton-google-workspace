@@ -117,14 +117,10 @@ func scanUsersForEvents(
 	if len(cursor.PendingUsers) == 0 {
 		usersResp, err := client.ListUserIDsPage(ctx, customerID, domain, cursor.DirectoryPageToken)
 		if err != nil {
-			// Preserve the cursor as-is so a transient Directory API failure does not rewind
-			// the walk back to the start on retry.
-			cursorToken, marshalErr := cursor.marshal()
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("google-workspace-connector: failed to marshal cursor token in event feed: %w", marshalErr)
-			}
-			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true},
-				fmt.Errorf("google-workspace-connector: failed to list users for event feed: %w", err)
+			// The SDK discards streamState on error; the caller resumes from the last
+			// successfully-returned cursor, not anything computed here, so there's nothing to
+			// marshal on this path.
+			return nil, nil, fmt.Errorf("google-workspace-connector: failed to list users for event feed: %w", err)
 		}
 		cursor.DirectoryPageToken = usersResp.NextPageToken
 		for _, u := range usersResp.Users {
@@ -144,8 +140,9 @@ func scanUsersForEvents(
 	}
 
 	// Quota already drained: fail fast with a classified error so the SDK backs off, instead of
-	// burning the per-user retry budget against a wall we already know is up. The SDK discards
-	// streamState on error, so there's no cursor to compute here.
+	// burning the per-user retry budget against a wall we already know is up. As above, the SDK
+	// discards streamState on error and resumes from the last successful cursor, so nothing to
+	// marshal here either.
 	if sharedReportsRateLimiter.AvailableTokens() < 1 {
 		return nil, nil, uhttp.WrapErrors(codes.ResourceExhausted, "google-workspace-connector: reports api quota exhausted, deferring")
 	}
