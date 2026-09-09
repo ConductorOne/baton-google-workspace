@@ -262,6 +262,8 @@ func TestGroupReadsStayStableUntilProviderSettingsChange(t *testing.T) {
 	id := &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}
 	first, _, err := builder.Get(t.Context(), id, nil)
 	require.NoError(t, err)
+	require.Equal(t, map[string]any{"include_in_global_address_list": "true"}, first.GetProfile().AsMap()["group_settings"],
+		"omitted settings remain unknown rather than gaining default values")
 	second, _, err := builder.Get(t.Context(), id, nil)
 	require.NoError(t, err)
 	require.True(t, proto.Equal(first, second), "unchanged provider facts must not churn the resource")

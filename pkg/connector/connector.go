@@ -429,10 +429,6 @@ func (c *GoogleWorkspace) newClient(ctx context.Context) (*gwclient.GoogleWorksp
 		return nil, err
 	}
 	client.GroupsSettingsService, err = c.getGroupsSettingsService(ctx)
-	if client.GroupService != nil && isAuthorizationError(err) {
-		return nil, uhttp.WrapErrors(codes.PermissionDenied,
-			"google-workspace: group reads require apps.groups.settings authorization", err)
-	}
 	if err := recordServiceInit(l, err, "https://www.googleapis.com/auth/apps.groups.settings", "group settings", &skippedServices); err != nil {
 		return nil, err
 	}

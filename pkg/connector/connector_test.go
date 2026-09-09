@@ -7,13 +7,13 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -155,43 +155,78 @@ func TestGetClientAllowsAuthorizationInitErrors(t *testing.T) {
 	}
 }
 
-func TestGetClientRequiresSettingsForReadableGroups(t *testing.T) {
+func TestMissingGroupSettingsDoesNotBlockOtherResourceReads(t *testing.T) {
 	tokenServer, _ := newTokenStatusServer(http.StatusUnauthorized)
 	defer tokenServer.Close()
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/directory/v1/users":
+			_, _ = w.Write([]byte(`{"users":[{"id":"user-id","primaryEmail":"user@example.com","name":{"fullName":"User"}}]}`))
+		case "/admin/directory/v1/customer/customer/roles":
+			_, _ = w.Write([]byte(`{"items":[{"roleId":"1","roleName":"Role"}]}`))
+		case "/admin/directory/v1/groups":
+			_, _ = w.Write([]byte(`{"groups":[{"id":"group-id","email":"team@example.com","name":"Team"}]}`))
+		case "/admin/directory/v1/groups/group-id":
+			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+		default:
+			if strings.HasPrefix(r.URL.Path, "/admin/reports/") || r.URL.Path == "/admin/directory/v1/users/user-id/tokens" {
+				_, _ = w.Write([]byte(`{"items":[]}`))
+				return
+			}
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer apiServer.Close()
 
-	directory := newTestDirectoryService(t, tokenServer.URL, tokenServer.Client())
-	service := &gwclient.UserService{Service: directory, HTTPClient: tokenServer.Client()}
+	directory := newTestDirectoryService(t, apiServer.URL, apiServer.Client())
+	service := &gwclient.UserService{Service: directory, HTTPClient: apiServer.Client()}
 	c := &GoogleWorkspace{
 		customerID:         "customer",
 		administratorEmail: "admin@example.com",
 		credentials:        testCredentials(t, tokenServer.URL),
+		reportService:      newReportsServiceForTest(t, apiServer.URL, apiServer.Client()),
 		serviceCache: map[string]any{
-			directoryAdmin.AdminDirectoryGroupReadonlyScope:       service,
-			directoryAdmin.AdminDirectoryGroupMemberReadonlyScope: service,
+			directoryAdmin.AdminDirectoryRolemanagementReadonlyScope: service,
+			directoryAdmin.AdminDirectoryUserReadonlyScope:           service,
+			directoryAdmin.AdminDirectoryUserSecurityScope:           service,
+			directoryAdmin.AdminDirectoryGroupReadonlyScope:          service,
+			directoryAdmin.AdminDirectoryGroupMemberReadonlyScope:    service,
 		},
 	}
 	client, err := c.getClient(t.Context())
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("expected settings authorization to fail initialization, got %v", err)
+	if err != nil {
+		t.Fatalf("missing settings authorization must not fail unrelated client initialization: %v", err)
 	}
-	if client != nil {
-		t.Fatal("failed initialization returned a partial client")
-	}
-	var authorizationError *GoogleWorkspaceOAuthUnauthorizedError
-	if !errors.As(err, &authorizationError) {
-		t.Fatalf("expected the original authorization error, got %v", err)
+	wantIDs := map[string]string{
+		resourceTypeRole.Id:                  "1",
+		resourceTypeUser.Id:                  "user-id",
+		resourceTypeGroup.Id:                 "group-id",
+		resourceTypeEnterpriseApplication.Id: googleWorkspaceAppID,
 	}
 	for _, syncer := range c.ResourceSyncers(t.Context()) {
-		if syncer.ResourceType(t.Context()).GetId() != resourceTypeGroup.Id {
-			continue
+		resourceType := syncer.ResourceType(t.Context()).GetId()
+		wantID, ok := wantIDs[resourceType]
+		if !ok {
+			t.Fatalf("unexpected resource type %q", resourceType)
 		}
-		resources, _, err := syncer.List(t.Context(), nil, rs.SyncOpAttrs{})
-		if status.Code(err) != codes.PermissionDenied || len(resources) != 0 {
-			t.Fatalf("group sync must expose the initialization failure, got resources=%v error=%v", resources, err)
+		resources, _, err := syncer.List(t.Context(), nil, rs.SyncOpAttrs{Session: newFakeSessionStore()})
+		if err != nil {
+			t.Fatalf("%s listing failed without settings authorization: %v", resourceType, err)
 		}
-		return
+		if len(resources) != 1 || resources[0].GetId().GetResource() != wantID {
+			t.Fatalf("%s listing lost its provider resource: %v", resourceType, resources)
+		}
+		delete(wantIDs, resourceType)
 	}
-	t.Fatal("group syncer was silently omitted after initialization failed")
+	if len(wantIDs) != 0 {
+		t.Fatalf("missing settings authorization removed resource types: %v", wantIDs)
+	}
+	group, _, err := groupBuilder(client, c.customerID, c.domain).Get(t.Context(),
+		&v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}, nil)
+	if status.Code(err) != codes.FailedPrecondition || group != nil {
+		t.Fatalf("targeted group read must still require settings: resource=%v error=%v", group, err)
+	}
 }
 
 // TestGetClientLogsSkippedServicesAtDebugLevel guards that a missing-scope
