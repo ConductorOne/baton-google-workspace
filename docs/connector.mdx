@@ -27,6 +27,8 @@ The Google Workspace connector supports [automatic account provisioning and depr
 
 The connector also supports group creation (via the `create_group` connector action) and deletion, [continuous sync](/baton/faq#syncing), and targeted sync for accounts, groups, and roles.
 
+[This connector syncs non-human identities](/product/admin/nhi) and displays them on the **Identities overview** dashboard.
+
 Continuous sync streams sign-in activity, app usage, and admin audit events between full syncs, so last-login data and membership changes stay current. It requires the `admin.reports.audit.readonly` scope.
 
 ### Connector actions
@@ -450,29 +452,24 @@ This task requires either the **Connector Administrator** or **Super Administrat
 
 <Steps>
 <Step>
-In C1, navigate to **Integrations** > **Connectors** and click **Add connector**.
+In C1, navigate to **Apps** > **Connectors** and click **Add connector**.
 </Step>
 <Step>
 Search for **Google Workspace v2** and click **Add**.
 </Step>
 <Step>
-Choose how to set up the new Google Workspace connector:
+Choose where to add the connector: **Create a new app**, or **Add to an existing app** (then select the app).
 
-   - Add the connector to a currently unmanaged app (select from the list of apps that were discovered in your identity, SSO, or federation provider that aren't yet managed with C1)
-
-   - Add the connector to a managed app (select from the list of existing managed apps)
-
-   - Create a new managed app
+   If you're creating a new app, choose whether to link it to an application discovered from your identity provider: select **Yes** and pick the IdP application, or **No** to continue with just the connector.
 </Step>
 <Step>
-Set the owner for this connector. You can manage the connector yourself, or choose someone else from the list of C1 users. Setting multiple owners is allowed.
+Set the connector's **Name** and, optionally, a **Description**.
 </Step>
 <Step>
-Click **Next**.
-
-   - **If you are the connector owner**, go on to the next step.
-
-   - **If someone else is the connector owner**, you can stop here. C1 will notify the connector owner by email that their help is needed to complete the setup process.
+Click the pencil icon next to **Owners** to choose who can configure and manage this connector.
+</Step>
+<Step>
+Click **Add**. The connector is created and its configuration page opens.
 </Step>
 <Step>
 Find the **Settings** area of the page and click **Edit**.
@@ -515,19 +512,24 @@ When running in service mode on Kubernetes, a self-hosted connector maintains an
 
 <Steps>
 <Step>
-In C1, navigate to **Integrations** **Connectors** > **Add connector**
+In C1, navigate to **Apps** > **Connectors** and click **Add connector**
 </Step>
 <Step>
 Search for **Baton** and click **Add**
 </Step>
 <Step>
-Choose whether to add to an existing application or create new
+Choose where to add the connector: **Create a new app**, or **Add to an existing app** (then select the app).
+
+If you're creating a new app, choose whether to link it to an application discovered from your identity provider: select **Yes** and pick the IdP application, or **No** to continue with just the connector.
 </Step>
 <Step>
-Set the connector owner(s)
+Set the connector's **Name** and, optionally, a **Description**.
 </Step>
 <Step>
-Click **Create and add details**
+Click the pencil icon next to **Owners** to choose who can configure and manage this connector.
+</Step>
+<Step>
+Click **Add**. The connector is created and its configuration page opens.
 </Step>
 <Step>
 In the **Settings** area, click **Edit**
