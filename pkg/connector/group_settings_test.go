@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/stretchr/testify/require"
 	groupssettings "google.golang.org/api/groupssettings/v1"
 	"google.golang.org/api/option"
@@ -20,7 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestGroupGetRejectsSettingsFailures(t *testing.T) {
+func TestGroupReadsRejectSettingsFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		statusCode     int
@@ -73,6 +75,10 @@ func TestGroupGetRejectsSettingsFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/admin/directory/v1/groups" {
+					_, _ = w.Write([]byte(`{"groups":[{"id":"group-id","email":"team@example.com","name":"Team"}]}`))
+					return
+				}
 				if r.URL.Path == "/admin/directory/v1/groups/group-id" {
 					_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
 					return
@@ -93,8 +99,41 @@ func TestGroupGetRejectsSettingsFailures(t *testing.T) {
 			resource, _, err := builder.Get(t.Context(), &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}, nil)
 			require.Equal(t, tc.wantCode, status.Code(err))
 			require.Nil(t, resource, "a failed settings read must not return a successful partial group")
+			resources, page, err := builder.List(t.Context(), nil, rs.SyncOpAttrs{})
+			require.Equal(t, tc.wantCode, status.Code(err))
+			require.Nil(t, resources, "a failed settings read must not publish a partial group page")
+			require.Nil(t, page)
 		})
 	}
+}
+
+func TestGroupListDoesNotReturnPartialPageAfterSettingsFailure(t *testing.T) {
+	var settingsReads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/admin/directory/v1/groups" {
+			_, _ = w.Write([]byte(`{"groups":[{"id":"first","email":"first@example.com","name":"First"},{"id":"second","email":"second@example.com","name":"Second"}],"nextPageToken":"next"}`))
+			return
+		}
+		settingsReads.Add(1)
+		if strings.HasSuffix(r.URL.Path, "/first@example.com") {
+			_, _ = w.Write([]byte(`{"email":"first@example.com","whoCanJoin":"INVITED_CAN_JOIN"}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":503,"message":"settings unavailable"}}`))
+	}))
+	defer server.Close()
+	settings, err := groupssettings.NewService(t.Context(), option.WithHTTPClient(server.Client()), option.WithEndpoint(server.URL+"/"))
+	require.NoError(t, err)
+	builder := &groupResourceType{client: &gwclient.GoogleWorkspaceClient{
+		GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings,
+	}}
+	resources, page, err := builder.List(t.Context(), nil, rs.SyncOpAttrs{})
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.Nil(t, resources, "do not publish the successful prefix of a failed group page")
+	require.Nil(t, page, "do not advance the cursor past failed settings")
+	require.Equal(t, int32(2), settingsReads.Load())
 }
 
 func TestGroupPrivacyReadbackRejectsProviderMismatch(t *testing.T) {
@@ -237,10 +276,14 @@ func TestGroupPrivacyPreservesOmittedSettings(t *testing.T) {
 	require.Equal(t, "false", profile["group_settings"].(map[string]any)["include_in_global_address_list"])
 }
 
-func TestGroupReadsStayStableUntilProviderSettingsChange(t *testing.T) {
+func TestGroupListAndGetKeepSettingsConsistent(t *testing.T) {
 	settingsReads := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/admin/directory/v1/groups" {
+			_, _ = w.Write([]byte(`{"groups":[{"id":"group-id","email":"team@example.com","name":"Team"}]}`))
+			return
+		}
 		if r.URL.Path == "/admin/directory/v1/groups/group-id" {
 			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
 			return
@@ -259,15 +302,18 @@ func TestGroupReadsStayStableUntilProviderSettingsChange(t *testing.T) {
 		GroupService: newTestDirectoryService(t, server.URL, server.Client()), GroupsSettingsService: settings,
 	}}
 	id := &v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}
-	first, _, err := builder.Get(t.Context(), id, nil)
+	listed, _, err := builder.List(t.Context(), nil, rs.SyncOpAttrs{})
 	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	first := listed[0]
 	require.Equal(t, map[string]any{"include_in_global_address_list": "true"}, first.GetProfile().AsMap()["group_settings"],
 		"omitted settings remain unknown rather than gaining default values")
 	second, _, err := builder.Get(t.Context(), id, nil)
 	require.NoError(t, err)
-	require.True(t, proto.Equal(first, second), "unchanged provider facts must not churn the resource")
-	changed, _, err := builder.Get(t.Context(), id, nil)
+	require.True(t, proto.Equal(first, second), "List and Get must return the same group profile")
+	changed, _, err := builder.List(t.Context(), nil, rs.SyncOpAttrs{})
 	require.NoError(t, err)
-	require.False(t, proto.Equal(first, changed), "an actual provider change must remain visible")
-	require.Equal(t, "false", changed.GetProfile().AsMap()["group_settings"].(map[string]any)["include_in_global_address_list"])
+	require.Len(t, changed, 1)
+	require.False(t, proto.Equal(first, changed[0]), "an actual provider change must remain visible")
+	require.Equal(t, "false", changed[0].GetProfile().AsMap()["group_settings"].(map[string]any)["include_in_global_address_list"])
 }

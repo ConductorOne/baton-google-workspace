@@ -77,9 +77,9 @@ Existing-account rotation uses the credential-management interface, not a connec
 
 User sync and targeted reads use native Google Directory user objects. Configured filter exclusions use gRPC `NotFound` with `ErrorInfo` reason `RESOURCE_FILTERED`; genuine provider permission errors and malformed successes remain errors.
 
-Targeted group reads include `group_settings` and require the Groups Settings API and `apps.groups.settings` scope. Missing authorization, a failed settings request, or a response with no supported settings fails the group read. Returned settings contain only values supplied by Google; omitted individual fields remain unknown and are not defaulted. Normal group listing does not fetch settings for every row. `allow_web_posting` controls the web forum, not permission for external email senders.
+Group `List` and `Get` both include `group_settings`, using one Groups Settings lookup per returned group. They require the Groups Settings API and `apps.groups.settings` scope. Missing authorization, a failed settings request, or a response with no supported settings fails the group read; a failed list page does not return a partial result. Returned settings contain only values supplied by Google; omitted individual fields remain unknown and are not defaulted. `allow_web_posting` controls the web forum, not permission for external email senders.
 
-Before upgrading an installation that uses targeted group reads, enable the Groups Settings API and authorize `apps.groups.settings`. Without that authorization, targeted group reads fail; client initialization, other resource reads, and normal group listing remain available.
+Before upgrading an installation that syncs groups, enable the Groups Settings API and authorize `apps.groups.settings`. Without that authorization, group sync and targeted group reads fail; client initialization and unrelated resource reads remain available.
 
 `modify_group_settings` retains observed `previous_*` and requested `new_*` values even when the settings write fails. Requested values are not verified post-state; only a successful independent readback confirms the requested settings. Unknown write outcomes are not replayed by the handler.
 
@@ -181,13 +181,13 @@ The Workspace APIs this connector uses don't require a billing account.
 
 ### Enable the APIs
 
-Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise application IDs. Targeted group reads and settings changes also require the Groups Settings API.
+Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise application IDs. Group sync, targeted group reads, and settings changes also require the Groups Settings API.
 
 | API | Service ID | Required? | Used for |
 | :--- | :--- | :--- | :--- |
 | Admin SDK API | `admin.googleapis.com` | Required | Syncing users, groups, roles, and audit events, and running provisioning and data transfer actions |
 | Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. |
-| Groups Settings API | `groupssettings.googleapis.com` | Required for targeted group reads and settings changes | Group `Get` and the `modify_group_settings` connector action |
+| Groups Settings API | `groupssettings.googleapis.com` | Required for group reads and settings changes | Group `List`/`Get` and the `modify_group_settings` connector action |
 
 <Note>
 The Admin SDK API covers the Directory, Reports, and Data Transfer APIs. Enabling it once is enough. There is no separate Data Transfer API to enable, even though the connector requests the `admin.datatransfer` scope.
@@ -204,7 +204,7 @@ Search for and select the **Admin SDK API**, then click **Enable**.
 Repeat for the **Cloud Identity API**.
 </Step>
 <Step>
-Repeat for the **Groups Settings API** to enable targeted group reads and settings changes.
+Repeat for the **Groups Settings API** to enable group sync, targeted reads, and settings changes.
 </Step>
 </Steps>
 
@@ -411,7 +411,7 @@ Click **AUTHORIZE**.
 
 Choose one of the two sets below. Read-only access lets C1 sync access data. Read/write access lets C1 sync access data and provision access.
 
-Google has no read-only Groups Settings scope. Both sets include `apps.groups.settings` because targeted group reads require it; this scope also permits editing group settings. Directory group-read permission alone does not grant access to settings.
+Google has no read-only Groups Settings scope. Both sets include `apps.groups.settings` because group sync and targeted reads require it; this scope also permits editing group settings. Directory group-read permission alone does not grant access to settings.
 
 <Tabs>
 <Tab title="Read-only">

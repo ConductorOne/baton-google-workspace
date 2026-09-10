@@ -76,7 +76,7 @@
    In **APIs & Services > Library**, enable:
    - **Admin SDK API** (required — Directory + Reports)
    - **Cloud Identity API** (used to resolve SAML app IDs to stable identifiers)
-   - **Groups Settings API** (required for targeted group reads and the `modify_group_settings` action)
+   - **Groups Settings API** (required for group sync, targeted reads, and the `modify_group_settings` action)
 
    **Step 3: Create a service account and JSON key**
 

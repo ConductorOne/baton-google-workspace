@@ -210,6 +210,13 @@ func TestMissingGroupSettingsDoesNotBlockOtherResourceReads(t *testing.T) {
 			t.Fatalf("unexpected resource type %q", resourceType)
 		}
 		resources, _, err := syncer.List(t.Context(), nil, rs.SyncOpAttrs{Session: newFakeSessionStore()})
+		if resourceType == resourceTypeGroup.Id {
+			if status.Code(err) != codes.FailedPrecondition || len(resources) != 0 {
+				t.Fatalf("group listing must require settings: resources=%v error=%v", resources, err)
+			}
+			delete(wantIDs, resourceType)
+			continue
+		}
 		if err != nil {
 			t.Fatalf("%s listing failed without settings authorization: %v", resourceType, err)
 		}

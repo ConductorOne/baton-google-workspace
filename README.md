@@ -9,7 +9,7 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 # Prerequisites
 
 - A Google Workspace account with **Super Admin** access.
-- A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**). The **Groups Settings API** is required for targeted group reads and the group-settings action.
+- A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**). The **Groups Settings API** is required for group sync, targeted group reads, and the group-settings action.
 - A **service account** with a downloaded JSON key, authorized for **domain-wide delegation** against your Workspace.
 - The Workspace **Customer ID** and a **super-admin email** for the service account to impersonate.
 - The relevant OAuth scopes authorized on the delegation (read-only for sync, read/write for provisioning + actions).
@@ -87,9 +87,9 @@ Creation and rotation use protected SDK credential inputs/results, never ordinar
 
 User reads use native Google Directory user objects. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence.
 
-Targeted group `Get` includes `group_settings` and requires the Groups Settings API and `apps.groups.settings` scope. Settings request failures and responses with no supported settings fail the group read. Returned settings contain only values supplied by Google; omitted fields remain unknown, not defaulted. Normal listing does not fetch settings per group.
+Group `List` and `Get` both include `group_settings`, using one Groups Settings lookup per returned group. They require the Groups Settings API and `apps.groups.settings` scope. Settings failures and responses with no supported settings fail the group read; a failed list page does not return a partial result. Returned settings contain only values supplied by Google; omitted fields remain unknown, not defaulted.
 
-Before upgrading an installation that uses targeted group reads, enable the Groups Settings API and authorize `apps.groups.settings`. Without that authorization, targeted group reads fail; client initialization, other resource reads, and normal group listing remain available.
+Before upgrading an installation that syncs groups, enable the Groups Settings API and authorize `apps.groups.settings`. Without that authorization, group sync and targeted group reads fail; client initialization and unrelated resource reads remain available.
 
 **Targeted user-read migration:** configured filter exclusions previously returned no resource and no error from the connector hook; they now return `NotFound` with `ErrorInfo` reason `RESOURCE_FILTERED` and domain `baton-google-workspace`. The pinned baton-sdk v0.29.0 builder already converted the old nil resource to `NotFound`, and its targeted-sync consumer skips that code. The public classification stays the same while the local SDK/gRPC fixture verifies the added qualifier survives transport. Lifecycle callers must inspect it and must not treat a filtered result as provider absence. Host-side qualifier handling is an integration requirement, not implemented or certified by this connector PR. No resource or grant IDs change; normal List filtering is unchanged.
 
@@ -139,7 +139,7 @@ Both alias actions require a concrete configured Google customer ID, not the `my
 A user with the **Super Admin** role in Google Workspace must perform this setup.
 
 1. Sign in to the [Google Cloud Console](https://console.cloud.google.com) and create a project (e.g. "C1 Integration").
-2. In **APIs & Services > Library**, enable the **Admin SDK API** and **Cloud Identity API**. Enable the **Groups Settings API** for targeted group reads and the group-settings action.
+2. In **APIs & Services > Library**, enable the **Admin SDK API** and **Cloud Identity API**. Enable the **Groups Settings API** for group sync, targeted group reads, and the group-settings action.
 3. In **APIs & Services > Credentials**, create a **service account**. Under **Keys > Add key > Create new key**, choose **JSON** and download it — this is `--credentials-json-file-path`. Note the service account's **Unique ID (Client ID)**.
 4. In the [Admin Console](https://admin.google.com) (as Super Admin), go to **Security > Access and data control > API Controls > Manage Domain Wide Delegation > Add new**, enter the service account's **Client ID** and authorize the scopes below.
 5. Copy your **Customer ID** from **Account > Account settings** (`--customer-id`).
