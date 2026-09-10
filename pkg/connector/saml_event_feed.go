@@ -19,10 +19,6 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// samlAppLookupMaxResults bounds the per-user Reports API lookup for SAML app logins. A single
-// user can have logged into multiple distinct SAML apps, and activities.list cannot filter by a
-// specific app within applicationName="saml", so a small recent window is fetched and grouped
-// by resolved app ID, keeping only the newest event per app.
 const samlAppLookupMaxResults = 50
 
 // samlAppLookupTimeout caps a single user's lookup, including retries. Room for 2 hung attempts

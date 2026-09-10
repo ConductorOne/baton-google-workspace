@@ -5,9 +5,9 @@
 // across up to 180 days). Instead, each feed walks the user directory page by page — reusing
 // the same paginated user listing as OAuth app discovery — and, for a small bounded batch of
 // users per call, asks the Reports API for only that user's most recent login(s) per app.
-// This bounds per-call cost to a fixed number of Reports API calls, checkpoints resumably via
-// pagination.StreamToken, and never loops internally across directory pages (see
-// ref-antipatterns.md, "Client-Side Pagination Loop").
+// This bounds users per call, not Reports API calls (usage_event_feed.go issues one per app),
+// checkpoints resumably via pagination.StreamToken, and never loops internally across
+// directory pages (see ref-antipatterns.md, "Client-Side Pagination Loop").
 //
 // Ordering note: activities.list ordering is undocumented, so with startTime=180 days back and
 // maxResults=50, each lookup still picks the maximum occurredAt client-side rather than trusting result order.
@@ -30,9 +30,9 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// usersPerEventFeedCall bounds how many users are processed per ListEvents invocation, so a
-// single call issues at most this many Reports API filter-queries and returns quickly instead
-// of blocking on the shared 250/min quota for an entire directory page (up to 500 users).
+// usersPerEventFeedCall bounds users per ListEvents call, not Reports API calls (the usage
+// feed issues one per app), so a call returns quickly instead of blocking on the shared
+// 250/min quota for an entire directory page (up to 500 users).
 const usersPerEventFeedCall = 25
 
 // pendingUser.Retries caps the attempt count for this user lookup operation to prevent
