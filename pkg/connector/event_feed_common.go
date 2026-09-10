@@ -166,6 +166,10 @@ func scanUsersForEvents(
 
 		userEvents, err := lookup(ctx, client, u)
 		if err != nil {
+			// Quota can also drain mid-batch: same fail-fast as the up-front check.
+			if sharedReportsRateLimiter.AvailableTokens() < 1 {
+				return nil, nil, uhttp.WrapErrors(codes.ResourceExhausted, "google-workspace-connector: reports api quota exhausted, deferring")
+			}
 			// Must return with a nil error: the SDK discards streamState.
 			// Track the failure and retry this user on the next call.
 			u.Retries++
