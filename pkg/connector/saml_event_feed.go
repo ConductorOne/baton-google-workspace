@@ -19,6 +19,8 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
+// samlAppLookupMaxResults bounds the per-user Reports API lookup; the true latest event is
+// picked client-side, so this just needs to be large enough to avoid pagination.
 const samlAppLookupMaxResults = 50
 
 // samlAppLookupTimeout caps a single user's lookup, including retries. Room for 2 hung attempts
