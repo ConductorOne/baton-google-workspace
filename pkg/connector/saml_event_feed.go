@@ -2,24 +2,34 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// samlAppLookupMaxResults bounds the per-user Reports API lookup for SAML app logins. A single
-// user can have logged into multiple distinct SAML apps, and activities.list cannot filter by a
-// specific app within applicationName="saml", so a small recent window is fetched and grouped
-// by resolved app ID, keeping only the newest event per app.
+// samlAppLookupMaxResults bounds the per-user Reports API lookup; the true latest event is
+// picked client-side, so this just needs to be large enough to avoid pagination.
 const samlAppLookupMaxResults = 50
+
+// samlAppLookupTimeout caps a single user's lookup, including retries. Room for 2 hung attempts
+// (~51s of reportsMaxRetries); a 3rd still-hung attempt is cut short by this deadline and tagged
+// as errHungLookup rather than retried further.
+const samlAppLookupTimeout = 60 * time.Second
+
+// samlHungSkips is the running total of errHungLookup skips, for the log line below.
+var samlHungSkips hungLookupSkipCounter
 
 // samlEventFeed emits UsageEvents from Google Workspace SAML app login activity.
 type samlEventFeed struct {
@@ -54,8 +64,21 @@ type samlAppActivity struct {
 // authentication, so last login timestamps are accurate. SAML apps are identified by app name
 // (no numeric client_id).
 func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string, user pendingUser) ([]*v2.Event, error) {
-	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppSAML, "login_success", "", "", samlAppLookupMaxResults)
+	l := ctxzap.Extract(ctx)
+	startTime := time.Now().Add(-reportsLookback).UTC().Format(time.RFC3339)
+
+	lookupCtx, cancel := context.WithTimeout(ctx, samlAppLookupTimeout)
+	defer cancel()
+
+	r, err := listActivitiesRateLimitedBounded(lookupCtx, client, user.Email, reportsAppSAML, "login_success", startTime, "", samlAppLookupMaxResults)
 	if err != nil {
+		if errors.Is(err, errHungLookup) && ctx.Err() == nil {
+			// Genuinely hung, not quota starvation or a real error: skip this user.
+			l.Debug("google-workspace-connector: timed out listing saml login activities, skipping",
+				zap.String("user", user.Email), zap.Error(err),
+				zap.Int64("total_occurrences", samlHungSkips.incr()))
+			return nil, nil
+		}
 		return nil, fmt.Errorf("google-workspace-connector: failed to list saml login activities for %s: %w", user.Email, err)
 	}
 
