@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -48,11 +49,9 @@ type samlAppActivity struct {
 	appName    string
 }
 
-// lookupUser tracks SAML app usage via Google's "saml" audit log.
-//
-// Unlike OAuth apps (see usage_event_feed.go), SAML "login_success" fires on every SSO
-// authentication, so last login timestamps are accurate. SAML apps are identified by app name
-// (no numeric client_id).
+// lookupUser tracks SAML app usage via Google's "saml" audit log. Unlike OAuth apps (see
+// usage_event_feed.go), one query covers every SAML app for a user, so it always completes in a
+// single Reports API call and never needs resume state.
 func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleWorkspaceClient, samlProfileMap map[string]string, user pendingUser) ([]*v2.Event, error) {
 	r, err := listActivitiesRateLimited(ctx, client, user.Email, reportsAppSAML, "login_success", "", "", samlAppLookupMaxResults)
 	if err != nil {
@@ -134,8 +133,12 @@ func (f *samlEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamp
 	}
 
 	events, streamState, err := scanUsersForEvents(ctx, f.client, f.customerID, f.domain, earliestEvent, pToken,
-		func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error) {
-			return f.lookupUser(ctx, client, samlProfileMap, user)
+		func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser, _ string, _ int, _ time.Time) ([]*v2.Event, string, int, error) {
+			events, err := f.lookupUser(ctx, client, samlProfileMap, user)
+			if err != nil {
+				return nil, "", 0, err
+			}
+			return events, "", 1, nil
 		})
 	if err != nil {
 		return nil, streamState, nil, err
