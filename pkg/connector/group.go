@@ -70,11 +70,7 @@ func (o *groupResourceType) List(ctx context.Context, resourceId *v2.ResourceId,
 
 	rv := make([]*v2.Resource, 0, len(groups.Groups))
 	for _, g := range groups.Groups {
-		if g.Id == "" {
-			l.Error("group had no id", zap.String("name", g.Name))
-			continue
-		}
-		groupResource, err := groupToResource(ctx, g)
+		groupResource, err := o.groupWithSettings(ctx, g)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create group resource in List: %w", err)
 		}
@@ -219,6 +215,9 @@ func (o *groupResourceType) Grant(ctx context.Context, principal *v2.Resource, e
 			return nil, nil, fmt.Errorf("google-workspace: failed to insert group member: %w", err)
 		}
 	}
+	if assignment == nil || assignment.Id == "" || assignment.Id != principal.GetId().GetResource() {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: membership response did not identify the requested principal; outcome unknown")
+	}
 
 	grant := sdkGrant.NewGrant(entitlement.Resource, groupMemberEntitlement, principal.GetId())
 	grant.Id = assignment.Id
@@ -259,12 +258,39 @@ func (o *groupResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, 
 	// TODO: If o.domainId is set, check if the group is still in the domain.
 	//       There is not a straight forward way to do this when getting a single group.
 
-	groupResource, err := groupToResource(ctx, g)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create group resource in Get: %w", err)
-	}
+	resource, err := o.groupWithSettings(ctx, g)
+	return resource, nil, err
+}
 
-	return groupResource, nil, nil
+func (o *groupResourceType) groupWithSettings(ctx context.Context, group *admin.Group) (*v2.Resource, error) {
+	if group == nil || group.Id == "" || group.Email == "" {
+		return nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: group response is missing its identity or email")
+	}
+	if o.client.GroupsSettingsService == nil {
+		return nil, uhttp.WrapErrors(codes.FailedPrecondition,
+			"google-workspace: group reads require the Groups Settings API and apps.groups.settings scope")
+	}
+	settings, err := o.client.GetGroupSettings(ctx, group.Email)
+	if err != nil {
+		// A settings failure must not tell the syncer that the Directory group is absent.
+		if status.Code(err) == codes.NotFound {
+			return nil, uhttp.WrapErrors(codes.FailedPrecondition,
+				"google-workspace: settings are unavailable for the Directory group", err)
+		}
+		return nil, fmt.Errorf("google-workspace: failed to read group settings: %w", err)
+	}
+	if settings == nil || settings.Email == "" || !strings.EqualFold(settings.Email, group.Email) {
+		return nil, uhttp.WrapErrors(codes.DataLoss,
+			"google-workspace: group settings response did not identify the requested group")
+	}
+	resource, err := groupToResource(ctx, group)
+	if err != nil {
+		return nil, fmt.Errorf("google-workspace: failed to create group resource: %w", err)
+	}
+	if err := addGroupSettings(resource, settings); err != nil {
+		return nil, err
+	}
+	return resource, nil
 }
 
 func (o *groupResourceType) Delete(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (annotations.Annotations, error) {

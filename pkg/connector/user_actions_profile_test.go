@@ -74,12 +74,16 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if u.Etag == "" {
+			u.Etag = `"fixture-version"`
+		}
 
 		switch r.Method {
 		case http.MethodGet:
 			state.getCount++
 			_ = json.NewEncoder(w).Encode(safeUserResponse{
 				Id:            u.Id,
+				Etag:          u.Etag,
 				PrimaryEmail:  u.PrimaryEmail,
 				Name:          u.Name,
 				RecoveryEmail: u.RecoveryEmail,
@@ -128,6 +132,7 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(safeUserResponse{
 				Id:            u.Id,
+				Etag:          u.Etag,
 				PrimaryEmail:  u.PrimaryEmail,
 				Name:          u.Name,
 				RecoveryEmail: u.RecoveryEmail,

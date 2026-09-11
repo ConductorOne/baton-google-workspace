@@ -7,19 +7,9 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/retry"
 )
 
-// actionRetryConfig bounds how long, and how many times, this package will
-// wait for a rate-limited action-handler call to clear before giving up.
-//
-// This does NOT loop and retry the call itself: baton-google-workspace's
-// actions are invoked by ConductorOne's platform-side BatonActionInvokeFSM,
-// which already retries a failed action up to 3 times with no backoff once
-// this package's call returns its error. An independent retry loop in here
-// too would compound with that - up to attempts² calls against Google's API
-// for a single throttled action, in the worst case. Instead, on a retryable
-// error this package waits once for the error's rate-limit window (reusing
-// retry.Retryer's own wait-time computation) and returns the original error
-// unretried, so the platform's next attempt lands after a respectful pause
-// instead of immediately.
+// actionRetryConfig bounds waits in the action-handler helpers. Each helper
+// calls the provider once, then waits before returning a retryable error.
+// These helpers do not replay calls or determine the host's retry policy.
 var actionRetryConfig = retry.RetryConfig{
 	MaxAttempts:  3,
 	InitialDelay: 15 * time.Second,

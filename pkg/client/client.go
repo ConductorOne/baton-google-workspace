@@ -83,139 +83,113 @@ func (c *GoogleWorkspaceClient) RequireUserProvisioning() error {
 // Users – read
 // ---------------------------------------------------------------------------
 
-// listUsersFields is a field mask that restricts ListUsers responses to only the
-// fields the connector actually reads. Projection("full") without a field mask
-// returns every attribute including aliases, phones, addresses, ssh keys, etc.
-// For tenants with large custom schemas this inflates each page to megabytes,
-// causing Lambda OOM or 300s timeout. The mask keeps the full custom-schema
-// data while dropping the unused fields, reducing per-page payload size by
-// roughly 80–90% for attribute-heavy directories.
+// listUsersFields limits user sync responses to fields the resource builder
+// actually consumes.
 const listUsersFields googleapi.Field = "nextPageToken,users(id,primaryEmail,name,thumbnailPhotoUrl," +
 	"archived,suspended,suspensionReason,deletionTime,isEnrolledIn2Sv," +
 	"creationTime,lastLoginTime,orgUnitPath,includeInGlobalAddressList," +
 	"customerId,relations,organizations,customSchemas,posixAccounts,externalIds)"
 
-func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerId, domain, pageToken string) (*directoryAdmin.Users, error) {
+func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerID, domain, pageToken string) (*directoryAdmin.Users, error) {
 	if c.UserService == nil {
 		return nil, errServiceNotAvailable("user service")
 	}
-	r := c.UserService.Users.List().
-		OrderBy("email").
-		Projection("full").
-		MaxResults(200).
-		Fields(listUsersFields)
+	call := c.UserService.Users.List().OrderBy("email").Projection("full").MaxResults(200).Fields(listUsersFields)
 	if domain != "" {
-		r = r.Domain(domain)
+		call = call.Domain(domain)
 	} else {
-		r = r.Customer(customerId)
+		call = call.Customer(customerID)
 	}
 	if pageToken != "" {
-		r = r.PageToken(pageToken)
+		call = call.PageToken(pageToken)
 	}
-	resp, err := r.Context(ctx).Do()
+	users, err := call.Context(ctx).Do()
 	if err != nil {
 		return nil, wrapGoogleApiErrorWithContext(err, "failed to list users")
 	}
-	return resp, nil
+	for _, user := range users.Users {
+		if user == nil || user.Id == "" {
+			return nil, fmt.Errorf("google-workspace: user listing contains an entry without provider identity")
+		}
+	}
+	return users, nil
 }
 
-func (c *GoogleWorkspaceClient) GetUser(ctx context.Context, userId string) (*directoryAdmin.User, error) {
+func (c *GoogleWorkspaceClient) GetUser(ctx context.Context, userID string) (*directoryAdmin.User, error) {
 	if c.UserService == nil {
 		return nil, errServiceNotAvailable("user service")
 	}
-	resp, err := c.UserService.Users.Get(userId).Projection("full").Context(ctx).Do()
+	user, err := c.UserService.Users.Get(userID).Projection("full").Context(ctx).Do()
 	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user: %s", userId))
+		return nil, wrapGoogleApiErrorWithContext(err, "failed to get user")
 	}
-	return resp, nil
+	if user == nil || user.Id == "" {
+		return nil, fmt.Errorf("google-workspace: user read returned no provider identity")
+	}
+	return user, nil
 }
 
 // ---------------------------------------------------------------------------
 // Users – write (requires UserProvisioningService)
 // ---------------------------------------------------------------------------
 
-func (c *GoogleWorkspaceClient) GetUserForProvisioning(ctx context.Context, userId string) (*directoryAdmin.User, error) {
+func (c *GoogleWorkspaceClient) GetUserForProvisioning(ctx context.Context, userID string) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Get(userId).Context(ctx).Do()
+	user, err := c.UserProvisioningService.Users.Get(userID).Context(ctx).Do()
 	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user: %s", userId))
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user: %s", userID))
 	}
-	return resp, nil
+	return user, nil
 }
 
-func (c *GoogleWorkspaceClient) GetUserFullForProvisioning(ctx context.Context, userId string) (*directoryAdmin.User, error) {
+func (c *GoogleWorkspaceClient) GetUserFullForProvisioning(ctx context.Context, userID string) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Get(userId).Projection("full").Context(ctx).Do()
+	user, err := c.UserProvisioningService.Users.Get(userID).Projection("full").Context(ctx).Do()
 	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user: %s", userId))
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to get user: %s", userID))
 	}
-	return resp, nil
+	return user, nil
 }
 
 func (c *GoogleWorkspaceClient) InsertUser(ctx context.Context, user *directoryAdmin.User) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Insert(user).Context(ctx).Do()
+	created, err := c.UserProvisioningService.Users.Insert(user).Context(ctx).Do()
 	if err != nil {
 		return nil, wrapGoogleApiErrorWithContext(err, "failed to create user")
 	}
-	return resp, nil
+	return created, nil
 }
 
-// UpdateUser fully replaces a user via Users.Update (PUT). Unlike PatchUser,
-// this reliably shrinks repeated fields (e.g. ExternalIds, Organizations) down
-// to empty - confirmed via manual live-tenant testing (not covered by an
-// automated test in this repo) that Patch silently leaves an existing entry in
-// place when asked to clear the last one, even with ForceSendFields/NullFields
-// set - but only when given the genuinely complete current object; a sparse
-// object sent via Update has the same problem as Patch. Callers relying on
-// that shrink-to-empty guarantee must pass the full current user (fields they
-// don't intend to change included) rather than a partial one, and should weigh
-// the wider read-modify-write race window this implies: anything else on the
-// user that changes between the caller's GET and this call is silently
-// overwritten back to the value captured at GET time. Callers only touching
-// scalar fields (as most existing call sites in pkg/connector do - suspend,
-// primary email, org unit, manager relation, etc.) are unaffected and can keep
-// sending a sparse object.
-func (c *GoogleWorkspaceClient) UpdateUser(ctx context.Context, userId string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
+// UpdateUser fully replaces a user via Users.Update (PUT). A complete current
+// object is required when shrinking repeated fields such as ExternalIds.
+func (c *GoogleWorkspaceClient) UpdateUser(ctx context.Context, userID string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Update(userId, user).Context(ctx).Do()
+	updated, err := c.UserProvisioningService.Users.Update(userID, user).Context(ctx).Do()
 	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user: %s", userId))
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to update user: %s", userID))
 	}
-	return resp, nil
+	return updated, nil
 }
 
-// PatchUser applies a partial update to a user. Unlike UpdateUser (which calls
-// Users.Update with full-replace semantics), Patch only modifies the fields
-// present in the request, so it does not stomp server-side state for fields the
-// caller did not intend to change. Use ForceSendFields on the supplied user to
-// send zero-valued fields (e.g. clearing a value or setting a bool to false).
-//
-// Does NOT reliably clear a repeated field down to empty - confirmed via
-// manual live-tenant testing (not covered by an automated test in this repo)
-// that clearing the only entry in ExternalIds this way (empty slice, with or
-// without ForceSendFields/NullFields) silently leaves the existing entry in
-// place, even though Patch correctly overwrites a sub-field of a retained
-// entry. Use UpdateUser with the complete current object instead when a
-// repeated field needs to shrink to empty.
-// https://developers.google.com/workspace/admin/directory/reference/rest/v1/users/patch
-func (c *GoogleWorkspaceClient) PatchUser(ctx context.Context, userId string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
+// PatchUser applies a partial update. Use UpdateUser with the complete current
+// object when a repeated field must shrink to empty.
+func (c *GoogleWorkspaceClient) PatchUser(ctx context.Context, userID string, user *directoryAdmin.User) (*directoryAdmin.User, error) {
 	if c.UserProvisioningService == nil {
 		return nil, errServiceNotAvailable("user provisioning service")
 	}
-	resp, err := c.UserProvisioningService.Users.Patch(userId, user).Context(ctx).Do()
+	updated, err := c.UserProvisioningService.Users.Patch(userID, user).Context(ctx).Do()
 	if err != nil {
-		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to patch user: %s", userId))
+		return nil, wrapGoogleApiErrorWithContext(err, fmt.Sprintf("failed to patch user: %s", userID))
 	}
-	return resp, nil
+	return updated, nil
 }
 
 // MakeAdmin promotes (status=true) or demotes (status=false) a user to/from
@@ -510,10 +484,6 @@ func (c *GoogleWorkspaceClient) DeleteRoleAssignment(ctx context.Context, custom
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Data Transfer
-// ---------------------------------------------------------------------------
 
 func (c *GoogleWorkspaceClient) ListDataTransfers(ctx context.Context, oldOwnerUserId, newOwnerUserId, pageToken string) (*datatransferAdmin.DataTransfersListResponse, error) {
 	if c.DataTransferService == nil {

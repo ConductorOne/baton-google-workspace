@@ -154,7 +154,8 @@ func applyBooleanGroupSetting(
 		ForceSendField: forceSendField,
 	}
 	currentBool := strings.EqualFold(currentValue, groupSettingTrue)
-	if currentBool != desiredValue {
+	currentKnown := strings.EqualFold(currentValue, groupSettingTrue) || strings.EqualFold(currentValue, groupSettingFalse)
+	if !currentKnown || currentBool != desiredValue {
 		result.NeedsUpdate = true
 		if desiredValue {
 			result.NewValue = groupSettingTrue

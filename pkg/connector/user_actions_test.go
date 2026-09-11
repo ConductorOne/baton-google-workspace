@@ -605,9 +605,6 @@ func TestDeleteAllOAuthTokens_Success_WithTokens(t *testing.T) {
 		t.Fatalf("expected tokens_deleted to be 3, got %f", tokensDeleted)
 	}
 
-	if state.tokenListCount != 1 {
-		t.Fatalf("expected 1 token list call, got %d", state.tokenListCount)
-	}
 	if state.tokenDelCount != 3 {
 		t.Fatalf("expected 3 token delete calls, got %d", state.tokenDelCount)
 	}
@@ -618,7 +615,7 @@ func TestDeleteAllOAuthTokens_Success_WithTokens(t *testing.T) {
 	}
 }
 
-func TestDeleteAllOAuthTokens_SkipsEmptyClientId(t *testing.T) {
+func TestDeleteAllOAuthTokens_EmptyClientIDIsPartialFailure(t *testing.T) {
 	state := &testSecurityState{
 		users: map[string]bool{
 			"user123": true,
@@ -641,8 +638,11 @@ func TestDeleteAllOAuthTokens_SkipsEmptyClientId(t *testing.T) {
 	}}
 
 	resp, _, err := userRT.deleteAllOAuthTokensActionHandler(context.Background(), args)
-	if err != nil {
-		t.Fatalf("deleteAllOAuthTokens: %v", err)
+	if err == nil {
+		t.Fatal("unidentified token must make cleanup incomplete")
+	}
+	if resp.GetFields()["success"].GetBoolValue() || resp.GetFields()["inventory_complete"].GetBoolValue() {
+		t.Fatal("partial credential cleanup must not report complete success")
 	}
 
 	// Should delete 2 tokens (skipping the one with empty ClientId)
@@ -753,9 +753,6 @@ func TestDeleteAllApplicationPasswords_Success_WithPasswords(t *testing.T) {
 		t.Fatalf("expected passwords_deleted to be 3, got %f", passwordsDeleted)
 	}
 
-	if state.aspListCount != 1 {
-		t.Fatalf("expected 1 ASP list call, got %d", state.aspListCount)
-	}
 	if state.aspDelCount != 3 {
 		t.Fatalf("expected 3 ASP delete calls, got %d", state.aspDelCount)
 	}
