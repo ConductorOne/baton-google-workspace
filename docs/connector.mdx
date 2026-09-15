@@ -65,6 +65,38 @@ The synced user profile exposes the job title under both `title` and `job_title`
 Both actions return `skipped_fields`, a comma-separated list naming any provided field that was not applied and why. A response of `success: true` means only that the call completed, so check `skipped_fields` to see whether `manager_email` was skipped. `update_user` also returns `updated_fields`, naming what changed. `update_user_profile` does not return that field.
 </Note>
 
+### Example automations
+
+The following examples show how to sequence connector actions for common Google Workspace workflows. Enabling and disabling accounts uses the [Account lifecycle action](/product/admin/automations-steps-reference#account-lifecycle-action) step, with its own **Target account** selector. Every other action listed maps to a [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) step in the C1 automation builder.
+
+#### Employee offboarding
+
+This sequence revokes access, transfers data, and disables the account:
+
+| Step | Action | Fields |
+|------|--------|--------|
+| 1 | `sign_out_user` | `user_id`: departing user's email or ID |
+| 2 | `delete_all_oauth_tokens` | `user_id`: departing user's email or ID |
+| 3 | `delete_all_application_passwords` | `user_id`: departing user's email or ID |
+| 4 | `transfer_user_drive_files` | `resource_id`: departing user; `target_resource_id`: manager or archive account; `privacy_levels`: `shared` |
+| 5 | `transfer_user_calendar` | `resource_id`: departing user; `target_resource_id`: manager or archive account; `release_resources`: `true` |
+| 6 | `offboarding_profile_update` | `user_id`: departing user; `archive_account`: `true` |
+| 7 | `disable_user` (via **Account lifecycle action** step) | Target account: departing user |
+
+Steps 1–3 should run before data transfer to ensure the user cannot access or modify files during the transfer. Set `archive_account: true` in step 6 if your organization retains archived accounts for compliance.
+
+#### Employee onboarding
+
+This sequence activates the account and places the user in the correct structure:
+
+| Step | Action | Fields |
+|------|--------|--------|
+| 1 | `enable_user` (via **Account lifecycle action** step) | Target account: new hire |
+| 2 | `change_user_org_unit` | `user_id`: new hire; `org_unit_path`: for example, `/Engineering` or `/Sales` |
+| 3 | `update_user_manager` | `user_id`: new hire; `manager_email`: manager's email address |
+
+Use `enable_user` when accounts are pre-created in a suspended state (a common pattern for managing start-date access). The `change_user_org_unit` step ensures the user inherits the correct group policies and settings for their team.
+
 ## Before you begin
 
 This connector authenticates with a **service account and domain-wide delegation**, not per-user OAuth. Every call reaches Google as one service account impersonating a Workspace super admin.
