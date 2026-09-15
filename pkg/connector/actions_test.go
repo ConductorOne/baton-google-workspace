@@ -115,6 +115,21 @@ func newTestServer(state *testServerState) *httptest.Server {
 					})
 				}
 			}
+			// Serve per-record params so adoption matching tests can seed
+			// transfers with distinct parameter sets.
+			for i, tr := range state.transfers {
+				if tr.OldOwner != oldOwner || tr.NewOwner != newOwner {
+					continue
+				}
+				params := make([]*datatransferAdmin.ApplicationTransferParam, 0, len(tr.Params))
+				for k, vs := range tr.Params {
+					params = append(params, &datatransferAdmin.ApplicationTransferParam{Key: k, Value: vs})
+				}
+				items[i].ApplicationDataTransfers = []*datatransferAdmin.ApplicationDataTransfer{{
+					ApplicationId:             tr.AppID,
+					ApplicationTransferParams: params,
+				}}
+			}
 			resp := &datatransferAdmin.DataTransfersListResponse{
 				DataTransfers: items,
 				NextPageToken: "",
@@ -129,13 +144,21 @@ func newTestServer(state *testServerState) *httptest.Server {
 			if len(body.ApplicationDataTransfers) > 0 {
 				appID = body.ApplicationDataTransfers[0].ApplicationId
 			}
+			params := map[string][]string{}
+			for _, adt := range body.ApplicationDataTransfers {
+				for _, p := range adt.ApplicationTransferParams {
+					if p != nil {
+						params[p.Key] = p.Value
+					}
+				}
+			}
 			tr := &transferRecord{
 				Id:       id,
 				OldOwner: body.OldOwnerUserId,
 				NewOwner: body.NewOwnerUserId,
 				AppID:    appID,
 				Status:   "NEW",
-				Params:   map[string][]string{},
+				Params:   params,
 			}
 			state.transfers = append(state.transfers, tr)
 			resp := &datatransferAdmin.DataTransfer{
@@ -177,9 +200,10 @@ func primeServiceCache(c *GoogleWorkspace, dir *directoryAdmin.Service, dt *data
 	}
 	c.client = &gwclient.GoogleWorkspaceClient{}
 	if dir != nil {
-		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = dir
-		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = dir
-		c.client.UserService = dir
+		service := dir
+		c.serviceCache[directoryAdmin.AdminDirectoryUserScope] = service
+		c.serviceCache[directoryAdmin.AdminDirectoryGroupScope] = service
+		c.client.UserService = service
 		c.client.UserProvisioningService = dir
 		c.client.GroupService = dir
 		c.client.GroupProvisioningService = dir
@@ -332,13 +356,24 @@ func TestTransferDrive_IdempotentAndPrivacyLevels(t *testing.T) {
 		t.Fatalf("expected 1 POST, got %d", state.postCount)
 	}
 
-	// Second call: idempotent should List and return existing, no new POST
+	// Second call: the recorded transfer now carries PRIVACY_LEVEL=[PRIVATE,SHARED]
+	// (uppercase wire values), matching this request exactly -> adopted, no new POST.
 	prevPost := state.postCount
-	if _, _, err := c.transferUserDriveFiles(context.Background(), args); err != nil {
+	resp, _, err := c.transferUserDriveFiles(context.Background(), args)
+	if err != nil {
 		t.Fatalf("transferUserDriveFiles idempotent: %v", err)
 	}
 	if state.postCount != prevPost {
 		t.Fatalf("expected no additional POST on idempotent transfer")
+	}
+	if id := resp.GetFields()["transfer_id"].GetStringValue(); !strings.HasPrefix(id, "tr_") {
+		t.Fatalf("expected adopted transfer id tr_*, got %q", id)
+	}
+
+	// Wire casing: the inserted transfer's params must be uppercase PRIVATE/SHARED.
+	seeded := state.transfers[len(state.transfers)-1]
+	if got := seeded.Params["PRIVACY_LEVEL"]; len(got) != 2 || got[0] != "PRIVATE" || got[1] != "SHARED" {
+		t.Fatalf("expected wire values [PRIVATE SHARED], got %v", got)
 	}
 
 	// Invalid privacy_levels type

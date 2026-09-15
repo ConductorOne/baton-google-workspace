@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/mail"
+	"strconv"
 	"strings"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
@@ -175,6 +177,23 @@ var (
 				Description: "Initial status returned by the Data Transfer API (e.g., IN_PROGRESS).",
 				Field:       &config.Field_StringField{},
 			},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
+	}
+	getUserDataTransferActionSchema = &v2.BatonActionSchema{
+		Name:        "get_user_data_transfer",
+		DisplayName: "Get User Data Transfer",
+		Description: "Read a saved data-transfer operation by its provider transfer ID. This action never creates or restarts a transfer.",
+		Arguments: []*config.Field{
+			{Name: fieldTransferID, DisplayName: "Transfer ID", Description: "The provider-assigned data transfer ID.", Field: &config.Field_StringField{}, IsRequired: true},
+		},
+		ReturnTypes: []*config.Field{
+			{Name: fieldSuccess, DisplayName: displaySuccess, Field: &config.Field_BoolField{}},
+			{Name: fieldTransferID, DisplayName: "Transfer ID", Field: &config.Field_StringField{}},
+			{Name: argResourceID, DisplayName: "Source User ID", Field: &config.Field_StringField{}},
+			{Name: argTargetResourceID, DisplayName: "Target User ID", Field: &config.Field_StringField{}},
+			{Name: fieldStatus, DisplayName: "Transfer Status", Field: &config.Field_StringField{}},
+			{Name: fieldPerAppStatus, DisplayName: "Per-Application Status", Field: &config.Field_StringMapField{}},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT},
 	}
@@ -460,139 +479,214 @@ func (c *GoogleWorkspace) changeUserPrimaryEmail(ctx context.Context, args *stru
 
 // transferUserDriveFiles initiates a Drive ownership transfer using Data Transfer API.
 func (c *GoogleWorkspace) transferUserDriveFiles(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	sourceField, ok := args.Fields[argResourceID].GetKind().(*structpb.Value_StringValue)
-	if !ok {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource_id")
+	source, err := requiredStringArg(args, argResourceID)
+	if err != nil {
+		return nil, nil, err
 	}
-	targetField, ok := args.Fields[argTargetResourceID].GetKind().(*structpb.Value_StringValue)
-	if !ok {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing target_resource_id")
+	target, err := requiredStringArg(args, argTargetResourceID)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	// Validate non-empty and different user keys
-	src := strings.TrimSpace(sourceField.StringValue)
-	dst := strings.TrimSpace(targetField.StringValue)
-	if src == "" || dst == "" {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be non-empty")
-	}
-	if strings.EqualFold(src, dst) {
+	if strings.EqualFold(source, target) {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be different")
 	}
-
-	// Build Drive params from privacy_levels
-	params := []*datatransferAdmin.ApplicationTransferParam{}
 	levels, err := parseDrivePrivacyLevels(args)
 	if err != nil {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to parse privacy levels", err)
+		return nil, nil, err
 	}
-	params = append(params, &datatransferAdmin.ApplicationTransferParam{Key: "PRIVACY_LEVEL", Value: levels})
-
-	return c.dataTransferInsert(ctx, appIdGoogleDocsAndGoogleDrive, sourceField.StringValue, targetField.StringValue, params)
+	params := []*datatransferAdmin.ApplicationTransferParam{{Key: "PRIVACY_LEVEL", Value: levels}}
+	return c.dataTransferInsert(ctx, appIdGoogleDocsAndGoogleDrive, source, target, params)
 }
 
 // transferUserCalendar initiates a Calendar transfer using Data Transfer API.
 func (c *GoogleWorkspace) transferUserCalendar(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
-	sourceField, ok := args.Fields[argResourceID].GetKind().(*structpb.Value_StringValue)
-	if !ok {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing resource_id")
+	source, err := requiredStringArg(args, argResourceID)
+	if err != nil {
+		return nil, nil, err
 	}
-	targetField, ok := args.Fields[argTargetResourceID].GetKind().(*structpb.Value_StringValue)
-	if !ok {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "missing target_resource_id")
+	target, err := requiredStringArg(args, argTargetResourceID)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	// Validate non-empty and different user keys
-	src := strings.TrimSpace(sourceField.StringValue)
-	dst := strings.TrimSpace(targetField.StringValue)
-	if src == "" || dst == "" {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be non-empty")
-	}
-	if strings.EqualFold(src, dst) {
+	if strings.EqualFold(source, target) {
 		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "resource_id and target_resource_id must be different")
 	}
-
-	params := []*datatransferAdmin.ApplicationTransferParam{}
-	if p, err := buildReleaseResourcesParam(args); err != nil {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to build release resources param", err)
-	} else if p != nil {
-		params = append(params, p)
+	var params []*datatransferAdmin.ApplicationTransferParam
+	if parameter, err := buildReleaseResourcesParam(args); err != nil {
+		return nil, nil, err
+	} else if parameter != nil {
+		params = append(params, parameter)
 	}
-
-	return c.dataTransferInsert(ctx, appIdGoogleCalendar, sourceField.StringValue, targetField.StringValue, params)
+	return c.dataTransferInsert(ctx, appIdGoogleCalendar, source, target, params)
 }
 
 // dataTransferInsert encapsulates idempotency and insert logic for Data Transfer API.
+//
+// Idempotency contract: an existing ONGOING transfer may only be adopted when
+// it matches the requested source, recipient, application AND the complete
+// parameter set (every key and value, no unknown or duplicate parameters).
+// Only a transfer covering the requested application can block on unknown status.
+// Conflicting parameters, incomplete discovery or ambiguous matches refuse insert.
+// Terminal history is never adopted; reconcile saved IDs via get_user_data_transfer.
 func (c *GoogleWorkspace) dataTransferInsert(
 	ctx context.Context,
 	appID int64,
-	oldOwnerUserId,
-	newOwnerUserId string,
+	oldOwnerUserId, newOwnerUserId string,
 	params []*datatransferAdmin.ApplicationTransferParam,
 ) (*structpb.Struct, annotations.Annotations, error) {
 	client, err := c.getClient(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-
+	const maxDiscoveryPages = 10
 	pageToken := ""
-	waitLoopListTransfers := newRateLimitWaitLoopValue[*datatransferAdmin.DataTransfersListResponse](ctx)
-	for {
-		// Go through the transfers list and check if there is a transfer in progress for the given appID, source and target users.
-		// If there is, return the transfer ID and status.
-		transfers, err := waitLoopListTransfers(func() (*datatransferAdmin.DataTransfersListResponse, error) {
+	var matched *datatransferAdmin.DataTransfer
+	waitLoop := newRateLimitWaitLoopValue[*datatransferAdmin.DataTransfersListResponse](ctx)
+	for page := range maxDiscoveryPages {
+		transfers, err := waitLoop(func() (*datatransferAdmin.DataTransfersListResponse, error) {
 			return client.ListDataTransfers(ctx, oldOwnerUserId, newOwnerUserId, pageToken)
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("google-workspace: failed to list data transfers: %w", err)
+			return nil, nil, fmt.Errorf("google-workspace: failed to discover transfers: %w", err)
 		}
 		if transfers == nil {
-			break
+			return nil, nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer discovery returned no response; refusing to insert")
 		}
-		for _, t := range transfers.DataTransfers {
-			if strings.EqualFold(t.OverallTransferStatusCode, "new") || strings.EqualFold(t.OverallTransferStatusCode, "inProgress") {
-				for _, adt := range t.ApplicationDataTransfers {
-					if adt.ApplicationId == appID {
-						resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-							fieldSuccess:    {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-							fieldTransferID: {Kind: &structpb.Value_StringValue{StringValue: t.Id}},
-							fieldStatus:     {Kind: &structpb.Value_StringValue{StringValue: t.OverallTransferStatusCode}},
-						}}
-						return resp, nil, nil
+		for _, candidate := range transfers.DataTransfers {
+			if candidate == nil || candidate.Id == "" || candidate.OldOwnerUserId != oldOwnerUserId || candidate.NewOwnerUserId != newOwnerUserId {
+				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer discovery returned incomplete or mismatched identity; refusing to insert")
+			}
+			status := strings.ToLower(candidate.OverallTransferStatusCode)
+			if status == transferStatusComplete || status == "failed" {
+				// Terminal history: never adopted as this operation.
+				continue
+			}
+			if len(candidate.ApplicationDataTransfers) == 0 {
+				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfer %s has no application evidence", candidate.Id))
+			}
+			var application *datatransferAdmin.ApplicationDataTransfer
+			for _, item := range candidate.ApplicationDataTransfers {
+				if item == nil || item.ApplicationId == 0 {
+					return nil, nil, uhttp.WrapErrors(codes.DataLoss, fmt.Sprintf("google-workspace: transfer %s has an invalid application entry", candidate.Id))
+				}
+				if item.ApplicationId == appID {
+					if application != nil {
+						return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfer %s has ambiguous application entries", candidate.Id))
 					}
+					application = item
 				}
 			}
+			if application == nil {
+				// Unrelated applications cannot block on unrecognized status.
+				continue
+			}
+			// Unknown status for this application is not safe to adopt or replay.
+			if !isOngoingTransferStatus(status) {
+				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfer %s has unknown status; refusing to insert", candidate.Id))
+			}
+			if len(candidate.ApplicationDataTransfers) != 1 || !transferParamsMatch(application.ApplicationTransferParams, params) {
+				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: ongoing transfer %s has different or incomplete parameters", candidate.Id))
+			}
+			if matched != nil {
+				if matched.Id == candidate.Id {
+					continue
+				}
+				return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, fmt.Sprintf("google-workspace: transfers %s and %s both match; correlation is ambiguous", matched.Id, candidate.Id))
+			}
+			matched = candidate
 		}
 		if transfers.NextPageToken == "" {
 			break
 		}
+		if page == maxDiscoveryPages-1 {
+			return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer discovery is incomplete; refusing to insert")
+		}
 		pageToken = transfers.NextPageToken
 	}
-
-	// If no transfer is in progress, create a new transfer.
-	transfer := &datatransferAdmin.DataTransfer{
-		OldOwnerUserId: oldOwnerUserId,
-		NewOwnerUserId: newOwnerUserId,
-		ApplicationDataTransfers: []*datatransferAdmin.ApplicationDataTransfer{
-			{
-				ApplicationId:             appID,
-				ApplicationTransferParams: params,
-			},
-		},
+	if matched == nil {
+		request := &datatransferAdmin.DataTransfer{
+			OldOwnerUserId: oldOwnerUserId,
+			NewOwnerUserId: newOwnerUserId,
+			ApplicationDataTransfers: []*datatransferAdmin.ApplicationDataTransfer{{
+				ApplicationId: appID, ApplicationTransferParams: params,
+			}},
+		}
+		matched, err = withRateLimitWaitValue(ctx, func() (*datatransferAdmin.DataTransfer, error) {
+			return client.InsertDataTransfer(ctx, request)
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("google-workspace: failed to create data transfer: %w", err)
+		}
+		if matched == nil || matched.Id == "" {
+			return nil, nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: data transfer insert returned no ID; outcome unknown")
+		}
 	}
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		fieldSuccess:    structpb.NewBoolValue(true),
+		fieldTransferID: structpb.NewStringValue(matched.Id),
+		fieldStatus:     structpb.NewStringValue(matched.OverallTransferStatusCode),
+	}}, nil, nil
+}
 
-	created, err := withRateLimitWaitValue(ctx, func() (*datatransferAdmin.DataTransfer, error) {
-		return client.InsertDataTransfer(ctx, transfer)
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("google-workspace: failed to create data transfer: %w", err)
+// isOngoingTransferStatus reports whether the provider status string means the
+// transfer is still running (adoptable) rather than terminal or unknown.
+// "new", "inProgress" and "pending" are the provider's in-flight states; none
+// of them is ever evidence of completion.
+func isOngoingTransferStatus(status string) bool {
+	return strings.EqualFold(status, "new") || strings.EqualFold(status, "inProgress") || strings.EqualFold(status, "pending")
+}
+
+// transferParamsMatch compares complete parameter sets, including the documented
+// empty set for Calendar's retain-resources default. Privacy value order is irrelevant.
+func transferParamsMatch(got, want []*datatransferAdmin.ApplicationTransferParam) bool {
+	if len(got) != len(want) {
+		return false
 	}
-
-	resp := &structpb.Struct{Fields: map[string]*structpb.Value{
-		fieldSuccess:    {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-		fieldTransferID: {Kind: &structpb.Value_StringValue{StringValue: created.Id}},
-		fieldStatus:     {Kind: &structpb.Value_StringValue{StringValue: created.OverallTransferStatusCode}},
-	}}
-	return resp, nil, nil
+	for i, expected := range want {
+		if expected == nil || expected.Key == "" || len(expected.Value) == 0 {
+			return false
+		}
+		for _, previous := range want[:i] {
+			if previous.Key == expected.Key {
+				return false
+			}
+		}
+		var actual *datatransferAdmin.ApplicationTransferParam
+		for _, candidate := range got {
+			if candidate == nil || candidate.Key == "" {
+				return false
+			}
+			if candidate.Key == expected.Key {
+				if actual != nil {
+					return false
+				}
+				actual = candidate
+			}
+		}
+		if actual == nil || len(actual.Value) != len(expected.Value) {
+			return false
+		}
+		for valueIndex, value := range expected.Value {
+			if value == "" {
+				return false
+			}
+			for _, previous := range expected.Value[:valueIndex] {
+				if strings.EqualFold(previous, value) {
+					return false
+				}
+			}
+			count := 0
+			for _, candidate := range actual.Value {
+				if strings.EqualFold(candidate, value) {
+					count++
+				}
+			}
+			if count != 1 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // buildReleaseResourcesParam returns the RELEASE_RESOURCES param if the optional
@@ -613,41 +707,118 @@ func buildReleaseResourcesParam(args *structpb.Struct) (*datatransferAdmin.Appli
 }
 
 // parseDrivePrivacyLevels parses the optional privacy_levels argument, validating values and type.
-// Returns default ["private","shared"] if argument is absent.
+// Returns the documented uppercase wire values, defaulting to both privacy levels.
 func parseDrivePrivacyLevels(args *structpb.Struct) ([]string, error) {
-	// Defaults
-	allowed := map[string]bool{"private": true, "shared": true}
-	defaults := []string{"private", "shared"}
-
-	v, present := args.Fields["privacy_levels"]
+	value, present := args.GetFields()["privacy_levels"]
 	if !present {
-		return defaults, nil
+		return []string{"PRIVATE", "SHARED"}, nil
 	}
-	ss, ok := v.GetKind().(*structpb.Value_ListValue)
-	if !ok {
-		return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must be a list of strings: allowed values are private, shared")
+	list, ok := value.GetKind().(*structpb.Value_ListValue)
+	if !ok || list.ListValue == nil {
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must be a list of private/shared strings")
 	}
-	normalized := make([]string, 0, len(ss.ListValue.Values))
-	seen := map[string]bool{}
-	for _, lv := range ss.ListValue.Values {
-		sv, ok := lv.GetKind().(*structpb.Value_StringValue)
+	levels := make([]string, 0, 2)
+	private, shared := false, false
+	for _, item := range list.ListValue.Values {
+		text, ok := item.GetKind().(*structpb.Value_StringValue)
 		if !ok {
-			return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must be a list of strings: allowed values are private, shared")
+			return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must contain strings")
 		}
-		s := strings.TrimSpace(strings.ToLower(sv.StringValue))
-		if s == "" {
-			continue
-		}
-		if !allowed[s] {
-			return nil, uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("invalid privacy_levels value '%s': allowed values are private, shared", sv.StringValue))
-		}
-		if !seen[s] {
-			normalized = append(normalized, s)
-			seen[s] = true
+		switch strings.ToLower(strings.TrimSpace(text.StringValue)) {
+		case "":
+		case "private":
+			if !private {
+				levels = append(levels, "PRIVATE")
+				private = true
+			}
+		case "shared":
+			if !shared {
+				levels = append(levels, "SHARED")
+				shared = true
+			}
+		default:
+			return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels accepts only private and shared")
 		}
 	}
-	if len(normalized) == 0 {
-		return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels list must include at least one value: private or shared")
+	if len(levels) == 0 {
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "privacy_levels must include at least one privacy level")
 	}
-	return normalized, nil
+	return levels, nil
+}
+
+const (
+	fieldPerAppStatus      = "per_application_status"
+	transferStatusComplete = "completed"
+)
+
+// getUserDataTransfer reads one provider transfer. A successful read reports
+// current provider state; it does not assert that the transfer is complete.
+func (c *GoogleWorkspace) getUserDataTransfer(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	transferID, err := requiredStringArg(args, fieldTransferID)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := c.getClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	transfer, err := withRateLimitWaitValue(ctx, func() (*datatransferAdmin.DataTransfer, error) {
+		return client.GetDataTransfer(ctx, transferID)
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace: failed to read data transfer: %w", err)
+	}
+	if transfer == nil {
+		return nil, nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
+	}
+	if transfer.Id != transferID {
+		return nil, nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer response does not match the requested transfer ID")
+	}
+	result, err := observedTransferReturnFields(transfer)
+	if err != nil {
+		return nil, nil, err
+	}
+	result.Fields[fieldSuccess] = structpb.NewBoolValue(true)
+	return result, nil, nil
+}
+
+// requiredStringArg extracts a required non-empty string argument. Split from
+// the per-action inline patterns so the transfer-read handler cannot
+// accidentally treat a missing field as an empty match.
+func requiredStringArg(args *structpb.Struct, name string) (string, error) {
+	value, err := actions.RequireStringArg(args, name)
+	if err != nil {
+		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: invalid required argument", err)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", uhttp.WrapErrors(codes.InvalidArgument, fmt.Sprintf("%s must be non-empty", name))
+	}
+	return value, nil
+}
+
+// observedTransferReturnFields maps current provider state without asserting
+// anything about completion.
+func observedTransferReturnFields(transfer *datatransferAdmin.DataTransfer) (*structpb.Struct, error) {
+	if transfer == nil {
+		return nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer response is missing")
+	}
+	perAppStatus := map[string]*structpb.Value{}
+	for _, item := range transfer.ApplicationDataTransfers {
+		if item == nil || item.ApplicationId == 0 {
+			return nil, uhttp.WrapErrors(codes.DataLoss, "google-workspace: transfer contains invalid application data")
+		}
+		key := strconv.FormatInt(item.ApplicationId, 10)
+		if _, duplicate := perAppStatus[key]; duplicate {
+			return nil, uhttp.WrapErrors(codes.FailedPrecondition, "google-workspace: transfer contains duplicate application identities")
+		}
+		perAppStatus[key] = structpb.NewStringValue(item.ApplicationTransferStatus)
+	}
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		fieldTransferID:     structpb.NewStringValue(transfer.Id),
+		argResourceID:       structpb.NewStringValue(transfer.OldOwnerUserId),
+		argTargetResourceID: structpb.NewStringValue(transfer.NewOwnerUserId),
+		fieldStatus:         structpb.NewStringValue(transfer.OverallTransferStatusCode),
+		fieldPerAppStatus:   structpb.NewStructValue(&structpb.Struct{Fields: perAppStatus}),
+	}}, nil
 }

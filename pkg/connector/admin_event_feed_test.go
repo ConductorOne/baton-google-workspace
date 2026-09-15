@@ -24,6 +24,7 @@ const testUserEmail = "user@example.com"
 // safeUserResponse mirrors directoryAdmin.User for JSON without Password (avoids gosec G117).
 type safeUserResponse struct {
 	Id            string                             `json:"id,omitempty"`
+	Etag          string                             `json:"etag,omitempty"`
 	PrimaryEmail  string                             `json:"primaryEmail,omitempty"`
 	Name          *directoryAdmin.UserName           `json:"name,omitempty"`
 	RecoveryEmail string                             `json:"recoveryEmail,omitempty"`

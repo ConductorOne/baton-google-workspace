@@ -12,11 +12,15 @@ import (
 	"strings"
 	"testing"
 
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func testPrivateKey(t *testing.T) string {
@@ -147,6 +151,87 @@ func TestGetClientAllowsAuthorizationInitErrors(t *testing.T) {
 	syncers := c.ResourceSyncers(context.Background())
 	if len(syncers) != 0 {
 		t.Fatalf("expected no syncers for missing scopes, got %d", len(syncers))
+	}
+}
+
+func TestMissingGroupSettingsDoesNotBlockOtherResourceReads(t *testing.T) {
+	tokenServer, _ := newTokenStatusServer(http.StatusUnauthorized)
+	defer tokenServer.Close()
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/directory/v1/users":
+			_, _ = w.Write([]byte(`{"users":[{"id":"user-id","primaryEmail":"user@example.com","name":{"fullName":"User"}}]}`))
+		case "/admin/directory/v1/customer/customer/roles":
+			_, _ = w.Write([]byte(`{"items":[{"roleId":"1","roleName":"Role"}]}`))
+		case "/admin/directory/v1/groups":
+			_, _ = w.Write([]byte(`{"groups":[{"id":"group-id","email":"team@example.com","name":"Team"}]}`))
+		case "/admin/directory/v1/groups/group-id":
+			_, _ = w.Write([]byte(`{"id":"group-id","email":"team@example.com","name":"Team"}`))
+		default:
+			if strings.HasPrefix(r.URL.Path, "/admin/reports/") || r.URL.Path == "/admin/directory/v1/users/user-id/tokens" {
+				_, _ = w.Write([]byte(`{"items":[]}`))
+				return
+			}
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer apiServer.Close()
+
+	directory := newTestDirectoryService(t, apiServer.URL, apiServer.Client())
+	service := directory
+	c := &GoogleWorkspace{
+		customerID:         "customer",
+		administratorEmail: "admin@example.com",
+		credentials:        testCredentials(t, tokenServer.URL),
+		reportService:      newReportsServiceForTest(t, apiServer.URL, apiServer.Client()),
+		serviceCache: map[string]any{
+			directoryAdmin.AdminDirectoryRolemanagementReadonlyScope: service,
+			directoryAdmin.AdminDirectoryUserReadonlyScope:           service,
+			directoryAdmin.AdminDirectoryUserSecurityScope:           service,
+			directoryAdmin.AdminDirectoryGroupReadonlyScope:          service,
+			directoryAdmin.AdminDirectoryGroupMemberReadonlyScope:    service,
+		},
+	}
+	client, err := c.getClient(t.Context())
+	if err != nil {
+		t.Fatalf("missing settings authorization must not fail unrelated client initialization: %v", err)
+	}
+	wantIDs := map[string]string{
+		resourceTypeRole.Id:                  "1",
+		resourceTypeUser.Id:                  "user-id",
+		resourceTypeGroup.Id:                 "group-id",
+		resourceTypeEnterpriseApplication.Id: googleWorkspaceAppID,
+	}
+	for _, syncer := range c.ResourceSyncers(t.Context()) {
+		resourceType := syncer.ResourceType(t.Context()).GetId()
+		wantID, ok := wantIDs[resourceType]
+		if !ok {
+			t.Fatalf("unexpected resource type %q", resourceType)
+		}
+		resources, _, err := syncer.List(t.Context(), nil, rs.SyncOpAttrs{Session: newFakeSessionStore()})
+		if resourceType == resourceTypeGroup.Id {
+			if status.Code(err) != codes.FailedPrecondition || len(resources) != 0 {
+				t.Fatalf("group listing must require settings: resources=%v error=%v", resources, err)
+			}
+			delete(wantIDs, resourceType)
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s listing failed without settings authorization: %v", resourceType, err)
+		}
+		if len(resources) != 1 || resources[0].GetId().GetResource() != wantID {
+			t.Fatalf("%s listing lost its provider resource: %v", resourceType, resources)
+		}
+		delete(wantIDs, resourceType)
+	}
+	if len(wantIDs) != 0 {
+		t.Fatalf("missing settings authorization removed resource types: %v", wantIDs)
+	}
+	group, _, err := groupBuilder(client, c.customerID, c.domain).Get(t.Context(),
+		&v2.ResourceId{ResourceType: resourceTypeGroup.Id, Resource: "group-id"}, nil)
+	if status.Code(err) != codes.FailedPrecondition || group != nil {
+		t.Fatalf("targeted group read must still require settings: resource=%v error=%v", group, err)
 	}
 }
 

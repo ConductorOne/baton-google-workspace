@@ -194,7 +194,6 @@ func newTestGlobalConnector(t *testing.T, dir *directoryAdmin.Service) *GoogleWo
 	return &GoogleWorkspace{
 		serviceCache: map[string]any{},
 		client: &gwclient.GoogleWorkspaceClient{
-			UserService:             dir,
 			UserProvisioningService: dir,
 		},
 	}

@@ -9,7 +9,7 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 # Prerequisites
 
 - A Google Workspace account with **Super Admin** access.
-- A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**; **Groups Settings API** is optional, only needed for the group-settings action).
+- A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**). The **Groups Settings API** is required for group sync, targeted group reads, and the group-settings action.
 - A **service account** with a downloaded JSON key, authorized for **domain-wide delegation** against your Workspace.
 - The Workspace **Customer ID** and a **super-admin email** for the service account to impersonate.
 - The relevant OAuth scopes authorized on the delegation (read-only for sync, read/write for provisioning + actions).
@@ -77,10 +77,21 @@ baton resources
 
 | Operation                     | Description                                                          |
 | ----------------------------- | ------------------------------------------------------------------- |
-| Create/Delete user            | Directory API `users.insert` / `users.delete`                       |
+| Create/Delete user            | Directory API `users.insert` / `users.delete`; creation accepts initial `suspended` and `org_unit_path` |
 | Delete group                  | Directory API `groups.delete` (group creation is the `create_group` connector action, below) |
 | Grant/Revoke group membership | Directory API `members.insert` / `members.delete`                   |
 | Grant/Revoke role assignment  | Directory API `roleAssignments.insert` / `roleAssignments.delete`   |
+| Rotate user password          | SDK credential interface with encrypted supplied or generated passwords and force-change-at-next-login handling |
+
+Creation and rotation use protected SDK credential inputs/results, never ordinary password action arguments. Configure encrypted result recipients before requesting generated credentials. A next-login password requirement applies to direct Google authentication, not third-party SSO.
+
+User reads use native Google Directory user objects. Configured filter exclusions carry qualified `NotFound` (`ErrorInfo.RESOURCE_FILTERED`), preserving targeted-sync skips without claiming provider absence.
+
+Group `List` and `Get` both include `group_settings`, using one Groups Settings lookup per returned group. They require the Groups Settings API and `apps.groups.settings` scope. Settings failures and responses with no supported settings fail the group read; a failed list page does not return a partial result. Returned settings contain only values supplied by Google; omitted fields remain unknown, not defaulted.
+
+Before upgrading an installation that syncs groups, enable the Groups Settings API and authorize `apps.groups.settings`. Without that authorization, group sync and targeted group reads fail; client initialization and unrelated resource reads remain available.
+
+**Targeted user-read migration:** configured filter exclusions previously returned no resource and no error from the connector hook; they now return `NotFound` with `ErrorInfo` reason `RESOURCE_FILTERED` and domain `baton-google-workspace`. The pinned baton-sdk v0.29.0 builder already converted the old nil resource to `NotFound`, and its targeted-sync consumer skips that code. The public classification stays the same while the local SDK/gRPC fixture verifies the added qualifier survives transport. Lifecycle callers must inspect it and must not treat a filtered result as provider absence. Host-side qualifier handling is an integration requirement, not implemented or certified by this connector PR. No resource or grant IDs change; normal List filtering is unchanged.
 
 ## Connector actions
 
@@ -97,12 +108,15 @@ Connector actions are custom operations invoked on demand from C1 automations:
 | `change_user_primary_email` | `resource_id`, `new_primary_email` | Change a user's primary email address |
 | `offboarding_profile_update` | `user_id`, `archive_account` (bool) | Remove from GAL, clear recovery details, delete addresses/phones, optionally archive |
 | `sign_out_user` | `user_id` | Sign the user out of all sessions and reset sign-in cookies |
-| `delete_all_oauth_tokens` | `user_id` | Revoke all third-party app authorizations |
-| `delete_all_application_passwords` | `user_id` | Delete all app-specific passwords |
+| `delete_all_oauth_tokens` | `user_id` | Revoke authorizations and enumerate remaining entries; retain failed/skipped IDs and incomplete-read evidence |
+| `delete_all_application_passwords` | `user_id` | Delete app-specific passwords and enumerate remaining entries; partial cleanup remains an error |
 | `transfer_user_drive_files` | `resource_id`, `target_resource_id`, `privacy_levels` | Transfer Google Drive ownership to another user |
 | `transfer_user_calendar` | `resource_id`, `target_resource_id`, `release_resources` | Transfer Google Calendar data to another user |
+| `get_user_data_transfer` | `transfer_id` | Read the provider transfer's actual owners, status, and per-application status without mutation |
+| `remove_user_alias` | `user_id`, `alias` | Remove an editable alias from the selected user and read back the selected user's aliases |
+| `add_user_alias` | stable `user_id`, `alias` | Add an alias to the selected user; same-user replays are idempotent and conflicts never move or remove an alias |
 | `create_group` | `email`, `name`, `description` | Create a new Google Group |
-| `modify_group_settings` | `group_key`, plus settings flags | Update settings of an existing group |
+| `modify_group_settings` | `group_key`, plus settings flags | Update supplied privacy/membership/discovery/join/GAL settings and return an independently observed group resource |
 
 > **Custom schemas:** `update_user_profile` and `update_user` can write values into custom-schema attributes (Directory API `customSchemas`). The connector only sets values — the schema **definitions must already exist** in the tenant (the connector does not request the `admin.directory.userschema` scope).
 
@@ -110,12 +124,22 @@ Connector actions are custom operations invoked on demand from C1 automations:
 
 > **Partial success and `manager_email`:** `update_user_profile`/`update_user` never clear an assigned manager through this action (matching `update_user_manager`), so an empty or invalid `manager_email` is not applied — but unlike other invalid fields, it does not fail the whole call when at least one other field in the same payload is valid. The response's `success: true` only means the call completed; check the `skipped_fields` return field (a comma-separated list naming any provided field that wasn't applied, and why) to detect this — a caller that checks `success` alone will not be told that `manager_email` specifically was skipped.
 
+> **Read-modify-write limitation:** an `employee_id` change that reduces external IDs uses the complete current user with `users.update`, because Google does not reliably shrink that repeated field through patch. `updated_fields` describes requested changes, not independently verified state.
+
+> **Credential cleanup evidence:** check `inventory_complete` before interpreting `remaining_ids`. Failed security actions retain their per-item results. Empty results after a failed enumeration are not absence, and login-derived application grants are not a live credential inventory.
+
+> **Transfers:** submission is acknowledgement, not completion. Keep the provider transfer ID and use `get_user_data_transfer` to observe its current provider status; never poll by replaying a mutation. Conflicting, unknown, or truncated discovery never triggers a new insert.
+
+### Requestable alias creation
+
+Both alias actions require a concrete configured Google customer ID, not the `my_customer` selector. The connector verifies the provider target belongs to that customer, derives primary/noneditable checks from that target, reads the target alias collection before and after a mutation, and never moves or removes a conflicting alias. Publishing an action does not grant self-service permission; administrators configure any request policy separately.
+
 # Credentials Setup
 
 A user with the **Super Admin** role in Google Workspace must perform this setup.
 
 1. Sign in to the [Google Cloud Console](https://console.cloud.google.com) and create a project (e.g. "C1 Integration").
-2. In **APIs & Services > Library**, enable the **Admin SDK API** and **Cloud Identity API** (and **Groups Settings API** if you plan to use the group-settings action).
+2. In **APIs & Services > Library**, enable the **Admin SDK API** and **Cloud Identity API**. Enable the **Groups Settings API** for group sync, targeted group reads, and the group-settings action.
 3. In **APIs & Services > Credentials**, create a **service account**. Under **Keys > Add key > Create new key**, choose **JSON** and download it — this is `--credentials-json-file-path`. Note the service account's **Unique ID (Client ID)**.
 4. In the [Admin Console](https://admin.google.com) (as Super Admin), go to **Security > Access and data control > API Controls > Manage Domain Wide Delegation > Add new**, enter the service account's **Client ID** and authorize the scopes below.
 5. Copy your **Customer ID** from **Account > Account settings** (`--customer-id`).
@@ -126,8 +150,10 @@ A user with the **Super Admin** role in Google Workspace must perform this setup
 **Read-only (sync):**
 
 ```
-https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
+https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.googleapis.com/auth/admin.directory.group.readonly, https://www.googleapis.com/auth/admin.directory.group.member.readonly, https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly, https://www.googleapis.com/auth/admin.directory.user.readonly, https://www.googleapis.com/auth/admin.reports.audit.readonly, https://www.googleapis.com/auth/admin.directory.user.security, https://www.googleapis.com/auth/apps.groups.settings, https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly
 ```
+
+Google has no read-only Groups Settings scope. The `apps.groups.settings` scope is required to read settings and also permits editing them; Directory group-read permission alone is insufficient.
 
 **Read/Write (sync + provisioning + actions):**
 

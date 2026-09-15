@@ -1,7 +1,7 @@
 ## Connector capabilities
 
 1. What resources does the connector sync?
-   - **Users** (`user`) — All Google Workspace users via the Admin SDK Directory API (`users.list`, projection `full`), including status (active/suspended), primary and alias emails, name, organizational unit, manager relation, recovery email/phone, and custom-schema attribute values.
+   - **Users** (`user`) — Workspace users via native Directory API `users.list`, including identity, aggregate status, name, organizational unit, manager relation and custom-schema values.
    - **Groups** (`group`) — All Google Groups via the Directory API (`groups.list`, `members.list`). Each group exposes a `member` entitlement representing membership (granted to users and nested groups).
    - **Roles** (`role`) — All admin roles via the Directory API role-management endpoints (`roles.list`, `roleAssignments.list`). Each role exposes a `member` entitlement representing role assignment (granted to users and groups).
    - **Enterprise Applications** (`enterprise_application`) — SAML/OIDC apps discovered via the Cloud Identity API and OAuth apps discovered via per-user token listing (`tokens.list`). Each application exposes an assignment entitlement granted to users. **Read-only** (no provisioning).
@@ -9,7 +9,7 @@
 2. Can the connector provision any resources? If so, which ones?
 
    Yes:
-   - **Create/Delete user accounts** — via Directory API `users.insert` and `users.delete`. New accounts are created with a generated random password.
+   - **Create/Delete user accounts** — Directory API `users.insert` / `users.delete`. Creation supports encrypted supplied or SDK-generated passwords and initial `suspended` / `org_unit_path` options. CredentialManager rotation uses the same protected SDK path with next-login handling.
    - **Grant/Revoke group membership** — via Directory API `members.insert` and `members.delete`.
    - **Grant/Revoke role assignment** — via Directory API `roleAssignments.insert` and `roleAssignments.delete`.
    - **Create/Delete groups** — creation via the `create_group` connector action (Directory API `groups.insert`); deletion via Directory API `groups.delete`.
@@ -25,7 +25,7 @@
    | `make_admin` | `users.makeAdmin` | Promote/demote a user to/from super administrator |
    | `change_user_org_unit` | `users.update` | Move a user to a different organizational unit |
    | `change_user_primary_email` | `users.update` | Change a user's primary email address |
-   | `offboarding_profile_update` | `users.patch` | Remove from GAL, clear recovery details, delete addresses/phones, optionally archive |
+   | `offboarding_profile_update` | `users.update` | Remove from GAL, clear recovery details, delete addresses/phones, optionally archive |
    | `sign_out_user` | `users.signOut` | Sign the user out of all sessions and reset sign-in cookies |
    | `delete_all_oauth_tokens` | `tokens.delete` | Revoke all third-party app authorizations |
    | `delete_all_application_passwords` | `asps.delete` | Delete all app-specific passwords |
@@ -33,6 +33,13 @@
    | `transfer_user_calendar` | Data Transfer API | Transfer Google Calendar data to another user |
    | `create_group` | `groups.insert` | Create a new Google Group |
    | `modify_group_settings` | Groups Settings API | Update settings of an existing group |
+   | `get_user_data_transfer` | `transfers.get` | Read a saved provider operation's actual ID, owners, overall status, and per-application statuses without mutation |
+   | `remove_user_alias` | `users.get`, `users.aliases.list`, `users.aliases.delete` | Remove an editable alias from the selected user and read back its alias collection |
+   | `add_user_alias` | `users.get`, `users.aliases.list`, `users.aliases.insert` | Add an alias to the selected user; same-user replay is idempotent and conflicts never move/remove an alias |
+
+   Transfer acknowledgement is not completion. Unknown or incomplete discovery never triggers an insert; keep the saved ID rather than replaying a mutation to poll. Security cleanup retains per-item outcomes and final enumeration completeness. Group settings appear on targeted Get without per-group fetches during normal listing.
+
+   Both alias actions require a concrete configured customer ID (not the `my_customer` selector) and verify the provider target is in that customer. Primary and noneditable checks come from that target; submitted pins are not accepted.
 
    **Custom schemas:** the profile-update actions (`update_user_profile`, `update_user`) can write values into custom-schema attributes via the Directory API `customSchemas` field. The connector only **sets values**; the schema **definitions must already exist** in the Workspace tenant (managed by the customer in Admin Console — the connector does not create or delete schema definitions and does not request the `admin.directory.userschema` scope).
 
@@ -69,7 +76,7 @@
    In **APIs & Services > Library**, enable:
    - **Admin SDK API** (required — Directory + Reports)
    - **Cloud Identity API** (used to resolve SAML app IDs to stable identifiers)
-   - **Groups Settings API** (optional — only needed for the `modify_group_settings` action)
+   - **Groups Settings API** (required for group sync, targeted reads, and the `modify_group_settings` action)
 
    **Step 3: Create a service account and JSON key**
 
@@ -100,6 +107,7 @@
    | `admin.directory.user.readonly` | Sync users |
    | `admin.reports.audit.readonly` | Sync usage/admin events (incremental sync) |
    | `admin.directory.user.security` | Discover OAuth apps via per-user token listing |
+   | `apps.groups.settings` | Read group settings; Google has no read-only scope for this API, so this also permits editing settings |
    | `cloud-identity.inboundsso.readonly` | (Optional) Resolve SAML app IDs to stable identifiers |
 
    **Read/Write (sync + provisioning + actions):** all of the above (with the write variants below) plus:
@@ -112,7 +120,7 @@
    | `admin.directory.rolemanagement` | Manage role assignments |
    | `admin.datatransfer` | Transfer Drive/Calendar data between users |
    | `admin.directory.user.security` | Sign out users, delete OAuth tokens / app passwords |
-   | `apps.groups.settings` | Edit group settings (`modify_group_settings`) |
+   | `apps.groups.settings` | Read group settings and edit them with `modify_group_settings` |
 
    > Setting custom-schema **values** uses `admin.directory.user`. Managing schema **definitions** (`admin.directory.userschema`) is intentionally out of scope — the connector assumes definitions already exist in the tenant.
 

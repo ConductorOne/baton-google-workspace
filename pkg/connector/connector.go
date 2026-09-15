@@ -280,12 +280,28 @@ func (c *GoogleWorkspace) Metadata(ctx context.Context) (*v2.ConnectorMetadata, 
 				"changePasswordAtNextLogin": {
 					DisplayName: "Change Password at Next Login",
 					Required:    false,
-					Description: "If true, the user will be required to change their password at next login. A random password is always generated.",
+					Description: "Require a password change at the next direct Google login. Does not enforce a password change through a third-party identity provider.",
 					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
 						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
 					},
 					Placeholder: "false",
 					Order:       4,
+				},
+				"suspended": {
+					DisplayName: "Suspended",
+					Description: "Create the account suspended in the initial request, without an active interval.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
+						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
+					},
+					Order: 5,
+				},
+				profileKeyOrgUnitPath: {
+					DisplayName: "Organizational Unit Path",
+					Description: "Absolute organizational unit path for the initial account placement, such as /Prehires. Omit to use Google's default.",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Order: 6,
 				},
 			},
 		},
@@ -702,6 +718,9 @@ func (c *GoogleWorkspace) GlobalActions(ctx context.Context, registry actions.Ac
 	}
 	if err := registry.Register(ctx, transferUserCalendarActionSchema, c.transferUserCalendar); err != nil {
 		return fmt.Errorf("google-workspace: failed to register transfer_user_calendar action: %w", err)
+	}
+	if err := registry.Register(ctx, getUserDataTransferActionSchema, c.getUserDataTransfer); err != nil {
+		return fmt.Errorf("google-workspace: failed to register get_user_data_transfer action: %w", err)
 	}
 	if err := registry.Register(ctx, updateUserGlobalActionSchema, c.updateUserActionHandler); err != nil {
 		return fmt.Errorf("google-workspace: failed to register update_user action: %w", err)
