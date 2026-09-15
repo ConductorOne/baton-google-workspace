@@ -24,8 +24,9 @@ import (
 
 var privateAppIDRegex = regexp.MustCompile("[0-9]{21}")
 
-// oauthAppLookupMaxResults bounds each per-(user, app) Reports API lookup; the true latest event
-// is picked client-side, so this just needs to be large enough to avoid pagination.
+// oauthAppLookupMaxResults bounds each per-(user, app) Reports API lookup. No NextPageToken
+// follow-up happens, so this relies on Google's default (undocumented) ordering surfacing the
+// true latest activity within this first page.
 const oauthAppLookupMaxResults = 50
 
 // oauthAppLookupTimeout caps a single (user, app) lookup, including retries. Room for 2 hung

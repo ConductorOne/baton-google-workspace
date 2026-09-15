@@ -163,7 +163,7 @@ func scanUsersForEvents(
 	for i, u := range batch {
 		if u.Retries >= maxUserLookupRetries {
 			// Failed too many times already: skip instead of retrying forever.
-			ctxzap.Extract(ctx).Warn("google-workspace-connector: user exceeded lookup retry limit for event feed, skipping",
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: user exceeded lookup retry limit for event feed, skipping",
 				zap.String("user", u.Email), zap.Int("retries", u.Retries))
 			continue
 		}
@@ -174,13 +174,15 @@ func scanUsersForEvents(
 			// events/retries collected so far are kept, and let the up-front check next call
 			// raise ResourceExhausted with nothing left to lose.
 			if sharedReportsRateLimiter.AvailableTokens() < 1 {
+				ctxzap.Extract(ctx).Debug("google-workspace-connector: deferring rest of batch, quota drained",
+					zap.String("user", u.Email), zap.Error(err))
 				processed = i
 				break
 			}
 
 			// Track the failure and retry this user on the next call.
 			u.Retries++
-			ctxzap.Extract(ctx).Warn("google-workspace-connector: user lookup failed for event feed, will retry",
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: user lookup failed for event feed, will retry",
 				zap.String("user", u.Email), zap.Int("retries", u.Retries), zap.Error(err))
 			retryQueue = append(retryQueue, u)
 

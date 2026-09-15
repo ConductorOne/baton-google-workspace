@@ -24,8 +24,9 @@ type bestActivity struct {
 	occurredAt *timestamppb.Timestamp
 }
 
-// googleLoginLookupMaxResults bounds the per-user Reports API lookup; the true latest event is
-// picked client-side, so this just needs to be large enough to avoid pagination.
+// googleLoginLookupMaxResults bounds the per-user Reports API lookup. No NextPageToken
+// follow-up happens, so this relies on Google's default (undocumented) ordering surfacing the
+// true latest activity within this first page.
 const googleLoginLookupMaxResults = 50
 
 // googleLoginLookupTimeout caps a single user's lookup, including retries. Room for 2 hung
