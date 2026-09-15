@@ -30,9 +30,9 @@ import (
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// usersPerEventFeedCall bounds users per ListEvents call, not Reports API calls (the usage
-// feed issues one per app), so a call returns quickly instead of blocking on the shared
-// 250/min quota for an entire directory page (up to 500 users).
+// usersPerEventFeedCall bounds users per ListEvents call, not Reports API calls or wall-clock
+// time (the usage feed issues one per app) — it just avoids blocking on the shared 250/min
+// quota for an entire directory page (up to 500 users).
 const usersPerEventFeedCall = 25
 
 // pendingUser.Retries caps the attempt count for this user lookup operation to prevent
@@ -90,7 +90,8 @@ func (c *userScanCursor) marshal() (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
-// userEventLookup fetches events for a single user via at most one Reports API call.
+// userEventLookup fetches events for a single user; usage_event_feed.go issues one Reports
+// API call per authorized app, the other two feeds issue exactly one.
 type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error)
 
 // scanUsersForEvents drives one bounded step of the rolling user-directory walk shared by all
@@ -157,8 +158,8 @@ func scanUsersForEvents(
 	// so they stay queued for the next call instead of being dropped.
 	retryQueue := make([]pendingUser, 0, len(batch))
 	// processed marks how far into batch we got; stays len(batch) unless quota drains mid-batch,
-	// in which case cursor.PendingUsers[processed:] below preserves the untouched remainder
-	// (starting with the user that hit the drained quota) for the next call.
+	// in which case cursor.PendingUsers[processed:] below preserves the remaining, untouched
+	// users after the one that failed (which is already in retryQueue) for the next call.
 	processed := len(batch)
 	for i, u := range batch {
 		if u.Retries >= maxUserLookupRetries {
@@ -170,21 +171,22 @@ func scanUsersForEvents(
 
 		userEvents, err := lookup(ctx, client, u)
 		if err != nil {
-			// Quota draining mid-batch isn't this user's fault: stop here with a nil error so
-			// events/retries collected so far are kept, and let the up-front check next call
-			// raise ResourceExhausted with nothing left to lose.
-			if sharedReportsRateLimiter.AvailableTokens() < 1 {
-				ctxzap.Extract(ctx).Debug("google-workspace-connector: deferring rest of batch, quota drained",
-					zap.String("user", u.Email), zap.Error(err))
-				processed = i
-				break
-			}
-
-			// Track the failure and retry this user on the next call.
+			// Track the failure and retry this user on the next call, regardless of whether
+			// quota turns out to be the cause: the cap must apply either way.
 			u.Retries++
 			ctxzap.Extract(ctx).Debug("google-workspace-connector: user lookup failed for event feed, will retry",
 				zap.String("user", u.Email), zap.Int("retries", u.Retries), zap.Error(err))
 			retryQueue = append(retryQueue, u)
+
+			if sharedReportsRateLimiter.AvailableTokens() < 1 {
+				// Quota looks drained: stop the rest of the batch here with a nil error so
+				// events/retries collected so far are kept, and let the up-front check next
+				// call raise ResourceExhausted with nothing left to lose.
+				ctxzap.Extract(ctx).Debug("google-workspace-connector: deferring rest of batch, quota drained",
+					zap.String("user", u.Email), zap.Error(err))
+				processed = i + 1
+				break
+			}
 
 			continue
 		}
