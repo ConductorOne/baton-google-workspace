@@ -42,7 +42,7 @@ docker run --rm -v $(pwd):/out \
   -e BATON_ADMINISTRATOR_EMAIL="$ADMIN_EMAIL" \
   -e BATON_DOMAIN="$DOMAIN" \
   -e BATON_CREDENTIALS_JSON_FILE_PATH="$CREDENTIALS_JSON_FILE_PATH" \
-  ghcr.io/conductorone/baton-google-workspace:latest -f "/out/sync.c1z"
+  public.ecr.aws/conductorone/baton-google-workspace:latest -f "/out/sync.c1z"
 
 docker run --rm -v $(pwd):/out ghcr.io/conductorone/baton:latest -f "/out/sync.c1z" resources
 ```
