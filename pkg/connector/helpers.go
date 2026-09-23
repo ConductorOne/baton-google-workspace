@@ -82,6 +82,15 @@ func extractUserId(args *structpb.Struct, l *zap.Logger, actionName string) (str
 	if ref, ok := actions.GetResourceIDArg(args, argUserID); ok && ref.GetResource() != "" {
 		return ref.GetResource(), nil
 	}
+	// GetResourceIDArg nil-guards internally, but the plain-string fallback below
+	// selects args.Fields directly, which panics on a nil *structpb.Struct. The
+	// SDK passes request.GetArgs() straight through, so an action invoked with no
+	// arguments at all arrives here as nil - that has to read back as a clean
+	// InvalidArgument, not a recovered panic.
+	if args == nil || args.Fields == nil {
+		l.Debug("google-workspace: user action handler: missing arguments", zap.String("action", actionName))
+		return "", uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: missing user_id argument")
+	}
 	userIdValue, ok := args.Fields[argUserID]
 	if !ok || userIdValue == nil {
 		l.Debug("google-workspace: user action handler: missing user_id argument", zap.String("action", actionName), zap.Any("args", args))

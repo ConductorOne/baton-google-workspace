@@ -487,6 +487,31 @@ func (o *userResourceType) CreateAccount(ctx context.Context, accountInfo *v2.Ac
 		ChangePasswordAtNextLogin: changePasswordAtNextLogin,
 	}
 
+	// Employee Information attributes (department, job title, cost center,
+	// employee type, employee ID, manager email) are optional; any the account
+	// profile carries are applied in the same users.insert call, so a joiner
+	// provisions a fully-populated account in one step instead of needing a
+	// follow-up update_user_profile action. The key aliases accepted here are
+	// the ones the update path accepts (employeeInfoJSONFields), so the same
+	// profile object drives both.
+	//
+	// None of them can fail the create. They enrich an account rather than
+	// define it, and the joiner needs the account far more than it needs a
+	// department: an attribute that is empty, wrong-typed, or (for
+	// manager_email) unusable is dropped and reported below, and the account is
+	// still created. update_user fills in anything that was dropped once the
+	// profile is corrected.
+	employeeInfo, droppedFields := employeeInfoFromProfile(pMap)
+	droppedFields = append(droppedFields, applyEmployeeInfoToNewUser(user, employeeInfo)...)
+	if len(droppedFields) > 0 {
+		// Warn, not Error: this is a misconfigured attribute mapping on the
+		// customer side, not a connector bug, and the operation still succeeds.
+		ctxzap.Extract(ctx).Warn(
+			"google-workspace: dropping unusable Employee Information attributes while creating account",
+			zap.Strings("dropped_fields", droppedFields),
+		)
+	}
+
 	if credentialOptions == nil {
 		return nil, nil, nil, fmt.Errorf("credentialOptions cannot be nil")
 	}
