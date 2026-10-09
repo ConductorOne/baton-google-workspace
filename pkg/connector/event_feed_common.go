@@ -5,13 +5,12 @@
 // across up to 180 days). Instead, each feed walks the user directory page by page — reusing
 // the same paginated user listing as OAuth app discovery — and, for a small bounded batch of
 // users per call, asks the Reports API for only that user's most recent login(s) per app.
-// This bounds per-call cost to a fixed number of Reports API calls, checkpoints resumably via
-// pagination.StreamToken, and never loops internally across directory pages (see
-// ref-antipatterns.md, "Client-Side Pagination Loop").
+// This bounds users per call, not Reports API calls (usage_event_feed.go issues one per app),
+// checkpoints resumably via pagination.StreamToken, and never loops internally across
+// directory pages (see ref-antipatterns.md, "Client-Side Pagination Loop").
 //
-// Ordering note: it is not documented whether activities.list returns newest-first when no
-// startTime/orderBy is given, so each lookup fetches a small bounded window (not maxResults=1)
-// and picks the maximum occurredAt client-side, per the plan's acceptance-criteria fallback.
+// Ordering note: activities.list ordering is undocumented, so with startTime=180 days back and
+// maxResults=50, each lookup still picks the maximum occurredAt client-side rather than trusting result order.
 package connector
 
 import (
@@ -22,22 +21,29 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	gwclient "github.com/conductorone/baton-google-workspace/pkg/client"
 )
 
-// usersPerEventFeedCall bounds how many users are processed per ListEvents invocation, so a
-// single call issues at most this many Reports API filter-queries and returns quickly instead
-// of blocking on the shared 250/min quota for an entire directory page (up to 500 users).
+// usersPerEventFeedCall bounds users per ListEvents call, not Reports API calls or wall-clock
+// time (the usage feed issues one per app) — it just avoids blocking on the shared 250/min
+// quota for an entire directory page (up to 500 users).
 const usersPerEventFeedCall = 25
 
+// pendingUser.Retries caps the attempt count for this user lookup operation to prevent
+// a repeatedly failing user from blocking the batch. The user is skipped after 2 failures.
 type pendingUser struct {
-	Email string `json:"email"`
-	ID    string `json:"id"`
+	Email   string `json:"email"`
+	ID      string `json:"id"`
+	Retries int    `json:"retries,omitempty"`
 }
+
+const maxUserLookupRetries = 2
 
 // userScanCursor tracks progress through a rolling, continuous walk of the user directory.
 // PendingUsers holds users fetched from the current directory page not yet processed;
@@ -84,7 +90,8 @@ func (c *userScanCursor) marshal() (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
-// userEventLookup fetches events for a single user via at most one Reports API call.
+// userEventLookup fetches events for a single user; usage_event_feed.go issues one Reports
+// API call per authorized app, the other two feeds issue exactly one.
 type userEventLookup func(ctx context.Context, client *gwclient.GoogleWorkspaceClient, user pendingUser) ([]*v2.Event, error)
 
 // scanUsersForEvents drives one bounded step of the rolling user-directory walk shared by all
@@ -111,14 +118,10 @@ func scanUsersForEvents(
 	if len(cursor.PendingUsers) == 0 {
 		usersResp, err := client.ListUserIDsPage(ctx, customerID, domain, cursor.DirectoryPageToken)
 		if err != nil {
-			// Preserve the cursor as-is so a transient Directory API failure does not rewind
-			// the walk back to the start on retry.
-			cursorToken, marshalErr := cursor.marshal()
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("google-workspace-connector: failed to marshal cursor token in event feed: %w", marshalErr)
-			}
-			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true},
-				fmt.Errorf("google-workspace-connector: failed to list users for event feed: %w", err)
+			// The SDK discards streamState on error; the caller resumes from the last
+			// successfully-returned cursor, not anything computed here, so there's nothing to
+			// marshal on this path.
+			return nil, nil, fmt.Errorf("google-workspace-connector: failed to list users for event feed: %w", err)
 		}
 		cursor.DirectoryPageToken = usersResp.NextPageToken
 		for _, u := range usersResp.Users {
@@ -137,23 +140,55 @@ func scanUsersForEvents(
 		}
 	}
 
+	// Quota already drained: fail fast with a classified error so the SDK backs off, instead of
+	// burning the per-user retry budget against a wall we already know is up. As above, the SDK
+	// discards streamState on error and resumes from the last successful cursor, so nothing to
+	// marshal here either.
+	if sharedReportsRateLimiter.AvailableTokens() < 1 {
+		return nil, nil, uhttp.WrapErrors(codes.ResourceExhausted, "google-workspace-connector: reports api quota exhausted, deferring")
+	}
+
 	batch := cursor.PendingUsers
 	if len(batch) > usersPerEventFeedCall {
 		batch = batch[:usersPerEventFeedCall]
 	}
 
 	events := []*v2.Event{}
-	for _, u := range batch {
+	// retryQueue holds batch users whose lookup failed but haven't hit maxUserLookupRetries yet,
+	// so they stay queued for the next call instead of being dropped.
+	retryQueue := make([]pendingUser, 0, len(batch))
+	// processed marks how far into batch we got; stays len(batch) unless quota drains mid-batch,
+	// in which case cursor.PendingUsers[processed:] below preserves the remaining, untouched
+	// users after the one that failed (which is already in retryQueue) for the next call.
+	processed := len(batch)
+	for i, u := range batch {
+		if u.Retries >= maxUserLookupRetries {
+			// Failed too many times already: skip instead of retrying forever.
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: user exceeded lookup retry limit for event feed, skipping",
+				zap.String("user", u.Email), zap.Int("retries", u.Retries))
+			continue
+		}
+
 		userEvents, err := lookup(ctx, client, u)
 		if err != nil {
-			// Don't remove `batch` from cursor.PendingUsers until every lookup in it has
-			// succeeded, so a single user's Reports API blip doesn't lose the remaining
-			// unprocessed users and restart the walk from the beginning on retry.
-			cursorToken, marshalErr := cursor.marshal()
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("failed to marshal cursor token in event feed: %w", marshalErr)
+			// Track the failure and retry this user on the next call, regardless of whether
+			// quota turns out to be the cause: the cap must apply either way.
+			u.Retries++
+			ctxzap.Extract(ctx).Debug("google-workspace-connector: user lookup failed for event feed, will retry",
+				zap.String("user", u.Email), zap.Int("retries", u.Retries), zap.Error(err))
+			retryQueue = append(retryQueue, u)
+
+			if sharedReportsRateLimiter.AvailableTokens() < 1 {
+				// Quota looks drained: stop the rest of the batch here with a nil error so
+				// events/retries collected so far are kept, and let the up-front check next
+				// call raise ResourceExhausted with nothing left to lose.
+				ctxzap.Extract(ctx).Debug("google-workspace-connector: deferring rest of batch, quota drained",
+					zap.String("user", u.Email), zap.Error(err))
+				processed = i + 1
+				break
 			}
-			return nil, &pagination.StreamState{Cursor: cursorToken, HasMore: true}, err
+
+			continue
 		}
 		for _, e := range userEvents {
 			if earliestEvent != nil && e.GetOccurredAt() != nil && e.GetOccurredAt().AsTime().Before(earliestEvent.AsTime()) {
@@ -162,7 +197,7 @@ func scanUsersForEvents(
 			events = append(events, e)
 		}
 	}
-	cursor.PendingUsers = cursor.PendingUsers[len(batch):]
+	cursor.PendingUsers = append(retryQueue, cursor.PendingUsers[processed:]...)
 
 	hasMore := len(cursor.PendingUsers) > 0 || cursor.DirectoryPageToken != ""
 	if !hasMore {
