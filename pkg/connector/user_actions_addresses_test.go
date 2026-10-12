@@ -52,6 +52,7 @@ func TestParseAddresses(t *testing.T) {
 		"object not array":       `{"type":"work"}`,
 		"null":                   `null`,
 		"trailing data":          `[] []`,
+		"trailing bracket":       `[] ]`,
 		"missing type":           `[{"locality":"London"}]`,
 		"invalid type":           `[{"type":"office"}]`,
 		"custom without type":    `[{"type":"custom"}]`,
@@ -90,11 +91,53 @@ func TestProfileFromJSON_Addresses(t *testing.T) {
 		require.Nil(t, patch.addresses)
 	})
 
+	t.Run("blank string is treated as absent", func(t *testing.T) {
+		for _, raw := range []string{"", "   "} {
+			patch, err := profileFromJSON(map[string]any{"addresses": raw, "department": "Sales"})
+			require.NoError(t, err)
+			require.Nil(t, patch.addresses)
+			require.NotNil(t, patch.department)
+		}
+	})
+
 	t.Run("invalid entry is an error", func(t *testing.T) {
 		_, err := profileFromJSON(map[string]any{
 			"addresses": []any{map[string]any{"type": "nope"}},
 		})
 		require.Error(t, err)
+	})
+}
+
+func TestAddressesDiffer(t *testing.T) {
+	base := directoryAdmin.UserAddress{Type: "work", Locality: "London"}
+
+	t.Run("server-populated fields the caller omitted are ignored", func(t *testing.T) {
+		current := base
+		current.Formatted = "London"
+		current.SourceIsStructured = true
+		require.False(t, addressesDiffer([]directoryAdmin.UserAddress{current}, []directoryAdmin.UserAddress{base}))
+	})
+
+	t.Run("caller-set formatted is compared", func(t *testing.T) {
+		current := base
+		current.Formatted = "London"
+		updated := base
+		updated.Formatted = "1 Main St, London"
+		require.True(t, addressesDiffer([]directoryAdmin.UserAddress{current}, []directoryAdmin.UserAddress{updated}))
+	})
+
+	t.Run("changed structured field is a difference", func(t *testing.T) {
+		updated := base
+		updated.Locality = "Paris"
+		require.True(t, addressesDiffer([]directoryAdmin.UserAddress{base}, []directoryAdmin.UserAddress{updated}))
+	})
+
+	t.Run("order matters", func(t *testing.T) {
+		home := directoryAdmin.UserAddress{Type: "home", Locality: "Leeds"}
+		require.True(t, addressesDiffer(
+			[]directoryAdmin.UserAddress{base, home},
+			[]directoryAdmin.UserAddress{home, base},
+		))
 	})
 }
 
@@ -189,6 +232,44 @@ func TestUpdateUserProfile_Addresses_IdempotentResend_SucceedsAsNoOp(t *testing.
 	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
 	require.NoError(t, err)
 	require.Equal(t, 0, state.patchCount, "an unchanged address list must not issue a write")
+}
+
+func TestUpdateUserProfile_Addresses_IdempotentResendWithServerPopulatedFields_SucceedsAsNoOp(t *testing.T) {
+	state := newAddressTestState([]directoryAdmin.UserAddress{
+		{Type: "work", Locality: "London", Formatted: "London", SourceIsStructured: true},
+	})
+	server := newTestProfileServer(state)
+	defer server.Close()
+	userRT := newTestUserResourceType(t, server)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:   strArg("user123"),
+		"addresses": strArg(`[{"type":"work","locality":"London"}]`),
+	}}
+
+	_, _, err := userRT.updateUserProfileActionHandler(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, 0, state.patchCount, "fields Google populates on read must not make a re-send look changed")
+}
+
+func TestUpdateUserGlobal_BlankAddressesDoesNotFailOtherFields(t *testing.T) {
+	state := newAddressTestState([]directoryAdmin.UserAddress{{Type: "work", Locality: "London"}})
+	server := newTestProfileServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestGlobalConnector(t, dir)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argUserID:      resourceIDArg("user", "user123"),
+		"user_profile": strArg(`{"job_title":"AE","addresses":""}`),
+	}}
+
+	resp, _, err := c.updateUserActionHandler(context.Background(), args)
+	require.NoError(t, err, "a blank addresses value must not fail the rest of the update")
+	require.True(t, resp.GetFields()["success"].GetBoolValue())
+	require.NotContains(t, resp.GetFields()["updated_fields"].GetStringValue(), "Addresses")
+	require.Len(t, testAddresses(state.users["user123"]), 1, "a blank addresses value must leave existing addresses untouched")
 }
 
 func TestUpdateUserProfile_Addresses_ClearWhenAlreadyEmpty_SucceedsAsNoOp(t *testing.T) {

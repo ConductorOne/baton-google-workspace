@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -1469,7 +1470,7 @@ func parseAddresses(raw []byte) ([]admin.UserAddress, error) {
 	if err := dec.Decode(&addresses); err != nil {
 		return nil, fmt.Errorf("addresses must be a JSON array of address objects: %w", err)
 	}
-	if dec.More() {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("addresses must be a single JSON array")
 	}
 	if addresses == nil {
@@ -1497,13 +1498,23 @@ func parseAddresses(raw []byte) ([]admin.UserAddress, error) {
 
 // addressesDiffer reports whether updated differs from current, comparing in
 // order on the wire representation (order is preserved by the API, and the
-// caller's list replaces the current one as given).
+// caller's list replaces the current one as given). Formatted and
+// SourceIsStructured can be populated by Google on read, so they are only
+// compared when the caller set them; otherwise an idempotent re-send of the
+// same structured address would always look changed and trigger a write.
 func addressesDiffer(current, updated []admin.UserAddress) bool {
 	if len(current) != len(updated) {
 		return true
 	}
 	for i := range current {
-		a, errA := json.Marshal(current[i])
+		cur := current[i]
+		if updated[i].Formatted == "" {
+			cur.Formatted = ""
+		}
+		if !updated[i].SourceIsStructured {
+			cur.SourceIsStructured = false
+		}
+		a, errA := json.Marshal(cur)
 		b, errB := json.Marshal(updated[i])
 		if errA != nil || errB != nil || !bytes.Equal(a, b) {
 			return true
@@ -1727,21 +1738,24 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 	if raw, ok := profile[argAddresses]; ok && raw != nil {
 		// Accept either a native JSON array or a string holding one (the
 		// form update_user_profile's addresses argument takes), so either
-		// shape round-trips through a push rule.
+		// shape is accepted from a push rule. A blank string means "not
+		// provided", matching update_user_profile; clearing is an explicit [].
 		var b []byte
 		if s, isString := raw.(string); isString {
-			b = []byte(s)
+			b = []byte(strings.TrimSpace(s))
 		} else {
 			var err error
 			if b, err = json.Marshal(raw); err != nil {
 				return patch, fmt.Errorf("invalid addresses: %w", err)
 			}
 		}
-		addresses, err := parseAddresses(b)
-		if err != nil {
-			return patch, err
+		if len(b) > 0 {
+			addresses, err := parseAddresses(b)
+			if err != nil {
+				return patch, err
+			}
+			patch.addresses = addresses
 		}
-		patch.addresses = addresses
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
