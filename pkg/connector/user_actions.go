@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -229,7 +230,7 @@ var (
 			"(only the provided fields are modified, so unrelated server-side state is preserved). " +
 			"Supports name fields, recovery details, Employee Information attributes " +
 			"(department, job title, cost center, employee ID, employee type), the manager relation, " +
-			"and custom-schema attribute values. At least one updatable field must be provided.",
+			"addresses, and custom-schema attribute values. At least one updatable field must be provided.",
 		Arguments: []*config.Field{
 			{
 				Name:        argUserID,
@@ -314,6 +315,13 @@ var (
 					"clearing the manager relation is not currently supported by this connector.",
 				Field:      &config.Field_StringField{},
 				IsRequired: false,
+			},
+			{
+				Name:        argAddresses,
+				DisplayName: "Addresses",
+				Description: descriptionAddresses,
+				Field:       &config.Field_StringField{},
+				IsRequired:  false,
 			},
 			{
 				Name:        argCustomSchemas,
@@ -918,6 +926,17 @@ func (o *userResourceType) updateUserProfileActionHandler(ctx context.Context, a
 		patch.customSchemas = schemas
 	}
 
+	// Addresses: JSON array of Directory API address objects. Unlike the other
+	// string arguments, an empty string means "not provided" (there is no
+	// empty-string address); clearing is an explicit "[]".
+	if raw := getStringField(args, argAddresses); raw != "" {
+		addresses, err := parseAddresses([]byte(raw))
+		if err != nil {
+			return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user_profile: invalid addresses", err)
+		}
+		patch.addresses = addresses
+	}
+
 	updatedUser, updatedFields, skippedFields, err := applyUserProfilePatch(ctx, o.client, userId, patch)
 	if err != nil {
 		return nil, nil, err
@@ -1002,6 +1021,9 @@ type userProfilePatch struct {
 	employeeType  *string
 	employeeID    *string
 	managerEmail  *string
+	// addresses replaces the user's whole Addresses list when non-nil; a
+	// non-nil empty slice clears it. nil leaves Addresses untouched.
+	addresses     []admin.UserAddress
 	customSchemas map[string]googleapi.RawMessage
 }
 
@@ -1057,7 +1079,7 @@ func applyUserProfilePatch(
 	// external-ID types, other relation types) the caller did not set. Fetch
 	// once and reuse across all three blocks below, plus the Name block,
 	// instead of issuing a GET per field.
-	needCurrent := (setGiven != setFamily) || setOrg || patch.employeeID != nil || setManagerEmail
+	needCurrent := (setGiven != setFamily) || setOrg || patch.employeeID != nil || setManagerEmail || patch.addresses != nil
 	var current *admin.User
 	if needCurrent {
 		var err error
@@ -1091,6 +1113,21 @@ func applyUserProfilePatch(
 		externalIDsWillShrink = len(updatedExternalIDs) < len(currentExtIDs)
 	}
 
+	// Addresses: the caller supplies the complete desired list, which replaces
+	// the current one (Google itself replaces repeated fields wholesale). The
+	// GET is only needed to detect an idempotent re-send (skip the write) and
+	// a shrink, which needs Update (PUT) for the same reason as ExternalIds.
+	addressesChanged := false
+	addressesWillShrink := false
+	if patch.addresses != nil {
+		currentAddresses, err := extractFromInterface[admin.UserAddress](current.Addresses)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("google-workspace: failed to parse addresses: %w", err)
+		}
+		addressesChanged = addressesDiffer(currentAddresses, patch.addresses)
+		addressesWillShrink = len(patch.addresses) < len(currentAddresses)
+	}
+
 	// Users.Patch does not reliably shrink a repeated field down to empty:
 	// confirmed against a live tenant that clearing the sole ExternalIds entry
 	// via Patch (empty slice, with or without ForceSendFields/NullFields)
@@ -1112,12 +1149,12 @@ func applyUserProfilePatch(
 	// the Update below would be silently reverted to the value captured here.
 	// Every other case (name, recovery, Employee Information, manager) keeps
 	// the narrower, cheaper Patch.
-	usePut := externalIDsWillShrink
+	usePut := externalIDsWillShrink || addressesWillShrink
 	var update *admin.User
 	if usePut {
 		// Logged so a wider-race-window write (see the tradeoff above) can be
 		// correlated after the fact against a reported issue.
-		ctxzap.Extract(ctx).Debug("google-workspace: applyUserProfilePatch: employee_id shrinks ExternalIds, "+
+		ctxzap.Extract(ctx).Debug("google-workspace: applyUserProfilePatch: employee_id or addresses shrinks a repeated field, "+
 			"widening the update to a full-object Update (PUT) - concurrent changes to this user made "+
 			"between this call's GET and its write may be silently reverted",
 			zap.String(argUserID, userId))
@@ -1199,6 +1236,13 @@ func applyUserProfilePatch(
 		forceSend = append(forceSend, "ExternalIds")
 	}
 
+	if patch.addresses != nil && addressesChanged {
+		// Gated on addressesChanged for the same interface{}-serialization
+		// reason as Organizations and ExternalIds above.
+		update.Addresses = patch.addresses
+		forceSend = append(forceSend, "Addresses")
+	}
+
 	// Manager: same "manager" Relations entry the standalone update_user_manager
 	// action writes - buildManagerRelations is shared with that handler so the
 	// two stay behaviorally identical, including rejecting empty values above;
@@ -1234,10 +1278,10 @@ func applyUserProfilePatch(
 		update.CustomSchemas = patch.customSchemas
 	}
 
-	// setOrg/employeeID count as "provided" even when they leave forceSend
-	// untouched (a legitimate no-op, e.g. an idempotent resend) - otherwise a
-	// satisfied no-op would be rejected as "nothing provided."
-	if len(forceSend) == 0 && !customSchemasSet && !setOrg && patch.employeeID == nil {
+	// setOrg/employeeID/addresses count as "provided" even when they leave
+	// forceSend untouched (a legitimate no-op, e.g. an idempotent resend) -
+	// otherwise a satisfied no-op would be rejected as "nothing provided."
+	if len(forceSend) == 0 && !customSchemasSet && !setOrg && patch.employeeID == nil && patch.addresses == nil {
 		if len(skippedFields) > 0 {
 			// Distinct from the "nothing provided" message below: a field
 			// WAS provided here, it just couldn't be applied - leading with
@@ -1409,6 +1453,65 @@ func externalIDsDiffer(current []*admin.UserExternalId, updated []admin.UserExte
 	return false
 }
 
+// addressTypes are the Directory API's accepted UserAddress.Type values.
+var addressTypes = map[string]bool{"custom": true, "home": true, "other": true, "work": true}
+
+// parseAddresses decodes and validates an addresses argument: a JSON array of
+// Directory API address objects (camelCase keys, e.g. streetAddress,
+// postalCode). Unknown keys are rejected rather than silently dropped, so a
+// snake_case typo like "postal_code" fails loudly instead of writing an
+// address with a missing field. The result is never nil, so an explicit "[]"
+// is distinguishable from "not provided".
+func parseAddresses(raw []byte) ([]admin.UserAddress, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	addresses := make([]admin.UserAddress, 0)
+	if err := dec.Decode(&addresses); err != nil {
+		return nil, fmt.Errorf("addresses must be a JSON array of address objects: %w", err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("addresses must be a single JSON array")
+	}
+	if addresses == nil {
+		// A JSON null decodes to a nil slice; callers treat null as absent
+		// before reaching here, so this only guards direct misuse.
+		return nil, fmt.Errorf("addresses must be a JSON array, not null")
+	}
+	primaries := 0
+	for i, a := range addresses {
+		if !addressTypes[a.Type] {
+			return nil, fmt.Errorf("addresses[%d]: type must be one of custom, home, other, work (got %q)", i, a.Type)
+		}
+		if a.Type == "custom" && a.CustomType == "" {
+			return nil, fmt.Errorf("addresses[%d]: customType is required when type is custom", i)
+		}
+		if a.Primary {
+			primaries++
+		}
+	}
+	if primaries > 1 {
+		return nil, fmt.Errorf("at most one address may be marked primary (got %d)", primaries)
+	}
+	return addresses, nil
+}
+
+// addressesDiffer reports whether updated differs from current, comparing in
+// order on the wire representation (order is preserved by the API, and the
+// caller's list replaces the current one as given).
+func addressesDiffer(current, updated []admin.UserAddress) bool {
+	if len(current) != len(updated) {
+		return true
+	}
+	for i := range current {
+		a, errA := json.Marshal(current[i])
+		b, errB := json.Marshal(updated[i])
+		if errA != nil || errB != nil || !bytes.Equal(a, b) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildManagerRelations sets the "manager" Relations entry to managerEmail,
 // preserving any other relation types. Shared by the standalone
 // update_user_manager action and the bulk profile-patch path so the two stay
@@ -1426,6 +1529,14 @@ func buildManagerRelations(relations []*admin.UserRelation, managerEmail string)
 	})
 	return updated
 }
+
+// descriptionAddresses documents the addresses argument shared by
+// update_user_profile and the global update_user action.
+const descriptionAddresses = "JSON array of address objects that REPLACES the user's full address list " +
+	"(include every address to keep; send [] to clear all). Each object uses Directory API keys: " +
+	"type (required: work, home, other, or custom with customType), streetAddress, extendedAddress, poBox, " +
+	"locality, region, postalCode, country, countryCode, formatted, primary. " +
+	`Example: [{"type":"work","primary":true,"streetAddress":"1 Main St","locality":"London","postalCode":"EC1A 1BB","countryCode":"GB"}].`
 
 const (
 	actionUpdateUser = "update_user"
@@ -1448,6 +1559,7 @@ const (
 	argEmployeeType = "employee_type"
 	argEmployeeID   = "employee_id"
 	argManagerEmail = "manager_email"
+	argAddresses    = "addresses"
 	displayUser     = "User"
 
 	// externalIDTypeOrganization is the admin.UserExternalId.Type value the
@@ -1475,7 +1587,7 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 	Description: "Updates a user's profile from a user_profile JSON object. " +
 		"Consumed by ConductorOne push rules for automated profile sync. " +
 		"Supported keys: given_name, family_name, recovery_email, recovery_phone, department, job_title, " +
-		"cost_center, employee_type, employee_id, manager_email, custom_schemas.",
+		"cost_center, employee_type, employee_id, manager_email, addresses, custom_schemas.",
 	Arguments: []*config.Field{
 		{
 			Name:        argUserID,
@@ -1494,7 +1606,8 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 			Name:        argUserProfile,
 			DisplayName: "User Profile Data",
 			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, " +
-				"department, job_title, cost_center, employee_type, employee_id, manager_email, custom_schemas.",
+				"department, job_title, cost_center, employee_type, employee_id, manager_email, addresses, custom_schemas. " +
+				"addresses is a JSON array (or a string holding one) that replaces the user's full address list.",
 			IsRequired: true,
 			Field:      &config.Field_StringField{},
 		},
@@ -1610,6 +1723,25 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 		if ok {
 			*f.dest = &v
 		}
+	}
+	if raw, ok := profile[argAddresses]; ok && raw != nil {
+		// Accept either a native JSON array or a string holding one (the
+		// form update_user_profile's addresses argument takes), so either
+		// shape round-trips through a push rule.
+		var b []byte
+		if s, isString := raw.(string); isString {
+			b = []byte(s)
+		} else {
+			var err error
+			if b, err = json.Marshal(raw); err != nil {
+				return patch, fmt.Errorf("invalid addresses: %w", err)
+			}
+		}
+		addresses, err := parseAddresses(b)
+		if err != nil {
+			return patch, err
+		}
+		patch.addresses = addresses
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
