@@ -1461,8 +1461,8 @@ var addressTypes = map[string]bool{"custom": true, "home": true, "other": true, 
 // Directory API address objects (camelCase keys, e.g. streetAddress,
 // postalCode). Unknown keys are rejected rather than silently dropped, so a
 // snake_case typo like "postal_code" fails loudly instead of writing an
-// address with a missing field. The result is never nil, so an explicit "[]"
-// is distinguishable from "not provided".
+// address with a missing field. The result is non-nil unless the input is
+// null, so an explicit "[]" is distinguishable from "not provided".
 func parseAddresses(raw []byte) ([]admin.UserAddress, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -1472,11 +1472,6 @@ func parseAddresses(raw []byte) ([]admin.UserAddress, error) {
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("addresses must be a single JSON array")
-	}
-	if addresses == nil {
-		// A JSON null decodes to a nil slice; callers treat null as absent
-		// before reaching here, so this only guards direct misuse.
-		return nil, fmt.Errorf("addresses must be a JSON array, not null")
 	}
 	primaries := 0
 	for i, a := range addresses {

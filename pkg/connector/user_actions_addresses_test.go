@@ -47,10 +47,15 @@ func TestParseAddresses(t *testing.T) {
 		require.Empty(t, addrs)
 	})
 
+	t.Run("null is nil (not provided)", func(t *testing.T) {
+		addrs, err := parseAddresses([]byte(`null`))
+		require.NoError(t, err)
+		require.Nil(t, addrs)
+	})
+
 	for name, raw := range map[string]string{
 		"not JSON":               `nope`,
 		"object not array":       `{"type":"work"}`,
-		"null":                   `null`,
 		"trailing data":          `[] []`,
 		"trailing bracket":       `[] ]`,
 		"missing type":           `[{"locality":"London"}]`,
