@@ -1486,6 +1486,11 @@ func parseAddresses(raw []byte) ([]admin.UserAddress, error) {
 		if a.Type == "custom" && a.CustomType == "" {
 			return nil, fmt.Errorf("addresses[%d]: customType is required when type is custom", i)
 		}
+		// Google documents structured addresses as unsupported and says
+		// written values are eventually clobbered.
+		if a.SourceIsStructured {
+			return nil, fmt.Errorf("addresses[%d]: sourceIsStructured is not supported", i)
+		}
 		if a.Primary {
 			primaries++
 		}
@@ -1544,7 +1549,8 @@ func buildManagerRelations(relations []*admin.UserRelation, managerEmail string)
 // descriptionAddresses documents the addresses argument shared by
 // update_user_profile and the global update_user action.
 const descriptionAddresses = "JSON array of address objects that REPLACES the user's full address list " +
-	"(include every address to keep; send [] to clear all). Each object uses Directory API keys: " +
+	"(include every address to keep; send [] to clear all). Each object uses Directory API keys, which are camelCase " +
+	"(postalCode, not postal_code): " +
 	"type (required: work, home, other, or custom with customType), streetAddress, extendedAddress, poBox, " +
 	"locality, region, postalCode, country, countryCode, formatted, primary. " +
 	`Example: [{"type":"work","primary":true,"streetAddress":"1 Main St","locality":"London","postalCode":"EC1A 1BB","countryCode":"GB"}].`
@@ -1618,7 +1624,8 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 			DisplayName: "User Profile Data",
 			Description: "A JSON object with any of: given_name, family_name, recovery_email, recovery_phone, " +
 				"department, job_title, cost_center, employee_type, employee_id, manager_email, addresses, custom_schemas. " +
-				"addresses is a JSON array (or a string holding one) that replaces the user's full address list.",
+				"custom_schemas is a JSON object (or a string holding one). addresses is a JSON array (or a string holding one) that replaces the user's full address list; " +
+				"keys inside each address are camelCase Directory API keys (e.g. streetAddress, postalCode).",
 			IsRequired: true,
 			Field:      &config.Field_StringField{},
 		},
@@ -1757,18 +1764,28 @@ func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
 			patch.addresses = addresses
 		}
 	}
-	if raw, ok := profile[argCustomSchemas]; ok {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			return patch, fmt.Errorf("custom_schemas must be a JSON object")
-		}
-		schemas := make(map[string]googleapi.RawMessage, len(m))
-		for k, val := range m {
-			b, err := json.Marshal(val)
-			if err != nil {
-				return patch, fmt.Errorf("invalid custom_schemas value for %q: %w", k, err)
+	if raw, ok := profile[argCustomSchemas]; ok && raw != nil {
+		// Same shapes and blank handling as addresses above: a native object or
+		// a string holding one (update_user_profile's custom_schemas form).
+		var schemas map[string]googleapi.RawMessage
+		switch v := raw.(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				if err := json.Unmarshal([]byte(s), &schemas); err != nil {
+					return patch, fmt.Errorf("invalid custom_schemas JSON: %w", err)
+				}
 			}
-			schemas[k] = b
+		case map[string]any:
+			schemas = make(map[string]googleapi.RawMessage, len(v))
+			for k, val := range v {
+				b, err := json.Marshal(val)
+				if err != nil {
+					return patch, fmt.Errorf("invalid custom_schemas value for %q: %w", k, err)
+				}
+				schemas[k] = b
+			}
+		default:
+			return patch, fmt.Errorf("custom_schemas must be a JSON object or a string holding one")
 		}
 		if len(schemas) > 0 {
 			patch.customSchemas = schemas

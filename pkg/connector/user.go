@@ -374,6 +374,25 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 			}
 		}
 	}
+	if user.Addresses != nil {
+		addresses, err := extractFromInterface[admin.UserAddress](user.Addresses)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract addresses: %w", err)
+		}
+		if len(addresses) > 0 {
+			// Emitted as the JSON string the addresses action argument takes, so
+			// the synced value can be written back verbatim. sourceIsStructured
+			// is dropped because the write side rejects it.
+			for i := range addresses {
+				addresses[i].SourceIsStructured = false
+			}
+			b, err := json.Marshal(addresses)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal addresses: %w", err)
+			}
+			profile[argAddresses] = string(b)
+		}
+	}
 	if user.DeletionTime != "" {
 		resourceOpts = append(resourceOpts, rs.WithResourceStatus(v2.Status_RESOURCE_STATUS_DELETED, ""))
 	}

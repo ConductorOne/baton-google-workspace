@@ -93,7 +93,7 @@ func (c *GoogleWorkspaceClient) RequireUserProvisioning() error {
 const listUsersFields googleapi.Field = "nextPageToken,users(id,primaryEmail,name,thumbnailPhotoUrl," +
 	"archived,suspended,suspensionReason,deletionTime,isEnrolledIn2Sv," +
 	"creationTime,lastLoginTime,orgUnitPath,includeInGlobalAddressList," +
-	"customerId,relations,organizations,customSchemas,posixAccounts,externalIds)"
+	"customerId,relations,organizations,customSchemas,posixAccounts,externalIds,addresses)"
 
 func (c *GoogleWorkspaceClient) ListUsers(ctx context.Context, customerId, domain, pageToken string) (*directoryAdmin.Users, error) {
 	if c.UserService == nil {

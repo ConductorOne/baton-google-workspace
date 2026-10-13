@@ -142,3 +142,31 @@ func TestUserResource_ResourceLevelAttributes(t *testing.T) {
 		}
 	})
 }
+
+// TestUserResource_AddressesRoundTrip checks that the synced addresses value
+// is accepted verbatim by the addresses action argument and reads as unchanged.
+func TestUserResource_AddressesRoundTrip(t *testing.T) {
+	o := &userResourceType{resourceType: resourceTypeUser}
+	current := []directoryAdmin.UserAddress{
+		{Type: "work", Primary: true, StreetAddress: "1 Main St", Locality: "London", CountryCode: "GB",
+			Formatted: "1 Main St\nLondon", SourceIsStructured: true},
+		{Type: "custom", CustomType: "mailing", PostalCode: "EC1A 1BB"},
+	}
+	user := &directoryAdmin.User{Id: "user123", PrimaryEmail: "test@example.com", Name: &directoryAdmin.UserName{FullName: "Test User"}, Addresses: current}
+
+	res, err := o.userResource(context.Background(), user)
+	require.NoError(t, err)
+	synced := res.GetProfile().GetFields()[argAddresses].GetStringValue()
+	require.NotEmpty(t, synced)
+
+	parsed, err := parseAddresses([]byte(synced))
+	require.NoError(t, err)
+	require.False(t, addressesDiffer(current, parsed))
+
+	t.Run("no addresses: key absent", func(t *testing.T) {
+		res, err := o.userResource(context.Background(), &directoryAdmin.User{Id: "user456", PrimaryEmail: "x@example.com", Name: &directoryAdmin.UserName{FullName: "X"}})
+		require.NoError(t, err)
+		_, ok := res.GetProfile().GetFields()[argAddresses]
+		require.False(t, ok)
+	})
+}

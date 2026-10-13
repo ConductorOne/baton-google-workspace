@@ -58,6 +58,7 @@ func TestParseAddresses(t *testing.T) {
 		"custom without type":    `[{"type":"custom"}]`,
 		"unknown snake_case key": `[{"type":"work","postal_code":"EC1A 1BB"}]`,
 		"two primaries":          `[{"type":"work","primary":true},{"type":"home","primary":true}]`,
+		"sourceIsStructured":     `[{"type":"work","sourceIsStructured":true}]`,
 	} {
 		t.Run("rejects "+name, func(t *testing.T) {
 			_, err := parseAddresses([]byte(raw))
