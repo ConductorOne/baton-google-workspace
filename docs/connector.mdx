@@ -60,6 +60,10 @@ The synced user profile exposes the job title under both `title` and `job_title`
 </Note>
 
 <Note>
+The synced user profile includes each user's addresses, including `home` addresses, under the `addresses` key. The value is a JSON string in the same form the `addresses` argument takes, so a push rule can write it back to `update_user` unchanged.
+</Note>
+
+<Note>
 `update_user_profile` and `update_user` never clear an assigned manager, matching the behavior of `update_user_manager`. An empty or invalid `manager_email` is not applied. Unlike other invalid fields, it does not fail the whole call as long as one other provided field is valid.
 
 Both actions return `skipped_fields`, a comma-separated list naming any provided field that was not applied and why. A response of `success: true` means only that the call completed, so check `skipped_fields` to see whether `manager_email` was skipped. `update_user` also returns `updated_fields`, naming what changed. `update_user_profile` does not return that field.
