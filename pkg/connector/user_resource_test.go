@@ -163,6 +163,16 @@ func TestUserResource_AddressesRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, addressesDiffer(current, parsed))
 
+	t.Run("malformed addresses: key skipped, sync continues", func(t *testing.T) {
+		res, err := o.userResource(context.Background(), &directoryAdmin.User{
+			Id: "user789", PrimaryEmail: "y@example.com", Name: &directoryAdmin.UserName{FullName: "Y"},
+			Addresses: "not an address list",
+		})
+		require.NoError(t, err)
+		_, ok := res.GetProfile().GetFields()[argAddresses]
+		require.False(t, ok)
+	})
+
 	t.Run("no addresses: key absent", func(t *testing.T) {
 		res, err := o.userResource(context.Background(), &directoryAdmin.User{Id: "user456", PrimaryEmail: "x@example.com", Name: &directoryAdmin.UserName{FullName: "X"}})
 		require.NoError(t, err)
