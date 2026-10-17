@@ -44,6 +44,13 @@ func testExternalIDs(u *directoryAdmin.User) []*directoryAdmin.UserExternalId {
 	return ids
 }
 
+// testAddresses extracts a typed Addresses slice from a user's interface{}
+// field for the mock server's JSON responses; parse errors are treated as empty.
+func testAddresses(u *directoryAdmin.User) []*directoryAdmin.UserAddress {
+	addrs, _ := extractFromInterface[*directoryAdmin.UserAddress](u.Addresses)
+	return addrs
+}
+
 func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 	mux := http.NewServeMux()
 
@@ -87,6 +94,7 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 				Organizations: extractOrganizations(u),
 				ExternalIDs:   testExternalIDs(u),
 				Relations:     extractRelations(u),
+				Addresses:     testAddresses(u),
 			})
 		case http.MethodPatch, http.MethodPut:
 			state.patchCount++
@@ -126,6 +134,16 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 			if body.Relations != nil {
 				u.Relations = body.Relations
 			}
+			// Same Patch-can't-shrink-to-empty quirk as ExternalIds above.
+			if body.Addresses != nil {
+				emptyArray := false
+				if arr, ok := body.Addresses.([]interface{}); ok && len(arr) == 0 {
+					emptyArray = true
+				}
+				if !emptyArray || r.Method == http.MethodPut {
+					u.Addresses = body.Addresses
+				}
+			}
 			_ = json.NewEncoder(w).Encode(safeUserResponse{
 				Id:            u.Id,
 				PrimaryEmail:  u.PrimaryEmail,
@@ -135,6 +153,7 @@ func newTestProfileServer(state *testProfileServerState) *httptest.Server {
 				Organizations: extractOrganizations(u),
 				ExternalIDs:   testExternalIDs(u),
 				Relations:     extractRelations(u),
+				Addresses:     testAddresses(u),
 			})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
