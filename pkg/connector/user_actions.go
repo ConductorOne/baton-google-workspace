@@ -1427,6 +1427,78 @@ func buildManagerRelations(relations []*admin.UserRelation, managerEmail string)
 	return updated
 }
 
+// applyEmployeeInfoToNewUser writes the Employee Information attributes from an
+// account profile onto a not-yet-created admin.User: department, job title and
+// cost center onto a new primary Organizations entry, employee type onto that
+// same entry's Description, employee ID as the "organization" ExternalIds entry,
+// and manager email as the "manager" Relations entry. The same builders the
+// update path uses shape each field, so create and update produce identical
+// wire values - here they always start from an empty current state, since a
+// brand-new account has nothing to merge with.
+//
+// Empty values are dropped rather than sent: on the update path an empty string
+// means "clear this", but there is nothing on an account that does not exist yet
+// to clear, and sending one anyway would create a phantom empty organization
+// that reads back on the next sync.
+//
+// Every one of these attributes is optional enrichment, so none of them fails
+// the create: an unusable manager_email is dropped and named in the returned
+// slice for the caller to log, the same way a wrong-typed value is. Failing
+// instead would mean an HRIS-sourced profile carrying a manager's display name,
+// or a manager who has not been provisioned yet, blocks the joiner's account
+// entirely - a far worse outcome than an account that lands without its manager
+// relation, which the mover path (update_user) then fills in.
+func applyEmployeeInfoToNewUser(user *admin.User, patch userProfilePatch) []string {
+	for _, dest := range []*(*string){
+		&patch.department, &patch.jobTitle, &patch.costCenter,
+		&patch.employeeType, &patch.employeeID, &patch.managerEmail,
+	} {
+		// Whitespace-only counts as empty. HRIS- and CSV-sourced account profiles
+		// routinely carry "  " for a field nobody filled in; treating that as a
+		// real value would persist blank padding onto the new account and - for
+		// manager_email, which is validated below - fail the entire create on a
+		// profile that simply carries no manager.
+		if *dest != nil && strings.TrimSpace(**dest) == "" {
+			*dest = nil
+		}
+	}
+
+	var dropped []string
+
+	if patch.managerEmail != nil {
+		// Store the parsed address rather than the raw input: mail.ParseAddress
+		// also accepts the display-name form ("Jane Doe <jane@example.com>"), but
+		// Google resolves relations[].value only as a bare email, so the raw
+		// string would be accepted here, match no user, and read back verbatim on
+		// the next sync.
+		addr, err := mail.ParseAddress(strings.TrimSpace(*patch.managerEmail))
+		switch {
+		case err != nil:
+			dropped = append(dropped,
+				fmt.Sprintf("%s (not a valid email address: %q)", argManagerEmail, *patch.managerEmail))
+			patch.managerEmail = nil
+		default:
+			user.Relations = buildManagerRelations(nil, addr.Address)
+		}
+	}
+
+	// Both builders report whether they produced anything; assign only when they
+	// did, since Organizations and ExternalIds are interface{}-typed fields that
+	// Google's generated marshaller serializes whenever they are non-nil - even
+	// an empty slice - which would put "organizations":[] on the wire for every
+	// account created without these attributes.
+	if orgs, changed := buildUpdatedOrganizations(nil, patch); changed {
+		user.Organizations = orgs
+	}
+	if patch.employeeID != nil {
+		if ids, changed := buildUpdatedExternalIDs(nil, *patch.employeeID); changed {
+			user.ExternalIds = ids
+		}
+	}
+
+	return dropped
+}
+
 const (
 	actionUpdateUser = "update_user"
 	argUserProfile   = "user_profile"
@@ -1480,8 +1552,9 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 		{
 			Name:        argUserID,
 			DisplayName: displayUser,
-			Description: "The user to update.",
-			IsRequired:  true,
+			Description: "The user to update. Accepts a user resource reference, or - for callers that " +
+				"do not have one - the user's primary email or Google user ID as a plain string.",
+			IsRequired: true,
 			Field: &config.Field_ResourceIdField{
 				ResourceIdField: &config.ResourceIdField{
 					Rules: &config.ResourceIDRules{
@@ -1532,11 +1605,16 @@ var updateUserGlobalActionSchema = &v2.BatonActionSchema{
 func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	userRef, ok := actions.GetResourceIDArg(args, argUserID)
-	if !ok || userRef.GetResource() == "" {
-		return nil, nil, uhttp.WrapErrors(codes.InvalidArgument, "google-workspace: update_user: user_id is required")
+	// Accepts either shape: the resource reference the UI's picker and C1 push
+	// rules send, or a plain string. The plain-string path matters because
+	// Google's userKey accepts a primary email or the Google user ID as well as
+	// the synced resource ID, and an automation author who has one of those
+	// (rather than a ConductorOne-internal resource ID) previously had the call
+	// rejected here before it ever reached the Directory API.
+	userId, err := extractUserId(args, l, actionUpdateUser)
+	if err != nil {
+		return nil, nil, err
 	}
-	userId := userRef.GetResource()
 
 	profileJSON, err := actions.RequireStringArg(args, argUserProfile)
 	if err != nil {
@@ -1584,32 +1662,126 @@ func (c *GoogleWorkspace) updateUserActionHandler(ctx context.Context, args *str
 	return result, nil, nil
 }
 
-// profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)
-// to a userProfilePatch. Only keys present in the object are applied.
-func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
-	var patch userProfilePatch
-	for _, f := range []struct {
-		dest *(*string)
-		keys []string
-	}{
-		{&patch.givenName, []string{argGivenName, "givenName"}},
-		{&patch.familyName, []string{argFamilyName, "familyName"}},
-		{&patch.recoveryEmail, []string{argRecoveryEmail, "recoveryEmail"}},
-		{&patch.recoveryPhone, []string{argRecoveryPhone, "recoveryPhone"}},
+// profileFieldBinding binds one userProfilePatch field to the profile-object
+// keys accepted for it (the canonical snake_case name first, then camelCase and
+// legacy aliases).
+type profileFieldBinding struct {
+	dest *(*string)
+	keys []string
+}
+
+// employeeInfoJSONFields returns the bindings for the six Employee Information
+// attributes. Shared by profileFromJSON (the update path) and the account
+// -creation path in user.go so the two can never drift on which profile keys
+// they accept: a joiner and a subsequent mover both read the same C1 account
+// profile object, and a key that only one side understood would silently apply
+// on create and be dropped on update (or vice versa).
+func employeeInfoJSONFields(patch *userProfilePatch) []profileFieldBinding {
+	return []profileFieldBinding{
 		{&patch.department, []string{argDepartment}},
 		{&patch.jobTitle, []string{argJobTitle, "jobTitle", profileKeyTitle}},
 		{&patch.costCenter, []string{argCostCenter, "costCenter"}},
 		{&patch.employeeType, []string{argEmployeeType, "employeeType"}},
 		{&patch.employeeID, []string{argEmployeeID, "employeeId"}},
 		{&patch.managerEmail, []string{argManagerEmail, "managerEmail"}},
-	} {
+	}
+}
+
+// applyProfileFields reads each binding's keys out of profile, leaving the
+// destination nil when none of them are present.
+func applyProfileFields(profile map[string]any, fields []profileFieldBinding) error {
+	for _, f := range fields {
 		v, ok, err := stringFromJSON(profile, f.keys...)
 		if err != nil {
-			return patch, err
+			return err
 		}
 		if ok {
 			*f.dest = &v
 		}
+	}
+	return nil
+}
+
+// stringFromJSONLenient is stringFromJSON's skip-and-continue counterpart: a
+// wrong-typed key is described in the returned slice instead of aborting, and
+// the remaining aliases are still tried, so a numeric "job_title" does not mask
+// a perfectly good "title". Nothing is reported once a value resolves - the
+// alias did its job and there is nothing for an operator to act on.
+func stringFromJSONLenient(profile map[string]any, keys ...string) (string, bool, []string) {
+	var dropped []string
+	for _, k := range keys {
+		v, ok := profile[k]
+		if !ok || v == nil {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf("%s (expected a JSON string, got %s)", k, jsonTypeName(v)))
+			continue
+		}
+		return s, true, nil
+	}
+	return "", false, dropped
+}
+
+// jsonTypeName names a decoded JSON value's type the way the profile author
+// wrote it, rather than the way Go decoded it - structpb decodes every number
+// to float64, and telling someone their employee_id is a "float64" when they
+// wrote 12345 is not actionable.
+func jsonTypeName(v any) string {
+	switch v.(type) {
+	case float64, int, int64, json.Number:
+		return "a number"
+	case bool:
+		return "a boolean"
+	case map[string]any:
+		return "an object"
+	case []any:
+		return "an array"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+// employeeInfoFromProfile maps a ConductorOne account profile to a patch holding
+// only the six Employee Information attributes, returning a description of any
+// attribute it had to drop. Deliberately narrower than profileFromJSON: recovery
+// email/phone and custom schemas stay action-only (out of scope for account
+// provisioning), so reading them here would quietly widen what a create through
+// the provisioning path can write.
+//
+// Unlike profileFromJSON, a wrong-typed value is dropped rather than rejected.
+// All six attributes are optional enrichment on a brand-new account, so none of
+// them may fail the insert: an HRIS-sourced profile routinely carries a numeric
+// employee_id or cost_center, and rejecting one would leave the joiner with no
+// account at all. The update path keeps the strict behaviour - there the account
+// already exists, so failing loudly costs nothing.
+func employeeInfoFromProfile(profile map[string]any) (userProfilePatch, []string) {
+	var patch userProfilePatch
+	var dropped []string
+	for _, f := range employeeInfoJSONFields(&patch) {
+		v, ok, skipped := stringFromJSONLenient(profile, f.keys...)
+		dropped = append(dropped, skipped...)
+		if ok {
+			*f.dest = &v
+		}
+	}
+	return patch, dropped
+}
+
+// profileFromJSON maps a user_profile JSON object (snake_case or camelCase keys)
+// to a userProfilePatch. Only keys present in the object are applied.
+func profileFromJSON(profile map[string]any) (userProfilePatch, error) {
+	var patch userProfilePatch
+	fields := []profileFieldBinding{
+		{&patch.givenName, []string{argGivenName, "givenName"}},
+		{&patch.familyName, []string{argFamilyName, "familyName"}},
+		{&patch.recoveryEmail, []string{argRecoveryEmail, "recoveryEmail"}},
+		{&patch.recoveryPhone, []string{argRecoveryPhone, "recoveryPhone"}},
+	}
+	fields = append(fields, employeeInfoJSONFields(&patch)...)
+	if err := applyProfileFields(profile, fields); err != nil {
+		return patch, err
 	}
 	if raw, ok := profile[argCustomSchemas]; ok {
 		m, ok := raw.(map[string]any)
