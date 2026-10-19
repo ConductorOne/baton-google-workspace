@@ -302,6 +302,48 @@ func TestUpdateUserGlobal_CustomSchemasViaProfile(t *testing.T) {
 	require.Contains(t, string(raw), "emea")
 }
 
+func TestUpdateUserGlobal_CustomSchemasShapes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		profile   string
+		wantErr   bool
+		wantPatch bool
+	}{
+		"string holding an object":        {profile: `{"custom_schemas":"{\"EmployeeInfo\":{\"region\":\"emea\"}}"}`, wantPatch: true},
+		"blank string with another field": {profile: `{"job_title":"AE","custom_schemas":""}`},
+		"null with another field":         {profile: `{"job_title":"AE","custom_schemas":null}`},
+		"array":                           {profile: `{"custom_schemas":[1]}`, wantErr: true},
+		"string holding an array":         {profile: `{"custom_schemas":"[1]"}`, wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := &testProfileServerState{
+				users: map[string]*directoryAdmin.User{
+					"user123": {Id: "user123", PrimaryEmail: "t@example.com"},
+				},
+			}
+			server := newTestProfileServer(state)
+			defer server.Close()
+
+			dir := newTestDirectoryService(t, server.URL, server.Client())
+			c := newTestGlobalConnector(t, dir)
+
+			args := &structpb.Struct{Fields: map[string]*structpb.Value{
+				argUserID:      resourceIDArg("user", "user123"),
+				"user_profile": strArg(tc.profile),
+			}}
+
+			_, _, err := c.updateUserActionHandler(context.Background(), args)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Equal(t, 0, state.patchCount)
+				return
+			}
+			require.NoError(t, err)
+			_, sent := state.lastPatchBody.CustomSchemas["EmployeeInfo"]
+			require.Equal(t, tc.wantPatch, sent)
+		})
+	}
+}
+
 func TestUpdateUserGlobal_MissingUserProfile(t *testing.T) {
 	state := &testProfileServerState{
 		users: map[string]*directoryAdmin.User{"user123": {Id: "user123"}},

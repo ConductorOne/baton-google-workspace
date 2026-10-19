@@ -173,6 +173,28 @@ func userProfile(user *admin.User) map[string]interface{} {
 	return profile
 }
 
+// syncedAddresses renders a user's addresses as the JSON string the addresses
+// action argument takes, so the synced value can be written back verbatim.
+// sourceIsStructured is dropped because the write side rejects it. Returns ""
+// when the user has no addresses.
+func syncedAddresses(raw interface{}) (string, error) {
+	addresses, err := extractFromInterface[admin.UserAddress](raw)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract addresses: %w", err)
+	}
+	if len(addresses) == 0 {
+		return "", nil
+	}
+	for i := range addresses {
+		addresses[i].SourceIsStructured = false
+	}
+	b, err := json.Marshal(addresses)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal addresses: %w", err)
+	}
+	return string(b), nil
+}
+
 func extractManagerEmail(u *admin.User) string {
 	for _, rel := range extractRelations(u) {
 		if rel.Type == relTypeManager {
@@ -295,6 +317,8 @@ func (o *userResourceType) Get(ctx context.Context, resourceId *v2.ResourceId, p
 }
 
 func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (*v2.Resource, error) {
+	l := ctxzap.Extract(ctx)
+
 	profile := userProfile(user)
 	additionalLogins := mapset.NewSet[string]()
 	employeeIDs := mapset.NewSet[string]()
@@ -372,6 +396,16 @@ func (o *userResourceType) userResource(ctx context.Context, user *admin.User) (
 					additionalLogins.Add(id.Value)
 				}
 			}
+		}
+	}
+	if user.Addresses != nil {
+		// Optional profile data: a malformed value is logged and skipped rather
+		// than failing the user's sync.
+		if v, err := syncedAddresses(user.Addresses); err != nil {
+			l.Debug("google-workspace: skipping addresses in synced profile",
+				zap.String("user_id", user.Id), zap.Error(err))
+		} else if v != "" {
+			profile[argAddresses] = v
 		}
 	}
 	if user.DeletionTime != "" {

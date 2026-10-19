@@ -31,6 +31,7 @@ type safeUserResponse struct {
 	Organizations []*directoryAdmin.UserOrganization `json:"organizations,omitempty"`
 	ExternalIDs   []*directoryAdmin.UserExternalId   `json:"externalIds,omitempty"`
 	Relations     []*directoryAdmin.UserRelation     `json:"relations,omitempty"`
+	Addresses     []*directoryAdmin.UserAddress      `json:"addresses,omitempty"`
 }
 
 // Minimal fake for Reports Activities.List + Directory lookups used by admin_event_feed.
