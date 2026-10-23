@@ -236,6 +236,27 @@ func TestDisableEnableUser_IdempotentAndPayload(t *testing.T) {
 	}
 }
 
+func TestUpdateUserStatus_IsIdempotentForSuspendedUser(t *testing.T) {
+	state := &testServerState{users: map[string]*testUser{"alice": {Suspended: true, PrimaryEmail: "alice@example.com"}}}
+	server := newTestServer(state)
+	defer server.Close()
+
+	dir := newTestDirectoryService(t, server.URL, server.Client())
+	c := newTestConnector()
+	primeServiceCache(c, dir, nil)
+
+	args := &structpb.Struct{Fields: map[string]*structpb.Value{
+		argResourceID:  {Kind: &structpb.Value_StringValue{StringValue: "alice"}},
+		"is_suspended": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+	}}
+	if _, _, err := c.updateUserStatus(context.Background(), args); err != nil {
+		t.Fatalf("updateUserStatus: %v", err)
+	}
+	if state.putCount != 0 {
+		t.Fatalf("expected no PUT for an already suspended user, got %d", state.putCount)
+	}
+}
+
 func TestChangePrimaryEmail(t *testing.T) {
 	state := &testServerState{users: map[string]*testUser{"bob": {Suspended: false, PrimaryEmail: "bob@old.example.com"}}}
 	server := newTestServer(state)
