@@ -31,6 +31,11 @@ The connector also supports group creation (via the `create_group` connector act
 
 Continuous sync streams sign-in activity, app usage, and admin audit events between full syncs, so last-login data and membership changes stay current. It requires the `admin.reports.audit.readonly` scope.
 
+For third-party OAuth apps, each app usage event comes from the user's most recent authorization of the app in the Google Workspace token audit log. Along with the app and the user, the connector collects:
+
+- The authorization's OAuth scopes, the event type (such as `authorize`), and the client type (such as `WEB` or `NATIVE_DESKTOP`).
+- The IP address the authorization came from, with its country, subdivision (state or province), and autonomous system number (ASN) when Google reports them.
+
 ### Connector actions
 
 Connector actions are custom capabilities that extend C1 automations with app-specific operations. You can use connector actions in the [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) automation step.
