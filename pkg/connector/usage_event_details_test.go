@@ -44,9 +44,14 @@ func TestNetworkOriginFromActivity(t *testing.T) {
 			name: "invalid values dropped",
 			activity: &reportsAdmin.Activity{
 				IpAddress:   "203.0.113.7:443",
-				NetworkInfo: &reportsAdmin.ActivityNetworkInfo{IpAsn: []int64{0, -1, 1 << 33, 13335}, RegionCode: "us", SubdivisionCode: "OR"},
+				NetworkInfo: &reportsAdmin.ActivityNetworkInfo{IpAsn: []int64{0, -1, 1 << 33, 13335}, RegionCode: "USA", SubdivisionCode: "OR"},
 			},
 			want: &v2.NetworkOrigin{Asns: []uint32{13335}},
+		},
+		{
+			name:     "lowercase codes upper-cased",
+			activity: &reportsAdmin.Activity{NetworkInfo: &reportsAdmin.ActivityNetworkInfo{RegionCode: "us", SubdivisionCode: "us-or"}},
+			want:     &v2.NetworkOrigin{CountryCode: "US", SubdivisionCode: "US-OR"},
 		},
 		{
 			name: "only invalid values",
@@ -120,6 +125,18 @@ func TestOAuthUsageFromEvent(t *testing.T) {
 			want: &v2.OAuthUsage{Scopes: []string{"openid"}},
 		},
 		{
+			name: "values at the byte limits kept",
+			event: &reportsAdmin.ActivityEvents{Name: strings.Repeat("a", maxOAuthStringBytes), Parameters: []*reportsAdmin.ActivityEventsParameters{
+				{Name: "client_type", Value: strings.Repeat("b", maxOAuthStringBytes)},
+				scope(strings.Repeat("c", maxOAuthScopeBytes)),
+			}},
+			want: &v2.OAuthUsage{
+				SourceEventName: strings.Repeat("a", maxOAuthStringBytes),
+				Scopes:          []string{strings.Repeat("c", maxOAuthScopeBytes)},
+				ClientType:      strings.Repeat("b", maxOAuthStringBytes),
+			},
+		},
+		{
 			name: "scopes capped",
 			event: &reportsAdmin.ActivityEvents{Name: "authorize", Parameters: []*reportsAdmin.ActivityEventsParameters{
 				scope(slices.Repeat([]string{"openid"}, maxOAuthScopes+10)...),
@@ -165,7 +182,7 @@ func TestUsageEventFeed_EmitsNetworkAndOAuthDetails(t *testing.T) {
 		)
 		activity.Events[0].Name = "authorize"
 		activity.IpAddress = "203.0.113.7"
-		activity.NetworkInfo = &reportsAdmin.ActivityNetworkInfo{IpAsn: []int64{16509}, RegionCode: "US", SubdivisionCode: "us-or"}
+		activity.NetworkInfo = &reportsAdmin.ActivityNetworkInfo{IpAsn: []int64{16509}, RegionCode: "US", SubdivisionCode: "OR"}
 		_ = json.NewEncoder(w).Encode(&reportsAdmin.Activities{Items: []*reportsAdmin.Activity{activity}})
 	})
 	server := httptest.NewServer(mux)

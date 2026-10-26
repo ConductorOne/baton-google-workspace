@@ -4,6 +4,7 @@ import (
 	"math"
 	"net"
 	"regexp"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
@@ -37,16 +38,18 @@ func networkOriginFromActivity(activity *reportsAdmin.Activity) *v2.NetworkOrigi
 		origin.IpAddress = activity.IpAddress
 	}
 	if info := activity.NetworkInfo; info != nil {
-		if countryCodeRegex.MatchString(info.RegionCode) {
-			origin.CountryCode = info.RegionCode
+		if code := strings.ToUpper(info.RegionCode); countryCodeRegex.MatchString(code) {
+			origin.CountryCode = code
 		}
-		if subdivisionCodeRegex.MatchString(info.SubdivisionCode) {
-			origin.SubdivisionCode = info.SubdivisionCode
+		if code := strings.ToUpper(info.SubdivisionCode); subdivisionCodeRegex.MatchString(code) {
+			origin.SubdivisionCode = code
 		}
 		for _, asn := range info.IpAsn {
 			if len(origin.Asns) == maxNetworkASNs {
 				break
 			}
+			// Stricter than the SDK, which bounds only the count: this stops a negative int64
+			// from wrapping into a bogus uint32, and AS 0 is reserved (RFC 7607).
 			if asn > 0 && asn <= math.MaxUint32 {
 				origin.Asns = append(origin.Asns, uint32(asn))
 			}
@@ -58,6 +61,8 @@ func networkOriginFromActivity(activity *reportsAdmin.Activity) *v2.NetworkOrigi
 	return origin
 }
 
+// oauthUsageFromEvent always returns non-nil: the event is OAuth consent activity even when
+// every value in it is dropped as unusable.
 func oauthUsageFromEvent(event *reportsAdmin.ActivityEvents) *v2.OAuthUsage {
 	usage := &v2.OAuthUsage{Action: oauthActionsByEventName[event.Name]}
 	if len(event.Name) <= maxOAuthStringBytes {
