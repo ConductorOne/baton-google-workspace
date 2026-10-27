@@ -189,6 +189,8 @@ func (f *usageEventFeed) lookupAppLogin(ctx context.Context, client *gwclient.Go
 					Status:      &v2.Status{Status: v2.Status_RESOURCE_STATUS_ENABLED},
 					Annotations: annotations.New(userTrait),
 				},
+				Network: networkOriginFromActivity(best.activity),
+				Oauth:   oauthUsageFromEvent(best.event),
 			},
 		},
 	}, nil
