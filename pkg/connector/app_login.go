@@ -320,7 +320,7 @@ func buildSAMLProfileMapOrFallback(ctx context.Context, client *gwclient.GoogleW
 	profileMap, err := client.BuildSAMLProfileMap(ctx, customerID)
 	if err != nil {
 		if !isCloudIdentityAPIDisabledError(err) {
-			return nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
+			return nil, err
 		}
 		ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
 			"SAML app IDs will use display names. Enable the Cloud Identity API "+
@@ -331,10 +331,9 @@ func buildSAMLProfileMapOrFallback(ctx context.Context, client *gwclient.GoogleW
 	return profileMap, nil
 }
 
-// loadCloudIdentitySAMLProfileMap resolves the Cloud Identity SAML profile map on the first
-// applicationResource.List() page of a sync, applying the isCloudIdentityAPIDisabledError
-// fallback, and caches the result in session so later pages of the same sync reuse it without
-// re-calling Cloud Identity or re-running the fallback logic.
+// loadCloudIdentitySAMLProfileMap resolves the Cloud Identity SAML profile map through
+// buildSAMLProfileMapOrFallback on the first applicationResource.List() page of a sync, and caches
+// it in session so later pages of the same sync reuse it without re-calling Cloud Identity.
 func loadCloudIdentitySAMLProfileMap(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, customerID string, isFirstPage bool) (map[string]string, error) {
 	if !isFirstPage {
 		m, err := session.GetAllJSON[string](ctx, ss, samlProfileMapNamespace)

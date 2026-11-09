@@ -164,13 +164,14 @@ func TestLoadSAMLProfileMapForEventFeed(t *testing.T) {
 	})
 
 	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
-		status := status
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			client := &gwclient.GoogleWorkspaceClient{
 				CloudIdentityService: newCloudIdentityServiceReturning(t, status, `{"error":{"code":`+fmt.Sprint(status)+`,"message":"injected failure"}}`),
 			}
-			if _, err := loadSAMLProfileMap(ctx, client, "customer"); err == nil {
-				t.Fatalf("status %d: expected an error, got nil", status)
+			_, err := loadSAMLProfileMap(ctx, client, "customer")
+			var ge *googleapi.Error
+			if !errors.As(err, &ge) || ge.Code != status {
+				t.Fatalf("status %d: expected the Cloud Identity error to be returned, got %v", status, err)
 			}
 		})
 	}
