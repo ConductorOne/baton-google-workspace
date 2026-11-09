@@ -50,7 +50,6 @@ var (
 	appLoginDirectoryUserNamespace = sessions.WithPrefix("app_login_directory_user")
 	appLoginEmittedAppNamespace    = sessions.WithPrefix("app_login_emitted_app")
 	samlProfileMapNamespace        = sessions.WithPrefix("saml_profile_map")
-	samlProfileMapLoadedNamespace  = sessions.WithPrefix("saml_profile_map_loaded")
 )
 
 func appLoginLoginsNamespace(appID string) sessions.SessionStoreOption {
@@ -307,19 +306,29 @@ func discoverSAMLApps(profileMap map[string]string) map[string]string {
 	return apps
 }
 
-// fetchSAMLProfileMap calls Cloud Identity to build a displayName → profile.Name map.
-// Returns nil without error if the service is unavailable or the call fails (soft failure).
-func fetchSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) map[string]string {
+// buildSAMLProfileMapOrFallback calls Cloud Identity to build a displayName → profile.Name map.
+// It returns a nil map without error only when SAML apps are always resolved by display name for
+// this customer: the inboundsso scope was not granted (CloudIdentityService is nil), or the Cloud
+// Identity API is disabled in the customer's GCP project (a permanent 403 SERVICE_DISABLED). Any
+// other failure (transient 5xx/429, network, or a 403 that is NOT "API disabled") is returned:
+// falling back to a nil map would flip the IDs of SAML apps from their stable profile name to a
+// display-name-derived ID, which matches no synced app resource.
+func buildSAMLProfileMapOrFallback(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
 	if client.CloudIdentityService == nil {
-		return nil
+		return nil, nil
 	}
-	m, err := client.BuildSAMLProfileMap(ctx, customerID)
+	profileMap, err := client.BuildSAMLProfileMap(ctx, customerID)
 	if err != nil {
-		ctxzap.Extract(ctx).Info("google-workspace: failed to load SAML profiles from Cloud Identity; SAML app IDs will use display names. "+
-			"Grant the 'https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly' scope to fix this.", zap.Error(err))
-		return nil
+		if !isCloudIdentityAPIDisabledError(err) {
+			return nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
+		}
+		ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
+			"SAML app IDs will use display names. Enable the Cloud Identity API "+
+			"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
+			zap.Error(err))
+		return nil, nil
 	}
-	return m
+	return profileMap, nil
 }
 
 // loadCloudIdentitySAMLProfileMap resolves the Cloud Identity SAML profile map on the first
@@ -335,28 +344,9 @@ func loadCloudIdentitySAMLProfileMap(ctx context.Context, ss sessions.SessionSto
 		return m, nil
 	}
 
-	profileMap, err := client.BuildSAMLProfileMap(ctx, customerID)
+	profileMap, err := buildSAMLProfileMapOrFallback(ctx, client, customerID)
 	if err != nil {
-		// Exception: when the Cloud Identity API is not enabled in the customer's GCP project,
-		// the service still initialises (the scope was granted) but every call returns a
-		// permanent 403 SERVICE_DISABLED. That is a stable feature-unavailable condition, not a
-		// transient blip — such a customer's SAML apps have ALWAYS been resolved by display
-		// name, so there is no profile-name state to flip and nothing to prune. Treat it like a
-		// missing scope: warn and fall back to display-name IDs instead of failing the whole
-		// sync. Any other failure (transient 5xx/429, network, or a 403 that is NOT "API
-		// disabled") still propagates: falling back to a nil profile map would drop SAML apps
-		// discovered only via Cloud Identity AND flip the IDs of SAML apps found via login
-		// events from their stable profile name to a display-name-derived ID, causing c1 to
-		// prune the old resource and all of its access grants on a transient blip.
-		if isCloudIdentityAPIDisabledError(err) {
-			ctxzap.Extract(ctx).Info("google-workspace: Cloud Identity API is not enabled for this project; "+
-				"SAML app IDs will use display names. Enable the Cloud Identity API "+
-				"(cloudidentity.googleapis.com) for this project to use stable SAML profile IDs.",
-				zap.Error(err))
-			profileMap = nil
-		} else {
-			return nil, fmt.Errorf("google-workspace-connector: failed to load SAML profiles from Cloud Identity: %w", err)
-		}
+		return nil, err
 	}
 
 	if len(profileMap) > 0 {
@@ -367,39 +357,10 @@ func loadCloudIdentitySAMLProfileMap(ctx context.Context, ss sessions.SessionSto
 	return profileMap, nil
 }
 
-// loadSAMLProfileMap returns the SAML profile map, using the session store as a cache
-// so Cloud Identity is queried at most once per sync.
+// loadSAMLProfileMap returns the SAML profile map for the SAML event feed. It is fetched on every
+// ListEvents call: the SDK does not put a session store on the event feed context.
 func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
-	ss, _ := ctx.Value(sessions.SessionStoreKey{}).(sessions.SessionStore)
-	if ss == nil {
-		return fetchSAMLProfileMap(ctx, client, customerID), nil
-	}
-	return loadSAMLProfileMapFromSession(ctx, ss, client, customerID)
-}
-
-func loadSAMLProfileMapFromSession(ctx context.Context, ss sessions.SessionStore, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
-	_, loaded, err := session.GetJSON[string](ctx, ss, "done", samlProfileMapLoadedNamespace)
-	if err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to check saml profile map loaded flag: %w", err)
-	}
-	if loaded {
-		m, err := session.GetAllJSON[string](ctx, ss, samlProfileMapNamespace)
-		if err != nil {
-			return nil, fmt.Errorf("google-workspace-connector: failed to read saml profile map from session: %w", err)
-		}
-		return m, nil
-	}
-
-	profileMap := fetchSAMLProfileMap(ctx, client, customerID)
-	if len(profileMap) > 0 {
-		if err := session.SetManyJSON(ctx, ss, profileMap, samlProfileMapNamespace); err != nil {
-			return nil, fmt.Errorf("google-workspace-connector: failed to store saml profile map in session: %w", err)
-		}
-	}
-	if err := session.SetJSON(ctx, ss, "done", "true", samlProfileMapLoadedNamespace); err != nil {
-		return nil, fmt.Errorf("google-workspace-connector: failed to mark saml profile map as loaded: %w", err)
-	}
-	return profileMap, nil
+	return buildSAMLProfileMapOrFallback(ctx, client, customerID)
 }
 
 // isAppEmitted reports whether appID has already been returned as a resource by a prior
