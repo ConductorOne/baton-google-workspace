@@ -186,7 +186,7 @@ Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise appli
 | API | Service ID | Required? | Used for |
 | :--- | :--- | :--- | :--- |
 | Admin SDK API | `admin.googleapis.com` | Required | Syncing users, groups, roles, and audit events, and running provisioning and data transfer actions |
-| Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. |
+| Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. Enabling it later changes every SAML app's ID, so C1 replaces those resources. |
 | Groups Settings API | `groupssettings.googleapis.com` | Optional | The `modify_group_settings` connector action |
 
 <Note>
@@ -428,7 +428,7 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `admin.directory.user.readonly` | Read and sync users |
 | `admin.reports.audit.readonly` | Sync usage and admin events for continuous sync. Also required to sync enterprise applications |
 | `admin.directory.user.security` | Discover OAuth apps through per-user token listing. Also required to sync enterprise applications, and permits three actions that revoke a user's access. See the warning below |
-| `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
+| `cloud-identity.inboundsso.readonly` | Optional. Resolves SAML app IDs to stable identifiers; without it they fall back to display names. Granting it later changes every SAML app's ID, so C1 replaces those resources. Once granted, other Cloud Identity errors fail app sync and the SAML feed |
 </Tab>
 
 <Tab title="Read/write">
@@ -450,7 +450,7 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `admin.directory.group` | Write. Provision groups |
 | `admin.directory.user.security` | Write. Discover OAuth apps, sync enterprise applications, and run actions that remove a user's access, such as sign out and deleting auth tokens and app passwords |
 | `apps.groups.settings` | Write. Edit group settings. Requires the Groups Settings API |
-| `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
+| `cloud-identity.inboundsso.readonly` | Optional. Resolves SAML app IDs to stable identifiers; without it they fall back to display names. Granting it later changes every SAML app's ID, so C1 replaces those resources. Once granted, other Cloud Identity errors fail app sync and the SAML feed |
 </Tab>
 </Tabs>
 
