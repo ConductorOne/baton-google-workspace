@@ -411,7 +411,7 @@ Click **AUTHORIZE**.
 
 Choose one of the two sets below. Read-only access lets C1 sync access data. Read/write access lets C1 sync access data and provision access.
 
-Paste the full list. If a sync scope is missing, the connector skips that resource type and the sync still succeeds: users and roles each need their scope, and groups need both the group and group member scopes. Removing one of these scopes after a sync can make C1 remove the users, groups or roles it already synced.
+Paste the full list. If a scope is missing, the connector skips the resource types that need it and the sync still succeeds. Users need the user scope, roles the role scope, groups both group scopes, and enterprise applications the user, user security and reports audit scopes. Removing a scope after a sync can make C1 remove what it had already synced for those types.
 
 <Tabs>
 <Tab title="Read-only">
