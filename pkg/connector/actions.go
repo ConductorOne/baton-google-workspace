@@ -287,6 +287,18 @@ func (c *GoogleWorkspace) updateUserStatus(ctx context.Context, args *structpb.S
 		return nil, nil, err
 	}
 
+	user, err := withRateLimitWaitValue(ctx, func() (*directoryAdmin.User, error) {
+		return client.GetUserForProvisioning(ctx, userId)
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("google-workspace: failed to get user %s for status update: %w", userId, err)
+	}
+	if user.Suspended == isSuspended {
+		return &structpb.Struct{Fields: map[string]*structpb.Value{
+			fieldSuccess: {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		}}, nil, nil
+	}
+
 	// update user.isSuspended state
 	err = withRateLimitWait(ctx, func() error {
 		_, err := client.UpdateUser(ctx, userId, &directoryAdmin.User{
