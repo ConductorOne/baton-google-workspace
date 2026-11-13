@@ -411,8 +411,6 @@ Click **AUTHORIZE**.
 
 Choose one of the two sets below. Read-only access lets C1 sync access data. Read/write access lets C1 sync access data and provision access.
 
-Paste the full list. Without `admin.directory.domain.readonly` the connection fails. The optional `cloud-identity.inboundsso.readonly` only changes how SAML app IDs are built (see its row below). If another sync scope is missing, the connector skips the resource types that need it and the sync still succeeds: users need the user scope, roles the role scope, groups both group scopes, and enterprise applications the user, user security and reports audit scopes. Removing one of these scopes after a sync can make C1 remove what it had already synced for those types. A missing write scope only makes the matching provisioning or action fail when it runs.
-
 <Tabs>
 <Tab title="Read-only">
 Paste this comma-separated list into the **OAuth Scopes** field:
@@ -455,6 +453,17 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
 </Tab>
 </Tabs>
+
+<Note>
+Without `admin.directory.domain.readonly`, the connection fails. If another sync scope is missing, the sync succeeds but skips the resource types that need it. Each read-only scope can be replaced by its write variant from the Read/write set:
+
+- Users: `admin.directory.user.readonly` or `admin.directory.user`
+- Roles: `admin.directory.rolemanagement.readonly` or `admin.directory.rolemanagement`
+- Groups: `admin.directory.group.readonly` or `admin.directory.group`, and `admin.directory.group.member.readonly` or `admin.directory.group.member`
+- Enterprise applications: the users scope, `admin.directory.user.security`, and `admin.reports.audit.readonly`
+
+Without `admin.reports.audit.readonly`, the usage and admin event feeds also fail. A missing write scope only makes the matching provisioning task or action fail.
+</Note>
 
 <Warning>
 The write scopes let C1 provision and deprovision access. **If you do not want C1 to perform these tasks, use the read-only scope set.** Read-only still syncs users, groups, roles, and enterprise applications, so it is sufficient when you use Google Workspace as your [directory](#set-google-workspace-as-your-c1-directory) and run access reviews.
