@@ -190,3 +190,22 @@ func TestLoadSAMLProfileMapForEventFeed(t *testing.T) {
 		}
 	})
 }
+
+// TestSAMLEventFeedFailsOnCloudIdentityError guards the feed entry point: a transient Cloud
+// Identity error must fail ListEvents with no events, instead of emitting events under
+// display-name app IDs.
+func TestSAMLEventFeedFailsOnCloudIdentityError(t *testing.T) {
+	client := &gwclient.GoogleWorkspaceClient{
+		CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusServiceUnavailable, `{"error":{"code":503,"message":"injected failure"}}`),
+	}
+	feed := newSamlEventFeed(client, "customer", "example.com")
+
+	events, _, _, err := feed.ListEvents(context.Background(), nil, nil)
+	var ge *googleapi.Error
+	if !errors.As(err, &ge) || ge.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected the Cloud Identity 503 to be returned, got %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events, got %d", len(events))
+	}
+}
