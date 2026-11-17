@@ -356,12 +356,6 @@ func loadCloudIdentitySAMLProfileMap(ctx context.Context, ss sessions.SessionSto
 	return profileMap, nil
 }
 
-// loadSAMLProfileMap returns the SAML profile map for the SAML event feed. It is fetched on every
-// ListEvents call: the SDK does not put a session store on the event feed context.
-func loadSAMLProfileMap(ctx context.Context, client *gwclient.GoogleWorkspaceClient, customerID string) (map[string]string, error) {
-	return buildSAMLProfileMapOrFallback(ctx, client, customerID)
-}
-
 // isAppEmitted reports whether appID has already been returned as a resource by a prior
 // applicationResource.List() call. Read-only: the caller accumulates newly-emitted app IDs
 // locally and persists them in a single batched write only once the whole List() call has

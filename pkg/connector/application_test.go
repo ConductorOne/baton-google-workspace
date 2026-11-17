@@ -139,15 +139,15 @@ func TestBuildSAMLProfileMapOtherErrorsNotClassified(t *testing.T) {
 	}
 }
 
-// TestLoadSAMLProfileMapForEventFeed pins the SAML event feed to the same fallback rule as app
+// TestBuildSAMLProfileMapOrFallback pins the SAML event feed to the same fallback rule as app
 // sync: display-name IDs only when the scope is missing or the API is disabled. Any other Cloud
 // Identity failure must fail the feed call, so its events are retried instead of being emitted
 // under IDs that match no synced app.
-func TestLoadSAMLProfileMapForEventFeed(t *testing.T) {
+func TestBuildSAMLProfileMapOrFallback(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("no Cloud Identity service", func(t *testing.T) {
-		m, err := loadSAMLProfileMap(ctx, &gwclient.GoogleWorkspaceClient{}, "customer")
+		m, err := buildSAMLProfileMapOrFallback(ctx, &gwclient.GoogleWorkspaceClient{}, "customer")
 		if err != nil || m != nil {
 			t.Fatalf("got map %v, err %v; want nil, nil", m, err)
 		}
@@ -157,7 +157,7 @@ func TestLoadSAMLProfileMapForEventFeed(t *testing.T) {
 		client := &gwclient.GoogleWorkspaceClient{
 			CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusForbidden, cloudIdentityDisabledBody),
 		}
-		m, err := loadSAMLProfileMap(ctx, client, "customer")
+		m, err := buildSAMLProfileMapOrFallback(ctx, client, "customer")
 		if err != nil || m != nil {
 			t.Fatalf("got map %v, err %v; want nil, nil", m, err)
 		}
@@ -168,7 +168,7 @@ func TestLoadSAMLProfileMapForEventFeed(t *testing.T) {
 			client := &gwclient.GoogleWorkspaceClient{
 				CloudIdentityService: newCloudIdentityServiceReturning(t, status, `{"error":{"code":`+fmt.Sprint(status)+`,"message":"injected failure"}}`),
 			}
-			_, err := loadSAMLProfileMap(ctx, client, "customer")
+			_, err := buildSAMLProfileMapOrFallback(ctx, client, "customer")
 			var ge *googleapi.Error
 			if !errors.As(err, &ge) || ge.Code != status {
 				t.Fatalf("status %d: expected the Cloud Identity error to be returned, got %v", status, err)
@@ -181,7 +181,7 @@ func TestLoadSAMLProfileMapForEventFeed(t *testing.T) {
 			CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusOK,
 				`{"inboundSamlSsoProfiles":[{"name":"inboundSamlSsoProfiles/abc123","displayName":"My SAML App"}]}`),
 		}
-		m, err := loadSAMLProfileMap(ctx, client, "customer")
+		m, err := buildSAMLProfileMapOrFallback(ctx, client, "customer")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
