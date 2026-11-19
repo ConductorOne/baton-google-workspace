@@ -18,12 +18,17 @@ import (
 func guardTestJSON(t *testing.T, tokenURI, credentialType string) []byte {
 	t.Helper()
 	value := map[string]string{
-		"type":           credentialType,
-		"project_id":     "test-project",
-		"private_key_id": "test-key",
-		"private_key":    testPrivateKey(t),
-		"client_email":   "test@test-project.iam.gserviceaccount.com",
-		"token_uri":      tokenURI,
+		"type":                        credentialType,
+		"project_id":                  "test-project",
+		"private_key_id":              "test-key",
+		"private_key":                 testPrivateKey(t),
+		"client_email":                "test@test-project.iam.gserviceaccount.com",
+		"client_id":                   "123456789012345678901",
+		"auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
+		"auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+		"client_x509_cert_url":        "https://www.googleapis.com/robot/v1/metadata/x509/test",
+		"universe_domain":             "googleapis.com",
+		"token_uri":                   tokenURI,
 	}
 	data, err := json.Marshal(value)
 	if err != nil {

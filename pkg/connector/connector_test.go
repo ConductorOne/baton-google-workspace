@@ -41,12 +41,17 @@ func testCredentials(t *testing.T) []byte {
 	t.Helper()
 
 	creds := map[string]string{
-		"type":           "service_account",
-		"project_id":     "test-project",
-		"private_key_id": "test-key",
-		"client_email":   "svc@test-project.iam.gserviceaccount.com",
-		"private_key":    testPrivateKey(t),
-		"token_uri":      googlecredentialguard.TokenURL,
+		"type":                        "service_account",
+		"project_id":                  "test-project",
+		"private_key_id":              "test-key",
+		"client_email":                "svc@test-project.iam.gserviceaccount.com",
+		"private_key":                 testPrivateKey(t),
+		"client_id":                   "123456789012345678901",
+		"auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
+		"auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+		"client_x509_cert_url":        "https://www.googleapis.com/robot/v1/metadata/x509/test",
+		"universe_domain":             "googleapis.com",
+		"token_uri":                   googlecredentialguard.TokenURL,
 	}
 	rv, err := json.Marshal(creds)
 	if err != nil {
