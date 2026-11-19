@@ -7,12 +7,16 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	googlecredentialguard "github.com/conductorone/google-credential-guard"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -33,20 +37,56 @@ func testPrivateKey(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-func testCredentials(t *testing.T, tokenURL string) []byte {
+func testCredentials(t *testing.T) []byte {
 	t.Helper()
 
 	creds := map[string]string{
-		"type":         "service_account",
-		"client_email": "svc@example.iam.gserviceaccount.com",
-		"private_key":  testPrivateKey(t),
-		"token_uri":    tokenURL,
+		"type":                        "service_account",
+		"project_id":                  "test-project",
+		"private_key_id":              "test-key",
+		"client_email":                "svc@test-project.iam.gserviceaccount.com",
+		"private_key":                 testPrivateKey(t),
+		"client_id":                   "123456789012345678901",
+		"auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
+		"auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+		"client_x509_cert_url":        "https://www.googleapis.com/robot/v1/metadata/x509/test",
+		"universe_domain":             "googleapis.com",
+		"token_uri":                   googlecredentialguard.TokenURL,
 	}
 	rv, err := json.Marshal(creds)
 	if err != nil {
 		t.Fatalf("failed to marshal credentials: %v", err)
 	}
 	return rv
+}
+
+type tokenRedirectTransport struct {
+	target *url.URL
+	base   http.RoundTripper
+}
+
+func (tr tokenRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.String() != googlecredentialguard.TokenURL {
+		return nil, fmt.Errorf("unexpected token endpoint: %s", req.URL)
+	}
+	copyReq := req.Clone(req.Context())
+	target := *tr.target
+	copyReq.URL = &target
+	copyReq.Host = target.Host
+	return tr.base.RoundTrip(copyReq)
+}
+
+func useTestTokenServer(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := newGoogleHTTPClient
+	newGoogleHTTPClient = func(ctx context.Context, options ...uhttp.Option) (*http.Client, error) {
+		return &http.Client{Transport: tokenRedirectTransport{target: target, base: server.Client().Transport}}, nil
+	}
+	t.Cleanup(func() { newGoogleHTTPClient = previous })
 }
 
 func newTokenStatusServer(status int) (*httptest.Server, *int) {
@@ -63,11 +103,12 @@ func newTokenStatusServer(status int) (*httptest.Server, *int) {
 func TestResourceSyncersReturnFailingSyncersForNonAuthorizationInitError(t *testing.T) {
 	tokenServer, calls := newTokenStatusServer(http.StatusServiceUnavailable)
 	defer tokenServer.Close()
+	useTestTokenServer(t, tokenServer)
 
 	c := &GoogleWorkspace{
 		customerID:         "customer",
 		administratorEmail: "admin@example.com",
-		credentials:        testCredentials(t, tokenServer.URL),
+		credentials:        testCredentials(t),
 		serviceCache:       map[string]any{},
 	}
 
@@ -106,11 +147,12 @@ func TestResourceSyncersReturnFailingSyncersForNonAuthorizationInitError(t *test
 func TestGetClientDoesNotCacheNonAuthorizationInitError(t *testing.T) {
 	tokenServer, calls := newTokenStatusServer(http.StatusServiceUnavailable)
 	defer tokenServer.Close()
+	useTestTokenServer(t, tokenServer)
 
 	c := &GoogleWorkspace{
 		customerID:         "customer",
 		administratorEmail: "admin@example.com",
-		credentials:        testCredentials(t, tokenServer.URL),
+		credentials:        testCredentials(t),
 		serviceCache:       map[string]any{},
 	}
 
@@ -128,11 +170,12 @@ func TestGetClientDoesNotCacheNonAuthorizationInitError(t *testing.T) {
 func TestGetClientAllowsAuthorizationInitErrors(t *testing.T) {
 	tokenServer, _ := newTokenStatusServer(http.StatusUnauthorized)
 	defer tokenServer.Close()
+	useTestTokenServer(t, tokenServer)
 
 	c := &GoogleWorkspace{
 		customerID:         "customer",
 		administratorEmail: "admin@example.com",
-		credentials:        testCredentials(t, tokenServer.URL),
+		credentials:        testCredentials(t),
 		serviceCache:       map[string]any{},
 	}
 
@@ -157,11 +200,12 @@ func TestGetClientAllowsAuthorizationInitErrors(t *testing.T) {
 func TestGetClientLogsSkippedServicesAtDebugLevel(t *testing.T) {
 	tokenServer, _ := newTokenStatusServer(http.StatusUnauthorized)
 	defer tokenServer.Close()
+	useTestTokenServer(t, tokenServer)
 
 	c := &GoogleWorkspace{
 		customerID:         "customer",
 		administratorEmail: "admin@example.com",
-		credentials:        testCredentials(t, tokenServer.URL),
+		credentials:        testCredentials(t),
 		serviceCache:       map[string]any{},
 	}
 

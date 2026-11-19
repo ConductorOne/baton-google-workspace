@@ -103,6 +103,12 @@ const mtlsBasePath = "https://cloudidentity.mtls.googleapis.com/"
 
 // OAuth2 scopes used by this API.
 const (
+	// See and edit allowlisted domains in your Cloud Identity Organization
+	CloudIdentityAllowlisteddomainsScope = "https://www.googleapis.com/auth/cloud-identity.allowlisteddomains"
+
+	// See allowlisted domains in your Cloud Identity Organization
+	CloudIdentityAllowlisteddomainsReadonlyScope = "https://www.googleapis.com/auth/cloud-identity.allowlisteddomains.readonly"
+
 	// Private Service: https://www.googleapis.com/auth/cloud-identity.devices
 	CloudIdentityDevicesScope = "https://www.googleapis.com/auth/cloud-identity.devices"
 
@@ -143,6 +149,8 @@ const (
 // NewService creates a new Service.
 func NewService(ctx context.Context, opts ...option.ClientOption) (*Service, error) {
 	scopesOption := internaloption.WithDefaultScopes(
+		"https://www.googleapis.com/auth/cloud-identity.allowlisteddomains",
+		"https://www.googleapis.com/auth/cloud-identity.allowlisteddomains.readonly",
 		"https://www.googleapis.com/auth/cloud-identity.devices",
 		"https://www.googleapis.com/auth/cloud-identity.devices.lookup",
 		"https://www.googleapis.com/auth/cloud-identity.devices.readonly",
@@ -165,6 +173,7 @@ func NewService(ctx context.Context, opts ...option.ClientOption) (*Service, err
 		return nil, err
 	}
 	s := &Service{client: client, BasePath: basePath, logger: internaloption.GetLogger(opts)}
+	s.AllowlistedDomains = NewAllowlistedDomainsService(s)
 	s.Customers = NewCustomersService(s)
 	s.Devices = NewDevicesService(s)
 	s.Groups = NewGroupsService(s)
@@ -196,6 +205,8 @@ type Service struct {
 	BasePath  string // API endpoint base URL
 	UserAgent string // optional additional User-Agent fragment
 
+	AllowlistedDomains *AllowlistedDomainsService
+
 	Customers *CustomersService
 
 	Devices *DevicesService
@@ -216,6 +227,15 @@ func (s *Service) userAgent() string {
 		return googleapi.UserAgent
 	}
 	return googleapi.UserAgent + " " + s.UserAgent
+}
+
+func NewAllowlistedDomainsService(s *Service) *AllowlistedDomainsService {
+	rs := &AllowlistedDomainsService{s: s}
+	return rs
+}
+
+type AllowlistedDomainsService struct {
+	s *Service
 }
 
 func NewCustomersService(s *Service) *CustomersService {
@@ -388,6 +408,36 @@ type AddIdpCredentialRequest struct {
 
 func (s AddIdpCredentialRequest) MarshalJSON() ([]byte, error) {
 	type NoMethod AddIdpCredentialRequest
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// AllowlistedDomain: This resource object defines a domain that has been
+// designated as allowlisted.
+type AllowlistedDomain struct {
+	// Domain: Required. Immutable. Name of the domain that is in the allowlist.
+	// e.g. "google.com"
+	Domain string `json:"domain,omitempty"`
+	// Name: Output only. Identifier. Resource name of the domain in the allowlist
+	// e.g. "allowlistedDomains/0184mhaj1smlusv"
+	Name string `json:"name,omitempty"`
+
+	// ServerResponse contains the HTTP response code and headers from the server.
+	googleapi.ServerResponse `json:"-"`
+	// ForceSendFields is a list of field names (e.g. "Domain") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Domain") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s AllowlistedDomain) MarshalJSON() ([]byte, error) {
+	type NoMethod AllowlistedDomain
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -693,6 +743,35 @@ type ExpiryDetail struct {
 
 func (s ExpiryDetail) MarshalJSON() ([]byte, error) {
 	type NoMethod ExpiryDetail
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// ExternalId: Represents an external identifier that links a Group in the
+// Cloud Identity Groups API with a corresponding entity in an external
+// directory or identity provider.
+type ExternalId struct {
+	// Id: Required. The unique identifier assigned by the external identity
+	// provider. The API does not enforce unique IDs across entities, but clients
+	// **must** ensure IDs are unique within their namespace.
+	Id string `json:"id,omitempty"`
+	// Namespace: Required. The namespace in which the entity exists. The only
+	// supported namespace is `system/external`.
+	Namespace string `json:"namespace,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Id") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Id") to include in API requests
+	// with the JSON null value. By default, fields with empty values are omitted
+	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ExternalId) MarshalJSON() ([]byte, error) {
+	type NoMethod ExternalId
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -1406,6 +1485,7 @@ type GoogleAppsCloudidentityDevicesV1Device struct {
 	//   "MAC_OS" - Device is a MacOS device.
 	//   "LINUX" - Device is a Linux device.
 	//   "CHROME_OS" - Device is a ChromeOS device.
+	//   "GOOGLEBOOK" - Device is a Googlebook device.
 	DeviceType string `json:"deviceType,omitempty"`
 	// EnabledDeveloperOptions: Output only. Whether developer options is enabled
 	// on device.
@@ -1896,6 +1976,11 @@ type Group struct {
 	// DynamicGroupMetadata: Optional. Dynamic group metadata like queries and
 	// status.
 	DynamicGroupMetadata *DynamicGroupMetadata `json:"dynamicGroupMetadata,omitempty"`
+	// ExternalIds: Optional. External identifiers associated with the `Group`.
+	// Allows external identity providers and directory sync tools link their
+	// native unique identifiers with this group. The only supported namespace is
+	// `system/external`.
+	ExternalIds []*ExternalId `json:"externalIds,omitempty"`
 	// GroupKey: Required. The `EntityKey` of the `Group`.
 	GroupKey *EntityKey `json:"groupKey,omitempty"`
 	// Labels: Required. One or more label entries that apply to the Group. Labels
@@ -2187,6 +2272,36 @@ type IsInvitableUserResponse struct {
 
 func (s IsInvitableUserResponse) MarshalJSON() ([]byte, error) {
 	type NoMethod IsInvitableUserResponse
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// ListAllowlistedDomainsResponse: Response message for
+// AllowlistedDomainsService.ListAllowlistedDomains.
+type ListAllowlistedDomainsResponse struct {
+	// AllowlistedDomains: Contains the list of domains in the allowlist. There is
+	// no defined ordering of domains within a result.
+	AllowlistedDomains []*AllowlistedDomain `json:"allowlistedDomains,omitempty"`
+	// NextPageToken: Contains the next page token if the result is not exhaustive.
+	// If there are no more results, this token is empty.
+	NextPageToken string `json:"nextPageToken,omitempty"`
+
+	// ServerResponse contains the HTTP response code and headers from the server.
+	googleapi.ServerResponse `json:"-"`
+	// ForceSendFields is a list of field names (e.g. "AllowlistedDomains") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "AllowlistedDomains") to include
+	// in API requests with the JSON null value. By default, fields with empty
+	// values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ListAllowlistedDomainsResponse) MarshalJSON() ([]byte, error) {
+	type NoMethod ListAllowlistedDomainsResponse
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -2586,6 +2701,9 @@ type Membership struct {
 	//   "GROUP" - Represents group type.
 	//   "SHARED_DRIVE" - Represents Shared drive.
 	//   "CBCM_BROWSER" - Represents a CBCM-managed Chrome Browser type.
+	//   "CHROME_OS_DEVICE" - Represents a ChromeOS-managed ChromeOS device type.
+	//   "PERSONAL_AGENT" - Represents a Personal Agent type.
+	//   "COWORKER_AGENT" - Represents a Coworker Agent type.
 	//   "OTHER" - Represents other type.
 	Type string `json:"type,omitempty"`
 	// UpdateTime: Output only. The time when the `Membership` was last updated.
@@ -2995,9 +3113,10 @@ type PolicyQuery struct {
 	// applies to are represented by a clause like so: entity.groups.exists(group,
 	// group.group_id == groupId('{groupId}')) The Licenses the Policy applies to
 	// are represented by a clause like so: entity.licenses.exists(license, license
-	// in ['/product/{productId}/sku/{skuId}']) The above clauses can be present in
-	// any combination, and used in conjunction with the &&, || and ! operators.
-	// The org_unit and group fields below are helper fields that contain the
+	// in ['/product/{productId}/sku/{skuId}']) **Note:** The licenses clause is
+	// not supported in mutate endpoints. The above clauses can be present in any
+	// combination, and used in conjunction with the &&, || and ! operators. The
+	// org_unit and group fields below are helper fields that contain the
 	// corresponding value(s) as the query to make the query easier to use.
 	Query string `json:"query,omitempty"`
 	// SortOrder: Output only. The decimal sort order of this PolicyQuery. The
@@ -3352,7 +3471,7 @@ type SendUserInvitationRequest struct {
 
 // Setting: Setting
 type Setting struct {
-	// Type: Required. Immutable. The type of the Setting. .
+	// Type: Required. Immutable. The type of the Setting.
 	Type string `json:"type,omitempty"`
 	// Value: Required. The value of the Setting.
 	Value googleapi.RawMessage `json:"value,omitempty"`
@@ -3598,6 +3717,459 @@ type UserInvitation struct {
 func (s UserInvitation) MarshalJSON() ([]byte, error) {
 	type NoMethod UserInvitation
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+type AllowlistedDomainsCreateCall struct {
+	s                 *Service
+	allowlisteddomain *AllowlistedDomain
+	urlParams_        gensupport.URLParams
+	ctx_              context.Context
+	header_           http.Header
+}
+
+// Create: Adds a domain to the allowlist.
+func (r *AllowlistedDomainsService) Create(allowlisteddomain *AllowlistedDomain) *AllowlistedDomainsCreateCall {
+	c := &AllowlistedDomainsCreateCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.allowlisteddomain = allowlisteddomain
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *AllowlistedDomainsCreateCall) Fields(s ...googleapi.Field) *AllowlistedDomainsCreateCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *AllowlistedDomainsCreateCall) Context(ctx context.Context) *AllowlistedDomainsCreateCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *AllowlistedDomainsCreateCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *AllowlistedDomainsCreateCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.allowlisteddomain)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/allowlistedDomains")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.create", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.allowlistedDomains.create" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *AllowlistedDomainsCreateCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.create", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type AllowlistedDomainsDeleteCall struct {
+	s          *Service
+	name       string
+	urlParams_ gensupport.URLParams
+	ctx_       context.Context
+	header_    http.Header
+}
+
+// Delete: Removes a domain from the allowlist.
+//
+//   - name: Specifies the resource name (https://google.aip.dev/122) of the
+//     domain to delete.
+func (r *AllowlistedDomainsService) Delete(name string) *AllowlistedDomainsDeleteCall {
+	c := &AllowlistedDomainsDeleteCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *AllowlistedDomainsDeleteCall) Fields(s ...googleapi.Field) *AllowlistedDomainsDeleteCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *AllowlistedDomainsDeleteCall) Context(ctx context.Context) *AllowlistedDomainsDeleteCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *AllowlistedDomainsDeleteCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *AllowlistedDomainsDeleteCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("DELETE", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.delete", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.allowlistedDomains.delete" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *AllowlistedDomainsDeleteCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.delete", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type AllowlistedDomainsGetCall struct {
+	s            *Service
+	name         string
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// Get: Retrieves a specific domain from the allowlist.
+//
+//   - name: Specifies the resource name (https://google.aip.dev/122) of the
+//     domain to retrieve.
+func (r *AllowlistedDomainsService) Get(name string) *AllowlistedDomainsGetCall {
+	c := &AllowlistedDomainsGetCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *AllowlistedDomainsGetCall) Fields(s ...googleapi.Field) *AllowlistedDomainsGetCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *AllowlistedDomainsGetCall) IfNoneMatch(entityTag string) *AllowlistedDomainsGetCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *AllowlistedDomainsGetCall) Context(ctx context.Context) *AllowlistedDomainsGetCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *AllowlistedDomainsGetCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *AllowlistedDomainsGetCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.get", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.allowlistedDomains.get" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *AllowlistedDomain.ServerResponse.Header or (if a response was returned at
+// all) in error.(*googleapi.Error).Header. Use googleapi.IsNotModified to
+// check whether the returned error was because http.StatusNotModified was
+// returned.
+func (c *AllowlistedDomainsGetCall) Do(opts ...googleapi.CallOption) (*AllowlistedDomain, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &AllowlistedDomain{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.get", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type AllowlistedDomainsListCall struct {
+	s            *Service
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// List: Lists the domains in the allowlist.
+func (r *AllowlistedDomainsService) List() *AllowlistedDomainsListCall {
+	c := &AllowlistedDomainsListCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	return c
+}
+
+// Filter sets the optional parameter "filter": Provides an optional filter for
+// list results. Currently, only exact matches on the domain are supported,
+// such as "domain = 'google.com'", with no composite conditions.
+func (c *AllowlistedDomainsListCall) Filter(filter string) *AllowlistedDomainsListCall {
+	c.urlParams_.Set("filter", filter)
+	return c
+}
+
+// PageSize sets the optional parameter "pageSize": Specifies the requested
+// page size. If unspecified, the service returns at most 5000 domains. The
+// maximum value is 5000; values above 5000 coerce to 5000. The limits can
+// change over time.
+func (c *AllowlistedDomainsListCall) PageSize(pageSize int64) *AllowlistedDomainsListCall {
+	c.urlParams_.Set("pageSize", fmt.Sprint(pageSize))
+	return c
+}
+
+// PageToken sets the optional parameter "pageToken": Identifies a token from a
+// previous page of results, if any.
+func (c *AllowlistedDomainsListCall) PageToken(pageToken string) *AllowlistedDomainsListCall {
+	c.urlParams_.Set("pageToken", pageToken)
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *AllowlistedDomainsListCall) Fields(s ...googleapi.Field) *AllowlistedDomainsListCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *AllowlistedDomainsListCall) IfNoneMatch(entityTag string) *AllowlistedDomainsListCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *AllowlistedDomainsListCall) Context(ctx context.Context) *AllowlistedDomainsListCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *AllowlistedDomainsListCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *AllowlistedDomainsListCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/allowlistedDomains")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.list", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.allowlistedDomains.list" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *ListAllowlistedDomainsResponse.ServerResponse.Header or (if a response was
+// returned at all) in error.(*googleapi.Error).Header. Use
+// googleapi.IsNotModified to check whether the returned error was because
+// http.StatusNotModified was returned.
+func (c *AllowlistedDomainsListCall) Do(opts ...googleapi.CallOption) (*ListAllowlistedDomainsResponse, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &ListAllowlistedDomainsResponse{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.allowlistedDomains.list", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+// Pages invokes f for each page of results.
+// A non-nil error returned from f will halt the iteration.
+// The provided context supersedes any context provided to the Context method.
+func (c *AllowlistedDomainsListCall) Pages(ctx context.Context, f func(*ListAllowlistedDomainsResponse) error) error {
+	c.ctx_ = ctx
+	defer c.PageToken(c.urlParams_.Get("pageToken"))
+	for {
+		x, err := c.Do()
+		if err != nil {
+			return err
+		}
+		if err := f(x); err != nil {
+			return err
+		}
+		if x.NextPageToken == "" {
+			return nil
+		}
+		c.PageToken(x.NextPageToken)
+	}
 }
 
 type CustomersUserinvitationsCancelCall struct {
@@ -7348,9 +7920,11 @@ func (c *GroupsSearchCall) PageToken(pageToken string) *GroupsSearchCall {
 
 // Query sets the optional parameter "query": Required. The search query. *
 // Must be specified in Common Expression Language
-// (https://opensource.google/projects/cel). * Must contain equality operators
-// on the parent, e.g. `parent == 'customers/{customer_id}'`. The `customer_id`
-// must begin with "C" (for example, 'C046psxkn'). [Find your customer ID.]
+// (https://opensource.google/projects/cel). See CEL Introduction
+// (https://github.com/google/cel-spec/blob/master/doc/intro.md) for CEL syntax
+// usage and examples. * Must contain equality operators on the parent, e.g.
+// `parent == 'customers/{customer_id}'`. The `customer_id` must begin with "C"
+// (for example, 'C046psxkn'). [Find your customer ID.]
 // (https://support.google.com/cloudidentity/answer/10070793) * Can contain
 // optional inclusion operators on `labels` such as
 // `'cloudidentity.googleapis.com/groups.discussion_forum' in labels`). * Can
@@ -7360,7 +7934,13 @@ func (c *GroupsSearchCall) PageToken(pageToken string) *GroupsSearchCall {
 // `group_key.contains('dev'), group_key == 'dev@examplepetstore.com'` * Can
 // contain optional `startsWith/contains/equality` operators on `display_name`,
 // such as `display_name.startsWith('dev')` , `display_name.contains('dev')`,
-// `display_name == 'dev'`
+// `display_name == 'dev'` Examples: * Search for all discussion forums under a
+// customer: `parent == 'customers/C046psxkn' &&
+// 'cloudidentity.googleapis.com/groups.discussion_forum' in labels` * Search
+// for groups with key starting with 'sales': `parent == 'customers/C046psxkn'
+// && group_key.startsWith('sales')` * Search for groups with display name
+// containing 'test': `parent == 'customers/C046psxkn' &&
+// display_name.contains('test')`
 func (c *GroupsSearchCall) Query(query string) *GroupsSearchCall {
 	c.urlParams_.Set("query", query)
 	return c
@@ -8597,7 +9177,9 @@ type GroupsMembershipsSearchDirectGroupsCall struct {
 	header_      http.Header
 }
 
-// SearchDirectGroups: Searches direct groups of a member.
+// SearchDirectGroups: Searches direct groups of a member. Groups for which the
+// actor does not have the permission to view memberships are silently filtered
+// out.
 //
 //   - parent: Resource name
 //     (https://cloud.google.com/apis/design/resource_names) of the group to
@@ -11315,6 +11897,199 @@ func (c *InboundSsoAssignmentsPatchCall) Do(opts ...googleapi.CallOption) (*Oper
 	return ret, nil
 }
 
+type PoliciesCreateCall struct {
+	s          *Service
+	policy     *Policy
+	urlParams_ gensupport.URLParams
+	ctx_       context.Context
+	header_    http.Header
+}
+
+// Create: Create a policy.
+func (r *PoliciesService) Create(policy *Policy) *PoliciesCreateCall {
+	c := &PoliciesCreateCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.policy = policy
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *PoliciesCreateCall) Fields(s ...googleapi.Field) *PoliciesCreateCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *PoliciesCreateCall) Context(ctx context.Context) *PoliciesCreateCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *PoliciesCreateCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *PoliciesCreateCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.policy)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/policies")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("POST", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.policies.create", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.policies.create" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *PoliciesCreateCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.policies.create", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type PoliciesDeleteCall struct {
+	s          *Service
+	name       string
+	urlParams_ gensupport.URLParams
+	ctx_       context.Context
+	header_    http.Header
+}
+
+// Delete: Delete a policy.
+//
+// - name: The name of the policy to delete. Format: `policies/{policy}`.
+func (r *PoliciesService) Delete(name string) *PoliciesDeleteCall {
+	c := &PoliciesDeleteCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *PoliciesDeleteCall) Fields(s ...googleapi.Field) *PoliciesDeleteCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *PoliciesDeleteCall) Context(ctx context.Context) *PoliciesDeleteCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *PoliciesDeleteCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *PoliciesDeleteCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("DELETE", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.policies.delete", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.policies.delete" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *PoliciesDeleteCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.policies.delete", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
 type PoliciesGetCall struct {
 	s            *Service
 	name         string
@@ -11439,18 +12214,20 @@ func (r *PoliciesService) List() *PoliciesListCall {
 }
 
 // Filter sets the optional parameter "filter": A CEL expression for filtering
-// the results. Policies can be filtered by application with this expression:
-// setting.type.matches('^settings/gmail\\..*$') Policies can be filtered by
-// setting type with this expression:
-// setting.type.matches('^.*\\.service_status$') A maximum of one of the above
-// setting.type clauses can be used. Policies can be filtered by customer with
-// this expression: customer == "customers/{customer}" Where `customer` is the
-// `id` from the Admin SDK `Customer` resource
+// the results. Policies can be filtered using the expression in the following
+// ways: - Filter by application:
+// `setting.type.matches('^settings/gmail\\..*$')` - Filter by setting type:
+// `setting.type.matches('^.*\\.service_status$')` - Filter by customer:
+// `customer == "customers/{customer}" Where `customer` is the `id` from the
+// Admin SDK `Customer` resource
 // (https://developers.google.com/admin-sdk/directory/reference/rest/v1/customers).
 // You may use `customers/my_customer` to specify your own organization. When
-// no customer is mentioned it will be default to customers/my_customer. A
-// maximum of one customer clause can be used. The above clauses can only be
-// combined together in a single filter expression with the `&&` operator.
+// no `customer` is mentioned it will be default to `customers/my_customer`.
+// You may only filter on policies for a single customer at a time. The above
+// clauses can be combined together in a single filter expression with the `&&`
+// and `||` operators, like in the following example: `customer ==
+// "customers/my_customer" && ( setting.type.matches('^settings/gmail\\..*$')
+// || setting.type.matches('^.*\\.service_status$') )`.
 func (c *PoliciesListCall) Filter(filter string) *PoliciesListCall {
 	c.urlParams_.Set("filter", filter)
 	return c
@@ -11458,8 +12235,8 @@ func (c *PoliciesListCall) Filter(filter string) *PoliciesListCall {
 
 // PageSize sets the optional parameter "pageSize": The maximum number of
 // results to return. The service can return fewer than this number. If omitted
-// or set to 0, the default is 50 results per page. The maximum allowed value
-// is 100. `page_size` values greater than 100 default to 100.
+// or set to `0`, the default is `50` results per page. The maximum allowed
+// value is `100`. `page_size` values greater than `100` default to `100`.
 func (c *PoliciesListCall) PageSize(pageSize int64) *PoliciesListCall {
 	c.urlParams_.Set("pageSize", fmt.Sprint(pageSize))
 	return c
@@ -11582,4 +12359,109 @@ func (c *PoliciesListCall) Pages(ctx context.Context, f func(*ListPoliciesRespon
 		}
 		c.PageToken(x.NextPageToken)
 	}
+}
+
+type PoliciesPatchCall struct {
+	s          *Service
+	name       string
+	policy     *Policy
+	urlParams_ gensupport.URLParams
+	ctx_       context.Context
+	header_    http.Header
+}
+
+// Patch: Update a policy.
+//
+//   - name: Output only. Identifier. The resource name
+//     (https://cloud.google.com/apis/design/resource_names) of the Policy.
+//     Format: policies/{policy}.
+func (r *PoliciesService) Patch(name string, policy *Policy) *PoliciesPatchCall {
+	c := &PoliciesPatchCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.name = name
+	c.policy = policy
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *PoliciesPatchCall) Fields(s ...googleapi.Field) *PoliciesPatchCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *PoliciesPatchCall) Context(ctx context.Context) *PoliciesPatchCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *PoliciesPatchCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *PoliciesPatchCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "application/json", c.header_)
+	body, err := googleapi.WithoutDataWrapper.JSONBuffer(c.policy)
+	if err != nil {
+		return nil, err
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "v1/{+name}")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("PATCH", urls, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"name": c.name,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "cloudidentity.policies.patch", "request", internallog.HTTPRequest(req, body.Bytes()))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "cloudidentity.policies.patch" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *Operation.ServerResponse.Header or (if a response was returned at all) in
+// error.(*googleapi.Error).Header. Use googleapi.IsNotModified to check
+// whether the returned error was because http.StatusNotModified was returned.
+func (c *PoliciesPatchCall) Do(opts ...googleapi.CallOption) (*Operation, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &Operation{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "cloudidentity.policies.patch", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
 }

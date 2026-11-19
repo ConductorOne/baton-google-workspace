@@ -20,10 +20,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	googlecredentialguard "github.com/conductorone/google-credential-guard"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	datatransferAdmin "google.golang.org/api/admin/datatransfer/v1"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
 	reportsAdmin "google.golang.org/api/admin/reports/v1"
@@ -64,6 +64,10 @@ type GoogleWorkspace struct {
 }
 
 type newService[T any] func(ctx context.Context, opts ...option.ClientOption) (*T, error)
+
+// newGoogleHTTPClient is replaceable by package tests so they can route the
+// pinned Google token endpoint to a local HTTP server.
+var newGoogleHTTPClient = uhttp.NewClient
 
 // isScopeUnauthorized reports whether an OAuth token-fetch error means the requested
 // scope is not authorized for this service account, so the dependent service should be
@@ -113,12 +117,16 @@ func oauthErrorCode(oe *oauth2.RetrieveError) string {
 
 func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte, email string, newService newService[T], scopes ...string) (*T, error) {
 	l := ctxzap.Extract(ctx)
-	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, l))
+	credential, err := googlecredentialguard.ParseServiceAccountJSON(credentials)
+	if err != nil {
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "invalid service-account credentials", err)
+	}
+	httpClient, err := newGoogleHTTPClient(ctx, uhttp.WithLogger(true, l))
 	if err != nil {
 		return nil, uhttp.WrapErrors(codes.Internal, "failed to create HTTP client", err)
 	}
 
-	config, err := google.JWTConfigFromJSON(credentials, scopes...)
+	config, err := credential.JWTConfig(scopes...)
 	if err != nil {
 		return nil, uhttp.WrapErrors(codes.InvalidArgument, "failed to parse JWT config from credentials", err)
 	}
@@ -202,10 +210,14 @@ func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOp
 
 // NewConnector creates a new Google Workspace connector instance (internal constructor).
 func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) {
+	credential, err := googlecredentialguard.ParseServiceAccountJSON(config.Credentials)
+	if err != nil {
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "invalid service-account credentials", err)
+	}
 	rv := &GoogleWorkspace{
 		customerID:         config.CustomerID,
 		administratorEmail: config.AdministratorEmail,
-		credentials:        config.Credentials,
+		credentials:        credential.CanonicalJSON(),
 		serviceCache:       map[string]any{},
 		domain:             config.Domain,
 	}
