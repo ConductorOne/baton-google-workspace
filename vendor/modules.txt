@@ -397,7 +397,7 @@ github.com/conductorone/dpop/integrations/dpop_grpc
 # github.com/conductorone/dpop/integrations/dpop_oauth2 v0.4.0
 ## explicit; go 1.26.0
 github.com/conductorone/dpop/integrations/dpop_oauth2
-# github.com/conductorone/google-credential-guard v0.1.1
+# github.com/conductorone/google-credential-guard v0.1.2
 ## explicit; go 1.27.4
 github.com/conductorone/google-credential-guard
 # github.com/deckarep/golang-set/v2 v2.9.0

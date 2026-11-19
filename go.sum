@@ -96,8 +96,8 @@ github.com/conductorone/dpop/integrations/dpop_grpc v0.4.0 h1:CkZLfrUhoeduQkXSqY
 github.com/conductorone/dpop/integrations/dpop_grpc v0.4.0/go.mod h1:puqk8UrNatKRUpIYXkf9fIaqR2498RbLW+M6op5p/Sw=
 github.com/conductorone/dpop/integrations/dpop_oauth2 v0.4.0 h1:ODxc6TjXwHUE88/8T4ulJ+PUGK+mVKgW9khxVa5AALM=
 github.com/conductorone/dpop/integrations/dpop_oauth2 v0.4.0/go.mod h1:AhA2ggQVhfsK+8qSi5OdqdgD39K6hfEyuPTiWaSzYIk=
-github.com/conductorone/google-credential-guard v0.1.1 h1:1+Uilk62NHtfVSPot3ReIKLcInsdI8KPqnaylnbq8hs=
-github.com/conductorone/google-credential-guard v0.1.1/go.mod h1:wvSn/9NPyfNVkQhTv4pfzNBtkfrOyVeyAg9WpN8nqoA=
+github.com/conductorone/google-credential-guard v0.1.2 h1:/ewJlEDWLNwA/1qZSPIdB6qHtE0CKJ/HdeXuwgFVbt4=
+github.com/conductorone/google-credential-guard v0.1.2/go.mod h1:wvSn/9NPyfNVkQhTv4pfzNBtkfrOyVeyAg9WpN8nqoA=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/conductorone/baton-sdk v0.46.0
-	github.com/conductorone/google-credential-guard v0.1.1
+	github.com/conductorone/google-credential-guard v0.1.2
 	github.com/deckarep/golang-set/v2 v2.9.0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0

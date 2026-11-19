@@ -38,38 +38,42 @@ func guardTestJSON(t *testing.T, tokenURI, credentialType string) []byte {
 }
 
 func TestCredentialInputsAcceptServiceAccount(t *testing.T) {
-	data := guardTestJSON(t, googlecredentialguard.TokenURL, "service_account")
-	for _, input := range []string{"inline", "upload", "internal"} {
-		t.Run(input, func(t *testing.T) {
-			var connector *GoogleWorkspace
-			var err error
-			if input == "internal" {
-				connector, err = NewConnector(context.Background(), Config{Credentials: data, AdministratorEmail: "admin@example.com"})
-			} else {
-				config := &cfg.GoogleWorkspace{AdministratorEmail: "admin@example.com"}
-				if input == "inline" {
-					config.CredentialsJson = string(data)
-				} else {
-					config.CredentialsJsonFilePath = data
-				}
-				builder, _, newErr := New(context.Background(), config, &cli.ConnectorOpts{})
-				err = newErr
-				if err == nil {
-					connector = builder.(*GoogleWorkspace)
-				}
-			}
-			if err != nil {
-				t.Fatalf("valid key rejected: %v", err)
-			}
-			if connector.administratorEmail != "admin@example.com" {
-				t.Fatal("delegation subject lost")
-			}
-			var canonical map[string]string
-			if err := json.Unmarshal(connector.credentials, &canonical); err != nil {
-				t.Fatal(err)
-			}
-			if canonical["token_uri"] != googlecredentialguard.TokenURL {
-				t.Fatalf("unexpected token endpoint: %q", canonical["token_uri"])
+	for _, tokenURI := range []string{googlecredentialguard.TokenURL, googlecredentialguard.AccountsTokenURL} {
+		t.Run(tokenURI, func(t *testing.T) {
+			data := guardTestJSON(t, tokenURI, "service_account")
+			for _, input := range []string{"inline", "upload", "internal"} {
+				t.Run(input, func(t *testing.T) {
+					var connector *GoogleWorkspace
+					var err error
+					if input == "internal" {
+						connector, err = NewConnector(context.Background(), Config{Credentials: data, AdministratorEmail: "admin@example.com"})
+					} else {
+						config := &cfg.GoogleWorkspace{AdministratorEmail: "admin@example.com"}
+						if input == "inline" {
+							config.CredentialsJson = string(data)
+						} else {
+							config.CredentialsJsonFilePath = data
+						}
+						builder, _, newErr := New(context.Background(), config, &cli.ConnectorOpts{})
+						err = newErr
+						if err == nil {
+							connector = builder.(*GoogleWorkspace)
+						}
+					}
+					if err != nil {
+						t.Fatalf("valid key rejected: %v", err)
+					}
+					if connector.administratorEmail != "admin@example.com" {
+						t.Fatal("delegation subject lost")
+					}
+					var canonical map[string]string
+					if err := json.Unmarshal(connector.credentials, &canonical); err != nil {
+						t.Fatal(err)
+					}
+					if canonical["token_uri"] != googlecredentialguard.TokenURL {
+						t.Fatalf("unexpected token endpoint: %q", canonical["token_uri"])
+					}
+				})
 			}
 		})
 	}

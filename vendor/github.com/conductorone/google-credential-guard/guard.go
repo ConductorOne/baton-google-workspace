@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/mail"
 	"strings"
@@ -17,6 +18,9 @@ import (
 const (
 	MaxJSONBytes = 64 << 10
 	TokenURL     = "https://oauth2.googleapis.com/token"
+	// AccountsTokenURL appears in Google's current Console key format. It is
+	// accepted as input but never retained in canonical credentials.
+	AccountsTokenURL = "https://accounts.google.com/o/oauth2/token"
 )
 
 // ServiceAccount is a validated service-account key. Its canonical JSON omits
@@ -57,6 +61,9 @@ func ParseServiceAccountJSON(input []byte) (ServiceAccount, error) {
 	values := make(map[string]string, len(fields))
 	for name, raw := range fields {
 		if !allowed[name] {
+			if safeFieldName(name) {
+				return ServiceAccount{}, fmt.Errorf("google credential: unsupported field %q", name)
+			}
 			return ServiceAccount{}, errors.New("google credential: unsupported field")
 		}
 		if len(raw) == 0 || raw[0] != '"' {
@@ -81,29 +88,57 @@ func ParseServiceAccountJSON(input []byte) (ServiceAccount, error) {
 	if values["universe_domain"] != "" && values["universe_domain"] != "googleapis.com" {
 		return ServiceAccount{}, errors.New("google credential: unsupported universe domain")
 	}
-	if values["token_uri"] != "" && values["token_uri"] != TokenURL {
+	if values["token_uri"] != "" && values["token_uri"] != TokenURL && values["token_uri"] != AccountsTokenURL {
 		return ServiceAccount{}, errors.New("google credential: unsupported token endpoint")
 	}
 	block, rest := pem.Decode([]byte(values["private_key"]))
-	if block == nil || block.Type != "PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
+	if block == nil || len(bytes.TrimSpace(rest)) != 0 {
 		return ServiceAccount{}, errors.New("google credential: invalid private key")
 	}
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return ServiceAccount{}, errors.New("google credential: invalid private key")
-	}
-	if _, ok := key.(*rsa.PrivateKey); !ok {
+	privateKey := values["private_key"]
+	switch block.Type {
+	case "PRIVATE KEY":
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return ServiceAccount{}, errors.New("google credential: invalid private key")
+		}
+		if _, ok := key.(*rsa.PrivateKey); !ok {
+			return ServiceAccount{}, errors.New("google credential: unsupported private key type")
+		}
+	case "RSA PRIVATE KEY":
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return ServiceAccount{}, errors.New("google credential: invalid private key")
+		}
+		encoded, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return ServiceAccount{}, errors.New("google credential: invalid private key")
+		}
+		privateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))
+	default:
 		return ServiceAccount{}, errors.New("google credential: unsupported private key type")
 	}
 	canonical, err := json.Marshal(serviceAccountJSON{
 		Type: "service_account", ProjectID: values["project_id"],
-		PrivateKeyID: values["private_key_id"], PrivateKey: values["private_key"],
+		PrivateKeyID: values["private_key_id"], PrivateKey: privateKey,
 		ClientEmail: values["client_email"], TokenURI: TokenURL,
 	})
 	if err != nil {
 		return ServiceAccount{}, errors.New("google credential: failed to encode canonical JSON")
 	}
 	return ServiceAccount{canonical: canonical}, nil
+}
+
+func safeFieldName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for _, char := range name {
+		if char != '_' && (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseObject(input []byte) (map[string]json.RawMessage, error) {
