@@ -125,10 +125,10 @@ func (f *samlEventFeed) lookupUser(ctx context.Context, client *gwclient.GoogleW
 }
 
 func (f *samlEventFeed) ListEvents(ctx context.Context, earliestEvent *timestamppb.Timestamp, pToken *pagination.StreamToken) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
-	// Resolved once per call (not once per user): it lists every SAML profile for the whole
-	// customer, so looking it up per-user in the batch would multiply Cloud Identity calls
-	// unnecessarily.
-	samlProfileMap, err := loadSAMLProfileMap(ctx, f.client, f.customerID)
+	// Resolved once per call, not once per user: it lists every SAML profile for the whole
+	// customer. It is not cached across calls because the SDK puts no session store on the event
+	// feed context.
+	samlProfileMap, err := buildSAMLProfileMapOrFallback(ctx, f.client, f.customerID)
 	if err != nil {
 		return nil, nil, nil, err
 	}

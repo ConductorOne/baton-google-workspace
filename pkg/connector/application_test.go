@@ -138,3 +138,74 @@ func TestBuildSAMLProfileMapOtherErrorsNotClassified(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSAMLProfileMapOrFallback pins the SAML event feed to the same fallback rule as app
+// sync: display-name IDs only when the scope is missing or the API is disabled. Any other Cloud
+// Identity failure must fail the feed call, so its events are retried instead of being emitted
+// under IDs that match no synced app.
+func TestBuildSAMLProfileMapOrFallback(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no Cloud Identity service", func(t *testing.T) {
+		m, err := buildSAMLProfileMapOrFallback(ctx, &gwclient.GoogleWorkspaceClient{}, "customer")
+		if err != nil || m != nil {
+			t.Fatalf("got map %v, err %v; want nil, nil", m, err)
+		}
+	})
+
+	t.Run("API disabled", func(t *testing.T) {
+		client := &gwclient.GoogleWorkspaceClient{
+			CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusForbidden, cloudIdentityDisabledBody),
+		}
+		m, err := buildSAMLProfileMapOrFallback(ctx, client, "customer")
+		if err != nil || m != nil {
+			t.Fatalf("got map %v, err %v; want nil, nil", m, err)
+		}
+	})
+
+	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			client := &gwclient.GoogleWorkspaceClient{
+				CloudIdentityService: newCloudIdentityServiceReturning(t, status, `{"error":{"code":`+fmt.Sprint(status)+`,"message":"injected failure"}}`),
+			}
+			_, err := buildSAMLProfileMapOrFallback(ctx, client, "customer")
+			var ge *googleapi.Error
+			if !errors.As(err, &ge) || ge.Code != status {
+				t.Fatalf("status %d: expected the Cloud Identity error to be returned, got %v", status, err)
+			}
+		})
+	}
+
+	t.Run("healthy", func(t *testing.T) {
+		client := &gwclient.GoogleWorkspaceClient{
+			CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusOK,
+				`{"inboundSamlSsoProfiles":[{"name":"inboundSamlSsoProfiles/abc123","displayName":"My SAML App"}]}`),
+		}
+		m, err := buildSAMLProfileMapOrFallback(ctx, client, "customer")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := m["My SAML App"]; got != "inboundSamlSsoProfiles/abc123" {
+			t.Fatalf("profile map = %v, want My SAML App -> inboundSamlSsoProfiles/abc123", m)
+		}
+	})
+}
+
+// TestSAMLEventFeedFailsOnCloudIdentityError guards the feed entry point: a transient Cloud
+// Identity error must fail ListEvents with no events, instead of emitting events under
+// display-name app IDs.
+func TestSAMLEventFeedFailsOnCloudIdentityError(t *testing.T) {
+	client := &gwclient.GoogleWorkspaceClient{
+		CloudIdentityService: newCloudIdentityServiceReturning(t, http.StatusServiceUnavailable, `{"error":{"code":503,"message":"injected failure"}}`),
+	}
+	feed := newSamlEventFeed(client, "customer", "example.com")
+
+	events, _, _, err := feed.ListEvents(context.Background(), nil, nil)
+	var ge *googleapi.Error
+	if !errors.As(err, &ge) || ge.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected the Cloud Identity 503 to be returned, got %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events, got %d", len(events))
+	}
+}
