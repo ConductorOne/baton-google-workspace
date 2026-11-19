@@ -13,6 +13,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/cli"
 	googlecredentialguard "github.com/conductorone/google-credential-guard"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func guardTestJSON(t *testing.T, tokenURI, credentialType string) []byte {
@@ -152,6 +154,9 @@ func TestCredentialInputsRejectUntrustedJSON(t *testing.T) {
 						if err == nil {
 							t.Fatal("untrusted credentials accepted")
 						}
+						if status.Code(err) != codes.InvalidArgument {
+							t.Fatalf("guard error code = %v", status.Code(err))
+						}
 						return
 					}
 					config := &cfg.GoogleWorkspace{}
@@ -163,6 +168,9 @@ func TestCredentialInputsRejectUntrustedJSON(t *testing.T) {
 					_, _, err := New(context.Background(), config, &cli.ConnectorOpts{})
 					if err == nil || !strings.Contains(err.Error(), "credential") {
 						t.Fatalf("untrusted credentials accepted or wrong error: %v", err)
+					}
+					if status.Code(err) != codes.InvalidArgument {
+						t.Fatalf("guard error code = %v", status.Code(err))
 					}
 				})
 			}

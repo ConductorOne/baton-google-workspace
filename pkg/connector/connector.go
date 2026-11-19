@@ -212,7 +212,7 @@ func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOp
 func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) {
 	credential, err := googlecredentialguard.ParseServiceAccountJSON(config.Credentials)
 	if err != nil {
-		return nil, fmt.Errorf("invalid service-account credentials: %w", err)
+		return nil, uhttp.WrapErrors(codes.InvalidArgument, "invalid service-account credentials", err)
 	}
 	rv := &GoogleWorkspace{
 		customerID:         config.CustomerID,
