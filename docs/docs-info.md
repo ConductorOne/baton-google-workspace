@@ -53,6 +53,9 @@
    | `--administrator-email` | `BATON_ADMINISTRATOR_EMAIL` | Super-admin email the service account impersonates via domain-wide delegation (the delegation `subject`). | Yes |
    | `--customer-id` | `BATON_CUSTOMER_ID` | Google Workspace customer ID. | Yes |
    | `--domain` | `BATON_DOMAIN` | Primary domain to sync. If omitted, all available domains are synced. | No |
+   | `--auth-method` | `BATON_AUTH_METHOD` | `service-account-key` (default) or `workload-identity-c1`. Workload identity needs no JSON key and works only on the ConductorOne-hosted runtime, which supplies the token. | No |
+   | `--workload-identity-provider` | `BATON_WORKLOAD_IDENTITY_PROVIDER` | Workload identity only: the Google workload identity pool provider that trusts the ConductorOne issuer, `projects/<project number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. | With workload identity |
+   | `--service-account-email` | `BATON_SERVICE_ACCOUNT_EMAIL` | Workload identity only: the service account with domain-wide delegation. The pool's principal needs Service Account Token Creator on it. | With workload identity |
 
 2. For each item in the list above:
 

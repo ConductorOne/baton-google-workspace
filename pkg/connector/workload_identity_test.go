@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 	directoryAdmin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	cfg "github.com/conductorone/baton-google-workspace/pkg/config"
 )
@@ -244,6 +246,7 @@ func TestWorkloadIdentityChainFailuresAreNotAuthorizationErrors(t *testing.T) {
 		subject  *countingTokenSource
 		wantStep string
 		wantText string
+		wantCode codes.Code
 	}{
 		{
 			name: "signJwt without Service Account Token Creator",
@@ -254,6 +257,29 @@ func TestWorkloadIdentityChainFailuresAreNotAuthorizationErrors(t *testing.T) {
 			subject:  &countingTokenSource{token: testC1JWT},
 			wantStep: "signJwt for " + testWIServiceAccount,
 			wantText: "iam.serviceAccounts.signJwt",
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name: "signJwt rate limited",
+			setup: func(f *fakeGoogle) {
+				f.signStatus = http.StatusTooManyRequests
+				f.signBody = `{"error":{"code":429,"message":"Quota exceeded.","status":"RESOURCE_EXHAUSTED"}}`
+			},
+			subject:  &countingTokenSource{token: testC1JWT},
+			wantStep: "signJwt for " + testWIServiceAccount,
+			wantText: "Quota exceeded",
+			wantCode: codes.Unavailable,
+		},
+		{
+			name: "STS unavailable",
+			setup: func(f *fakeGoogle) {
+				f.stsStatus = http.StatusServiceUnavailable
+				f.stsBody = `{"error":"temporarily_unavailable"}`
+			},
+			subject:  &countingTokenSource{token: testC1JWT},
+			wantStep: "STS token exchange",
+			wantText: "503",
+			wantCode: codes.Unavailable,
 		},
 		{
 			name: "STS rejects the JWT",
@@ -264,6 +290,7 @@ func TestWorkloadIdentityChainFailuresAreNotAuthorizationErrors(t *testing.T) {
 			subject:  &countingTokenSource{token: testC1JWT},
 			wantStep: "STS token exchange",
 			wantText: "audience",
+			wantCode: codes.InvalidArgument,
 		},
 		{
 			name:  "ConductorOne token unavailable with a 401",
@@ -288,6 +315,9 @@ func TestWorkloadIdentityChainFailuresAreNotAuthorizationErrors(t *testing.T) {
 			require.True(t, errors.As(err, &wie), "got %T: %v", err, err)
 			require.Equal(t, tc.wantStep, wie.step)
 			require.Contains(t, err.Error(), tc.wantText)
+			if tc.wantCode != codes.OK {
+				require.Equal(t, tc.wantCode, status.Code(err), "same code uhttp gives this HTTP status: %v", err)
+			}
 			require.Empty(t, fake.tokenForms, "nothing reaches Google's token endpoint")
 		})
 	}

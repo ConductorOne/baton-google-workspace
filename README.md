@@ -10,7 +10,7 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 
 - A Google Workspace account with **Super Admin** access.
 - A **Google Cloud project** with the **Admin SDK API** enabled (and **Cloud Identity API**; **Groups Settings API** is optional, only needed for the group-settings action).
-- A **service account** with a downloaded JSON key, authorized for **domain-wide delegation** against your Workspace.
+- A **service account** authorized for **domain-wide delegation** against your Workspace, with a downloaded JSON key. A ConductorOne-hosted connector can instead use workload identity, with no key; see [docs/connector.mdx](docs/connector.mdx#authenticate-without-a-key-workload-identity).
 - The Workspace **Customer ID** and a **super-admin email** for the service account to impersonate.
 - The relevant OAuth scopes authorized on the delegation (read-only for sync, read/write for provisioning + actions).
 
@@ -145,6 +145,9 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `--administrator-email`              | `BATON_ADMINISTRATOR_EMAIL`          | Super-admin email the service account impersonates (domain-wide delegation subject).                    | Yes                  |
 | `--customer-id`                      | `BATON_CUSTOMER_ID`                  | Google Workspace customer ID.                                                                           | Yes                  |
 | `--domain`                           | `BATON_DOMAIN`                       | Primary domain to sync. If omitted, all available domains are synced.                                   | No                   |
+| `--auth-method`                      | `BATON_AUTH_METHOD`                  | `service-account-key` (default) or `workload-identity-c1`. Workload identity works only on the ConductorOne-hosted runtime, which supplies its token. | No |
+| `--workload-identity-provider`       | `BATON_WORKLOAD_IDENTITY_PROVIDER`   | Workload identity only: `projects/<project number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. | With workload identity |
+| `--service-account-email`            | `BATON_SERVICE_ACCOUNT_EMAIL`        | Workload identity only: the service account with domain-wide delegation.                                 | With workload identity |
 
 # API Documentation
 

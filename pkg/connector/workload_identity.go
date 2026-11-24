@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google/externalaccount"
 )
@@ -207,7 +209,7 @@ func (s *delegatedTokenSource) Token() (*oauth2.Token, error) {
 		if errors.As(err, &wie) {
 			return nil, err
 		}
-		return nil, &workloadIdentityError{step: "STS token exchange", err: err}
+		return nil, &workloadIdentityError{step: "STS token exchange", err: withSTSStatusCode(err)}
 	}
 	assertion, err := s.signDelegationAssertion(federated)
 	if err != nil {
@@ -252,7 +254,8 @@ func (s *delegatedTokenSource) signDelegationAssertion(federated *oauth2.Token) 
 		return "", fmt.Errorf("read signJwt response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", googleAPIError(resp.StatusCode, respBody)
+		return "", uhttp.WrapErrors(uhttp.GrpcCodeFromHTTPStatus(resp.StatusCode),
+			fmt.Sprintf("signJwt returned HTTP %d", resp.StatusCode), googleAPIError(resp.StatusCode, respBody))
 	}
 
 	var signed struct {
@@ -265,6 +268,26 @@ func (s *delegatedTokenSource) signDelegationAssertion(federated *oauth2.Token) 
 		return "", errors.New("signJwt response has no signedJwt")
 	}
 	return signed.SignedJWT, nil
+}
+
+// stsStatusPattern reads the HTTP status out of the error the vendored
+// golang.org/x/oauth2 STS exchange returns for a non-2xx response
+// ("oauth2/google: status code %d: %s"); it exposes no typed error.
+var stsStatusPattern = regexp.MustCompile(`oauth2/google: status code ([0-9]{3}):`)
+
+// withSTSStatusCode gives an STS failure the gRPC code uhttp would give the
+// same HTTP status, so a 429 or 5xx is retried as Unavailable. Failures without
+// a status, such as transport errors, are already coded by the uhttp client.
+func withSTSStatusCode(err error) error {
+	m := stsStatusPattern.FindStringSubmatch(err.Error())
+	if m == nil {
+		return err
+	}
+	code, convErr := strconv.Atoi(m[1])
+	if convErr != nil {
+		return err
+	}
+	return uhttp.WrapErrors(uhttp.GrpcCodeFromHTTPStatus(code), fmt.Sprintf("STS returned HTTP %d", code), err)
 }
 
 // googleAPIError names the status and message of a Google API error body, so
