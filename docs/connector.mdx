@@ -455,20 +455,20 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 </Tabs>
 
 <Note>
-Without `admin.directory.domain.readonly`, the connection fails. If another sync scope is missing, the sync succeeds but skips the resource types that need it. Each read-only scope can be replaced by its write variant from the Read/write set:
+Without `admin.directory.domain.readonly` (or `admin.directory.domain`), the connection fails. If another sync scope is missing, the sync succeeds but skips the resource types that need it. The users, roles and groups scopes can each be replaced by their write variant from the Read/write set:
 
 - Users: `admin.directory.user.readonly` or `admin.directory.user`
 - Roles: `admin.directory.rolemanagement.readonly` or `admin.directory.rolemanagement`
 - Groups: `admin.directory.group.readonly` or `admin.directory.group`, and `admin.directory.group.member.readonly` or `admin.directory.group.member`
 - Enterprise applications: the users scope, `admin.directory.user.security`, and `admin.reports.audit.readonly`
 
-Without `admin.reports.audit.readonly`, the usage and admin event feeds also fail. A missing write scope only makes the matching provisioning task or action fail.
+Continuous sync of app usage events needs the users scope, `admin.directory.user.security` and `admin.reports.audit.readonly`, and the admin event feed needs `admin.reports.audit.readonly`. Without them, those feeds fail. Any other missing write scope only makes the matching provisioning task or action fail.
 </Note>
 
 <Warning>
 The write scopes let C1 provision and deprovision access. **If you do not want C1 to perform these tasks, use the read-only scope set.** Read-only still syncs users, groups, roles, and enterprise applications, so it is sufficient when you use Google Workspace as your [directory](#set-google-workspace-as-your-c1-directory) and run access reviews.
 
-The read-only set has one exception. `admin.directory.user.security` appears in both sets, and it permits three actions that revoke a user's access: `sign_out_user`, `delete_all_oauth_tokens`, and `delete_all_application_passwords`. These actions remain available with the read-only set. **If you do not want C1 to perform these tasks, do not grant this scope.** The connector then stops discovering OAuth apps and stops syncing enterprise applications.
+The read-only set has one exception. `admin.directory.user.security` appears in both sets, and it permits three actions that revoke a user's access: `sign_out_user`, `delete_all_oauth_tokens`, and `delete_all_application_passwords`. These actions remain available with the read-only set. **If you do not want C1 to perform these tasks, do not grant this scope.** The connector then stops discovering OAuth apps, stops syncing enterprise applications, and continuous sync of app usage events fails.
 </Warning>
 
 ### Find your customer ID and primary domain
