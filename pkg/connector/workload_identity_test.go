@@ -387,3 +387,55 @@ func TestConfigurationFieldGroups(t *testing.T) {
 		}
 	}
 }
+
+// The services are cached for the connector's lifetime and refresh long after
+// the task that created them ends, so a refresh must not use that task's
+// cancellation.
+func TestWorkloadIdentityRefreshAfterCallerContextEnds(t *testing.T) {
+	fake := newFakeGoogle()
+	// Expiring within oauth2's refresh margin makes every Token() call refresh.
+	fake.stsBody = `{"access_token":"federated-token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":1}`
+	fake.tokenBody = `{"access_token":"delegated-token","token_type":"Bearer","expires_in":1}`
+	useFakeGoogle(t, fake)
+	wi := newTestWorkloadIdentity(t, &countingTokenSource{token: testC1JWT})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client, err := newGoogleHTTPClient(ctx)
+	require.NoError(t, err)
+	ts, err := wi.tokenSource(context.WithValue(ctx, oauth2.HTTPClient, client), client, testWIAdmin, directoryAdmin.AdminDirectoryUserReadonlyScope)
+	require.NoError(t, err)
+	_, err = ts.Token()
+	require.NoError(t, err)
+
+	cancel()
+	token, err := ts.Token()
+	require.NoError(t, err, "refresh after the creating context ended")
+	require.Equal(t, "delegated-token", token.AccessToken)
+	require.Len(t, fake.stsForms, 2)
+	require.Len(t, fake.tokenForms, 2)
+}
+
+// One STS exchange and one ConductorOne JWT serve every scope; only the
+// delegation assertion is per scope.
+func TestWorkloadIdentitySharesFederatedTokenAcrossScopes(t *testing.T) {
+	fake := newFakeGoogle()
+	useFakeGoogle(t, fake)
+	subject := &countingTokenSource{token: testC1JWT}
+	c := &GoogleWorkspace{
+		administratorEmail: testWIAdmin,
+		workloadIdentity:   newTestWorkloadIdentity(t, subject),
+		serviceCache:       map[string]any{},
+	}
+	for _, scope := range []string{
+		directoryAdmin.AdminDirectoryUserReadonlyScope,
+		directoryAdmin.AdminDirectoryGroupReadonlyScope,
+		directoryAdmin.AdminDirectoryDomainReadonlyScope,
+	} {
+		_, err := c.getDirectoryService(context.Background(), scope)
+		require.NoError(t, err)
+	}
+	require.Len(t, fake.stsForms, 1)
+	require.Equal(t, 1, subject.calls)
+	require.Len(t, fake.signClaims, 3)
+	require.Len(t, fake.tokenForms, 3)
+}

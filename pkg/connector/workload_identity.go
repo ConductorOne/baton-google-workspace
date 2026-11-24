@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -103,9 +104,18 @@ func (e *workloadIdentityError) Unwrap() error {
 }
 
 type workloadIdentity struct {
+	// subject is shared by every scope's STS exchange. It wraps the runtime's
+	// token source in oauth2.ReuseTokenSource, which serializes calls and reuses
+	// the JWT until it expires: the runtime's source has no lock of its own.
 	subject        oauth2.TokenSource
 	stsAudience    string
 	serviceAccount string
+
+	// federated is the cloud-platform token from STS, the same for every scope,
+	// so one exchange serves all of them. Built on first use.
+	federatedOnce sync.Once
+	federated     oauth2.TokenSource
+	federatedErr  error
 }
 
 func newWorkloadIdentity(c *WorkloadIdentityConfig) (*workloadIdentity, error) {
@@ -121,7 +131,7 @@ func newWorkloadIdentity(c *WorkloadIdentityConfig) (*workloadIdentity, error) {
 		return nil, fmt.Errorf("baton-google-workspace: service-account-email %q must be a service account email", c.ServiceAccountEmail)
 	}
 	return &workloadIdentity{
-		subject:        c.SubjectTokenSource,
+		subject:        oauth2.ReuseTokenSource(nil, c.SubjectTokenSource),
 		stsAudience:    googleIAMAudiencePrefix + provider,
 		serviceAccount: serviceAccount,
 	}, nil
@@ -129,21 +139,31 @@ func newWorkloadIdentity(c *WorkloadIdentityConfig) (*workloadIdentity, error) {
 
 // tokenSource returns access tokens for admin with the given scopes. ctx must
 // carry the HTTP client as oauth2.HTTPClient, which the STS exchange uses.
+//
+// The returned source outlives ctx: the service it backs is cached for the
+// connector's lifetime and refreshes about every hour, long after the task or
+// invocation that created it has ended. So the requests it makes keep ctx's
+// values but not its cancellation. The service account key path behaves the
+// same way, since golang.org/x/oauth2/jwt sends its refresh without a request
+// context.
 func (w *workloadIdentity) tokenSource(ctx context.Context, client *http.Client, admin string, scopes ...string) (oauth2.TokenSource, error) {
-	federated, err := externalaccount.NewTokenSource(ctx, externalaccount.Config{
-		Audience:             w.stsAudience,
-		SubjectTokenType:     jwtSubjectTokenType,
-		TokenURL:             googleSTSTokenURL,
-		Scopes:               []string{cloudPlatformScope},
-		SubjectTokenSupplier: c1SubjectTokenSupplier{source: w.subject},
+	ctx = context.WithoutCancel(ctx)
+	w.federatedOnce.Do(func() {
+		w.federated, w.federatedErr = externalaccount.NewTokenSource(ctx, externalaccount.Config{
+			Audience:             w.stsAudience,
+			SubjectTokenType:     jwtSubjectTokenType,
+			TokenURL:             googleSTSTokenURL,
+			Scopes:               []string{cloudPlatformScope},
+			SubjectTokenSupplier: c1SubjectTokenSupplier{source: w.subject},
+		})
 	})
-	if err != nil {
-		return nil, &workloadIdentityError{step: "configuration", err: err}
+	if w.federatedErr != nil {
+		return nil, &workloadIdentityError{step: "configuration", err: w.federatedErr}
 	}
 	return oauth2.ReuseTokenSource(nil, &delegatedTokenSource{
 		ctx:            ctx,
 		client:         client,
-		federated:      federated,
+		federated:      w.federated,
 		serviceAccount: w.serviceAccount,
 		admin:          admin,
 		scopes:         scopes,
