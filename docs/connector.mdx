@@ -462,7 +462,7 @@ Without `admin.directory.domain.readonly` (or `admin.directory.domain`), the con
 - Groups: `admin.directory.group.readonly` or `admin.directory.group`, and `admin.directory.group.member.readonly` or `admin.directory.group.member`
 - Enterprise applications: the users scope, `admin.directory.user.security`, and `admin.reports.audit.readonly`
 
-Continuous sync of app usage events needs the users scope, `admin.directory.user.security` and `admin.reports.audit.readonly`, and the admin event feed needs `admin.reports.audit.readonly`. Without them, those feeds fail. Without `admin.reports.audit.readonly`, SAML and Google sign-in usage events are not collected at all. Any other missing write scope only makes the matching provisioning task or action fail.
+Continuous sync needs `admin.reports.audit.readonly`: without it, the app usage and admin event feeds fail, and SAML and Google sign-in usage events are not collected at all. The app usage, SAML and Google sign-in feeds also need the users scope, and the app usage feed also needs `admin.directory.user.security`; without them, those feeds fail. Any other missing write scope only makes the matching provisioning task or action fail.
 </Note>
 
 <Warning>
