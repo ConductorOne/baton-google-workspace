@@ -82,6 +82,7 @@ func (f *googleLoginEventFeed) lookupUser(ctx context.Context, client *gwclient.
 		OccurredAt: best.occurredAt,
 		Event: &v2.Event_UsageEvent{
 			UsageEvent: &v2.UsageEvent{
+				TargetKind: v2.UsageEvent_TARGET_KIND_APP_ACCESS,
 				TargetResource: &v2.Resource{
 					Id: &v2.ResourceId{
 						ResourceType: resourceTypeEnterpriseApplication.Id,

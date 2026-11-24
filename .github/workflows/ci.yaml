@@ -43,10 +43,23 @@ jobs:
         run: ./scripts/test-modify-group-settings.sh
       - name: Test update user manager action
         run: ./scripts/test-update-user-manager.sh
+      - name: Select unique provisioning identity
+        id: provisioning_identity
+        env:
+          BASE_EMAIL: ${{ vars.PRIMARY_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [[ "$BASE_EMAIL" != *@* ]]; then
+            echo "PRIMARY_EMAIL must be an email address" >&2
+            exit 1
+          fi
+          local_part="${BASE_EMAIL%@*}"
+          domain="${BASE_EMAIL#*@}"
+          printf 'email=%s-%s-%s@%s\n' "${local_part:0:32}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$domain" >> "$GITHUB_OUTPUT"
       - name: Test account provisioning
         uses: ConductorOne/github-workflows/actions/account-provisioning@v3
         with:
           connector: ./baton-google-workspace
-          account-email: "${{ vars.PRIMARY_EMAIL }}"
-          account-profile: '{"email":"${{ vars.PRIMARY_EMAIL }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
+          account-email: "${{ steps.provisioning_identity.outputs.email }}"
+          account-profile: '{"email":"${{ steps.provisioning_identity.outputs.email }}","given_name":"${{ vars.GIVEN_NAME }}","family_name":"${{ vars.FAMILY_NAME }}"}'
           sleep: 40

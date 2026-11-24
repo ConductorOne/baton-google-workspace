@@ -132,6 +132,13 @@ var (
 		WithHidden(true),
 	)
 
+	listPageWindow = IntField("list-page-window",
+		WithDescription("Bound successful pages per list walk; 0 = unbounded"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+		WithHidden(true),
+	)
+
 	syncResourceTypeIDs = StringSliceField("sync-resource-types",
 		WithDescription("The resource type IDs to sync"),
 		WithPersistent(true),
@@ -275,6 +282,14 @@ var (
 		WithPersistent(true),
 		WithExportTarget(ExportTargetNone))
 
+	LambdaServerPerInvokeIdentityField = BoolField("lambda-per-invoke-identity",
+		WithDescription("Bind each isolated execution environment to its first authenticated invoke identity"),
+		WithExportTarget(ExportTargetNone))
+	LambdaServerAllowedHostSuffixField = StringField("lambda-allowed-host-suffix",
+		WithDescription("Allowed lowercase DNS host suffix for per-invoke identity. Must begin with \".\" or \"-\" under a domain of at least two labels, "+
+			"for example \".example.com\". Do not use a public suffix; ownership is not checked"),
+		WithExportTarget(ExportTargetNone))
+
 	LambdaServerClientIDField = StringField("lambda-client-id", WithRequired(true), WithDescription("The oauth client id to use with the configuration endpoint"),
 		WithExportTarget(ExportTargetNone))
 	LambdaServerClientSecretField = StringField("lambda-client-secret", WithRequired(true), WithDescription("The oauth client secret to use with the configuration endpoint"),
@@ -369,6 +384,8 @@ var (
 
 func LambdaServerFields() []SchemaField {
 	return []SchemaField{
+		LambdaServerPerInvokeIdentityField,
+		LambdaServerAllowedHostSuffixField,
 		LambdaServerClientIDField,
 		LambdaServerClientSecretField,
 		LambdaServerAuthJWTSigner,
@@ -423,6 +440,7 @@ var DefaultFields = append([]SchemaField{
 	syncResourceTypeIDs,
 	skipEntitlementsAndGrants,
 	skipGrants,
+	listPageWindow,
 	externalResourceC1ZField,
 	externalResourceEntitlementIdFilter,
 	externalResourceTraitsField,

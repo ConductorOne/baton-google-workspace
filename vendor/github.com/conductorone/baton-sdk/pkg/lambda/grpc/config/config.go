@@ -36,18 +36,35 @@ const (
 	lambdaCACertPathEnv        = "BATON_LAMBDA_CA_CERT_PATH"
 )
 
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	disableHostOverrides bool
+}
+
+func WithHostOverridesDisabled() ClientOption {
+	return func(opts *clientOptions) { opts.disableHostOverrides = true }
+}
+
 // NewDPoPClient creates a gRPC client with DPoP authentication.
-func NewDPoPClient(ctx context.Context, clientID string, clientSecret string) (grpc.ClientConnInterface, *jose.JSONWebKey, oauth2.TokenSource, error) {
+func NewDPoPClient(ctx context.Context, clientID string, clientSecret string, options ...ClientOption) (grpc.ClientConnInterface, *jose.JSONWebKey, oauth2.TokenSource, error) {
 	_, tokenHost, err := parseClientID(clientID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if envHost, ok := os.LookupEnv(lambdaTokenHostEnv); ok {
-		tokenHost = envHost
+	optsConfig := clientOptions{}
+	for _, option := range options {
+		option(&optsConfig)
 	}
 	configurationHost := tokenHost
-	if envHost, ok := os.LookupEnv(lambdaConfigurationHostEnv); ok {
-		configurationHost = envHost
+	if !optsConfig.disableHostOverrides {
+		if envHost, ok := os.LookupEnv(lambdaTokenHostEnv); ok {
+			tokenHost = envHost
+		}
+		configurationHost = tokenHost
+		if envHost, ok := os.LookupEnv(lambdaConfigurationHostEnv); ok {
+			configurationHost = envHost
+		}
 	}
 
 	tokenURL := &url.URL{
@@ -87,10 +104,15 @@ func NewDPoPClient(ctx context.Context, clientID string, clientSecret string) (g
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("new-dpop-client: failed to create claims adjuster: %w", err)
 	}
+
+	retryConfig := dpop_oauth.DefaultRetryConfig()
+	retryConfig.Timeout = 10 * time.Second
+
 	opts := []dpop_oauth.TokenSourceOption{
 		dpop_oauth.WithRequestOption(dpop_oauth.WithCustomMarshaler(idAttMarshaller.Marshal)),
 		dpop_oauth.WithHTTPClient(lambdaHTTPClient(tlsConfig)),
 		dpop_oauth.WithNonceStore(dpop_oauth.NewNonceStore()), // satisfy use_dpop_nonce
+		dpop_oauth.WithRetryConfig(retryConfig),
 	}
 	tokenSource, err := dpop_oauth.NewTokenSource(proofer, tokenURL, clientID, clientSecretJWK, opts...)
 	if err != nil {
@@ -121,6 +143,14 @@ func NewDPoPClient(ctx context.Context, clientID string, clientSecret string) (g
 	}
 
 	return client, jwk, reuseTokenSource, nil
+}
+
+// TLSConfig returns the TLS configuration used for the configuration host:
+// the system roots plus any CA bundle named by BATON_LAMBDA_CA_CERT_PATH.
+// Other clients that talk to the same host use it so that they trust the
+// same certificates.
+func TLSConfig() (*tls.Config, error) {
+	return lambdaTLSConfig()
 }
 
 func lambdaTLSConfig() (*tls.Config, error) {

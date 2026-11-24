@@ -2243,6 +2243,31 @@ func (s ChromeOsMoveDevicesToOu) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// CountChromeOsDevicesResponse: A response for counting ChromeOS devices.
+type CountChromeOsDevicesResponse struct {
+	// Count: The total number of devices matching the request.
+	Count int64 `json:"count,omitempty,string"`
+
+	// ServerResponse contains the HTTP response code and headers from the server.
+	googleapi.ServerResponse `json:"-"`
+	// ForceSendFields is a list of field names (e.g. "Count") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Count") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s CountChromeOsDevicesResponse) MarshalJSON() ([]byte, error) {
+	type NoMethod CountChromeOsDevicesResponse
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // CreatePrintServerRequest: Request for adding a new print server.
 type CreatePrintServerRequest struct {
 	// Parent: Required. The unique ID
@@ -2641,10 +2666,11 @@ func (s DirectoryChromeosdevicesIssueCommandResponse) MarshalJSON() ([]byte, err
 // DirectoryUsersCreateGuestRequest: Directory users guest creation request
 // message.
 type DirectoryUsersCreateGuestRequest struct {
-	// Customer: Optional. Immutable ID of the Google Workspace account.
+	// Customer: Optional. Immutable ID of the Google Workspace account. Only
+	// required when request is created by a service account. Defaults to the
+	// authenticated user's customer ID otherwise.
 	Customer string `json:"customer,omitempty"`
-	// PrimaryGuestEmail: Immutable. External email of the guest user being
-	// created.
+	// PrimaryGuestEmail: Required. External email of the guest user being created.
 	PrimaryGuestEmail string `json:"primaryGuestEmail,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "Customer") to
 	// unconditionally include in API requests. By default, fields with empty or
@@ -2800,6 +2826,54 @@ func (s Domains2) MarshalJSON() ([]byte, error) {
 type Empty struct {
 	// ServerResponse contains the HTTP response code and headers from the server.
 	googleapi.ServerResponse `json:"-"`
+}
+
+// ExpirationDetails: Details regarding the expiration of this role assignment.
+// Used to automatically revoke access when the time limit is reached.
+type ExpirationDetails struct {
+	// ExpireTime: The specific timestamp when the role assignment expires.
+	ExpireTime string `json:"expireTime,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "ExpireTime") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "ExpireTime") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ExpirationDetails) MarshalJSON() ([]byte, error) {
+	type NoMethod ExpirationDetails
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// ExternalId: External identifier used to link and identify this group across
+// external directory systems.
+type ExternalId struct {
+	// Id: The unique identifier string assigned by the external provider.
+	Id string `json:"id,omitempty"`
+	// Namespace: The system or identity provider managing this ID.
+	Namespace string `json:"namespace,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Id") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Id") to include in API requests
+	// with the JSON null value. By default, fields with empty values are omitted
+	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ExternalId) MarshalJSON() ([]byte, error) {
+	type NoMethod ExternalId
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
 // FailureInfo: Info about failures
@@ -3075,6 +3149,10 @@ type Group struct {
 	Email string `json:"email,omitempty"`
 	// Etag: ETag of the resource.
 	Etag string `json:"etag,omitempty"`
+	// ExternalIds: Optional. The list of external IDs for the group, such as an
+	// immutable identifier from an external identity provider or directory sync
+	// client. Each entry contains a namespace and an ID value.
+	ExternalIds []*ExternalId `json:"externalIds,omitempty"`
 	// Id: Read-only. The unique ID of a group. A group `id` can be used as a group
 	// request URI's `groupKey`.
 	Id string `json:"id,omitempty"`
@@ -4162,6 +4240,9 @@ type RoleAssignment struct {
 	Condition string `json:"condition,omitempty"`
 	// Etag: ETag of the resource.
 	Etag string `json:"etag,omitempty"`
+	// ExpirationDetails: Optional. Details regarding the expiration of this role
+	// assignment.
+	ExpirationDetails *ExpirationDetails `json:"expirationDetails,omitempty"`
 	// Kind: The type of the API resource. This is always
 	// `admin#directory#roleAssignment`.
 	Kind string `json:"kind,omitempty"`
@@ -4542,6 +4623,8 @@ type User struct {
 	AgreedToTerms bool `json:"agreedToTerms,omitempty"`
 	// Aliases: Output only. The list of the user's alias email addresses.
 	Aliases []string `json:"aliases,omitempty"`
+	// ArchivalTime: Output only. User's account archival time. (Read-only)
+	ArchivalTime string `json:"archivalTime,omitempty"`
 	// Archived: Indicates if user is archived.
 	Archived bool `json:"archived,omitempty"`
 	// ChangePasswordAtNextLogin: Indicates if the user is forced to change their
@@ -4699,6 +4782,8 @@ type User struct {
 	// either by the administrator or by Google at the time of suspension. The
 	// property is returned only if the `suspended` property is `true`.
 	SuspensionReason string `json:"suspensionReason,omitempty"`
+	// SuspensionTime: Output only. User's account suspension time. (Read-only)
+	SuspensionTime string `json:"suspensionTime,omitempty"`
 	// ThumbnailPhotoEtag: Output only. ETag of the user's photo (Read-only)
 	ThumbnailPhotoEtag string `json:"thumbnailPhotoEtag,omitempty"`
 	// ThumbnailPhotoUrl: Output only. The URL of the user's profile photo. The URL
@@ -5061,8 +5146,8 @@ func (s UserLanguage) MarshalJSON() ([]byte, error) {
 
 // UserLocation: JSON template for a location entry.
 type UserLocation struct {
-	// Area: Textual location. This is most useful for display purposes to
-	// concisely describe the location. For example 'Mountain View, CA', 'Near
+	// Area: Required. Textual location. This is most useful for display purposes
+	// to concisely describe the location. For example 'Mountain View, CA', 'Near
 	// Seattle', 'US-NYC-9TH 9A209A.''
 	Area string `json:"area,omitempty"`
 	// BuildingId: Building Identifier.
@@ -6228,8 +6313,8 @@ func (c *ChromeosdevicesListCall) Projection(projection string) *Chromeosdevices
 }
 
 // Query sets the optional parameter "query": Search string in the format given
-// at
-// https://developers.google.com/workspace/admin/directory/v1/list-query-operators
+// at List query operators
+// (https://developers.google.com/workspace/admin/directory/v1/list-query-operators).
 func (c *ChromeosdevicesListCall) Query(query string) *ChromeosdevicesListCall {
 	c.urlParams_.Set("query", query)
 	return c
@@ -6808,6 +6893,139 @@ func (c *CustomerDevicesChromeosBatchChangeStatusCall) Do(opts ...googleapi.Call
 		return nil, err
 	}
 	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "admin.customer.devices.chromeos.batchChangeStatus", "response", internallog.HTTPResponse(res, b))
+	return ret, nil
+}
+
+type CustomerDevicesChromeosCountChromeOsDevicesCall struct {
+	s            *Service
+	customerId   string
+	urlParams_   gensupport.URLParams
+	ifNoneMatch_ string
+	ctx_         context.Context
+	header_      http.Header
+}
+
+// CountChromeOsDevices: Counts ChromeOS devices matching the request.
+//
+// - customerId: Immutable ID of the Google Workspace account.
+func (r *CustomerDevicesChromeosService) CountChromeOsDevices(customerId string) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c := &CustomerDevicesChromeosCountChromeOsDevicesCall{s: r.s, urlParams_: make(gensupport.URLParams)}
+	c.customerId = customerId
+	return c
+}
+
+// Filter sets the optional parameter "filter": Search string in the format
+// given at List query operators
+// (https://developers.google.com/workspace/admin/directory/v1/list-query-operators).
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) Filter(filter string) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c.urlParams_.Set("filter", filter)
+	return c
+}
+
+// IncludeChildOrgunits sets the optional parameter "includeChildOrgunits":
+// Return devices from all child orgunits, as well as the specified org unit.
+// If this is set to true, 'orgUnitPath' must be provided.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) IncludeChildOrgunits(includeChildOrgunits bool) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c.urlParams_.Set("includeChildOrgunits", fmt.Sprint(includeChildOrgunits))
+	return c
+}
+
+// OrgUnitPath sets the optional parameter "orgUnitPath": The full path of the
+// organizational unit (minus the leading `/`) or its unique ID.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) OrgUnitPath(orgUnitPath string) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c.urlParams_.Set("orgUnitPath", orgUnitPath)
+	return c
+}
+
+// Fields allows partial responses to be retrieved. See
+// https://developers.google.com/gdata/docs/2.0/basics#PartialResponse for more
+// details.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) Fields(s ...googleapi.Field) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c.urlParams_.Set("fields", googleapi.CombineFields(s))
+	return c
+}
+
+// IfNoneMatch sets an optional parameter which makes the operation fail if the
+// object's ETag matches the given value. This is useful for getting updates
+// only after the object has changed since the last request.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) IfNoneMatch(entityTag string) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c.ifNoneMatch_ = entityTag
+	return c
+}
+
+// Context sets the context to be used in this call's Do method.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) Context(ctx context.Context) *CustomerDevicesChromeosCountChromeOsDevicesCall {
+	c.ctx_ = ctx
+	return c
+}
+
+// Header returns a http.Header that can be modified by the caller to add
+// headers to the request.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) Header() http.Header {
+	if c.header_ == nil {
+		c.header_ = make(http.Header)
+	}
+	return c.header_
+}
+
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) doRequest(alt string) (*http.Response, error) {
+	reqHeaders := gensupport.SetHeaders(c.s.userAgent(), "", c.header_)
+	if c.ifNoneMatch_ != "" {
+		reqHeaders.Set("If-None-Match", c.ifNoneMatch_)
+	}
+	c.urlParams_.Set("alt", alt)
+	c.urlParams_.Set("prettyPrint", "false")
+	urls := googleapi.ResolveRelative(c.s.BasePath, "admin/directory/v1/customer/{customerId}/devices/chromeos:countChromeOsDevices")
+	urls += "?" + c.urlParams_.Encode()
+	req, err := http.NewRequest("GET", urls, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = reqHeaders
+	googleapi.Expand(req.URL, map[string]string{
+		"customerId": c.customerId,
+	})
+	c.s.logger.DebugContext(c.ctx_, "api request", "serviceName", apiName, "rpcName", "admin.customer.devices.chromeos.countChromeOsDevices", "request", internallog.HTTPRequest(req, nil))
+	return gensupport.SendRequest(c.ctx_, c.s.client, req)
+}
+
+// Do executes the "admin.customer.devices.chromeos.countChromeOsDevices" call.
+// Any non-2xx status code is an error. Response headers are in either
+// *CountChromeOsDevicesResponse.ServerResponse.Header or (if a response was
+// returned at all) in error.(*googleapi.Error).Header. Use
+// googleapi.IsNotModified to check whether the returned error was because
+// http.StatusNotModified was returned.
+func (c *CustomerDevicesChromeosCountChromeOsDevicesCall) Do(opts ...googleapi.CallOption) (*CountChromeOsDevicesResponse, error) {
+	gensupport.SetOptions(c.urlParams_, opts...)
+	res, err := c.doRequest("json")
+	if res != nil && res.StatusCode == http.StatusNotModified {
+		if res.Body != nil {
+			res.Body.Close()
+		}
+		return nil, gensupport.WrapError(&googleapi.Error{
+			Code:   res.StatusCode,
+			Header: res.Header,
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer googleapi.CloseBody(res)
+	if err := googleapi.CheckResponse(res); err != nil {
+		return nil, gensupport.WrapError(err)
+	}
+	ret := &CountChromeOsDevicesResponse{
+		ServerResponse: googleapi.ServerResponse{
+			Header:         res.Header,
+			HTTPStatusCode: res.StatusCode,
+		},
+	}
+	target := &ret
+	b, err := gensupport.DecodeResponseBytes(target, res)
+	if err != nil {
+		return nil, err
+	}
+	c.s.logger.DebugContext(c.ctx_, "api response", "serviceName", apiName, "rpcName", "admin.customer.devices.chromeos.countChromeOsDevices", "response", internallog.HTTPResponse(res, b))
 	return ret, nil
 }
 
@@ -17396,9 +17614,7 @@ type UsersCreateGuestCall struct {
 }
 
 // CreateGuest: Create a guest user with access to a subset of Workspace
-// capabilities (https://support.google.com/a/answer/16558545?hl=en). This
-// feature is currently in Alpha. Please reach out to support if you are
-// interested in trying this feature.
+// capabilities (https://support.google.com/a/answer/16558545).
 func (r *UsersService) CreateGuest(directoryuserscreateguestrequest *DirectoryUsersCreateGuestRequest) *UsersCreateGuestCall {
 	c := &UsersCreateGuestCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.directoryuserscreateguestrequest = directoryuserscreateguestrequest
@@ -17725,12 +17941,21 @@ type UsersInsertCall struct {
 // might sometimes fail as the user isn't fully created due to propagation
 // delay in our backends. Check the error details for the "User creation is not
 // complete" message to see if this is the case. Retrying the calls after some
-// time can help in this case. If `resolveConflictAccount` is set to `true`, a
-// `202` response code means that a conflicting unmanaged account exists and
-// was invited to join the organization. A `409` response code means that a
-// conflicting account exists so the user wasn't created based on the handling
-// unmanaged user accounts (https://support.google.com/a/answer/11112794)
-// option selected.
+// time can help in this case. If `resolve_conflict_account` is set to `true`,
+// the option selected for Find and add unmanaged users
+// (https://knowledge.workspace.google.com/admin/users/find-and-add-unmanaged-users)
+// will apply to resolve conflicting accounts: - A `200` response code
+// indicates the user was created (or replaced an existing unmanaged personal
+// account). - A `202` response code means that a conflicting unmanaged
+// personal account exists and was invited to join the organization. - A `409`
+// response code means that a conflicting account exists so the user wasn't
+// created (e.g. based on the option selected to preserve the account, or if
+// the email conflicts with an unmanaged work account or existing managed
+// user). For details on resolving duplicate account errors, see Resolve
+// duplicate account errors
+// (https://knowledge.workspace.google.com/p/duplicate-account-errors) and
+// Transfer unmanaged work accounts
+// (https://knowledge.workspace.google.com/p/unmanaged-work-accounts).
 func (r *UsersService) Insert(user *User) *UsersInsertCall {
 	c := &UsersInsertCall{s: r.s, urlParams_: make(gensupport.URLParams)}
 	c.user = user
@@ -17738,8 +17963,9 @@ func (r *UsersService) Insert(user *User) *UsersInsertCall {
 }
 
 // ResolveConflictAccount sets the optional parameter "resolveConflictAccount":
-// If set to `true`, the option selected for handling unmanaged user accounts
-// (https://support.google.com/a/answer/11112794) will apply. Default: `false`
+// Applies the option selected for Find and add unmanaged users
+// (https://knowledge.workspace.google.com/admin/users/find-and-add-unmanaged-users)
+// to resolve conflicting accounts when set to `true`. Default: `false`
 func (c *UsersInsertCall) ResolveConflictAccount(resolveConflictAccount bool) *UsersInsertCall {
 	c.urlParams_.Set("resolveConflictAccount", fmt.Sprint(resolveConflictAccount))
 	return c

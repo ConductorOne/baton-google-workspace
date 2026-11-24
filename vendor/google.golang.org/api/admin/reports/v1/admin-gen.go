@@ -268,6 +268,8 @@ type Activity struct {
 	// address can be the user's proxy server's address or a virtual private
 	// network (VPN) address. The API supports IPv4 and IPv6.
 	IpAddress string `json:"ipAddress,omitempty"`
+	// IsAgenticAction: Whether the activity was performed by an agent.
+	IsAgenticAction bool `json:"isAgenticAction,omitempty"`
 	// Kind: The type of API resource. For an activity report, the value is
 	// `audit#activity`.
 	Kind string `json:"kind,omitempty"`
@@ -278,6 +280,11 @@ type Activity struct {
 	OwnerDomain string `json:"ownerDomain,omitempty"`
 	// ResourceDetails: Details of the resource on which the action was performed.
 	ResourceDetails []*ResourceDetails `json:"resourceDetails,omitempty"`
+	// UserDeviceInfo: Device details of the user doing the action. This field is
+	// only exposed for the `contacts`, `gemini_in_workspace_apps`, `keep`,
+	// `meet_hardware`, `meet`, `chat`, `chrome`, `directory_sync`, `drive`,
+	// `groups`, `rules`, `data_studio`, `saml` applications.
+	UserDeviceInfo *ActivityUserDeviceInfo `json:"userDeviceInfo,omitempty"`
 	// ForceSendFields is a list of field names (e.g. "Actor") to unconditionally
 	// include in API requests. By default, fields with empty or default values are
 	// omitted from API requests. See
@@ -298,6 +305,9 @@ func (s Activity) MarshalJSON() ([]byte, error) {
 
 // ActivityActor: User doing the action.
 type ActivityActor struct {
+	// AgentAttributionInfo: Details of the AI agent that was the actor for the
+	// activity.
+	AgentAttributionInfo *AgentAttributionInfo `json:"agentAttributionInfo,omitempty"`
 	// ApplicationInfo: Details of the application that was the actor for the
 	// activity.
 	ApplicationInfo *ActivityActorApplicationInfo `json:"applicationInfo,omitempty"`
@@ -314,15 +324,15 @@ type ActivityActor struct {
 	// might be absent if the actor is not a Google Workspace user, or may be the
 	// number 105250506097979753968 which acts as a placeholder ID.
 	ProfileId string `json:"profileId,omitempty"`
-	// ForceSendFields is a list of field names (e.g. "ApplicationInfo") to
+	// ForceSendFields is a list of field names (e.g. "AgentAttributionInfo") to
 	// unconditionally include in API requests. By default, fields with empty or
 	// default values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
 	// details.
 	ForceSendFields []string `json:"-"`
-	// NullFields is a list of field names (e.g. "ApplicationInfo") to include in
-	// API requests with the JSON null value. By default, fields with empty values
-	// are omitted from API requests. See
+	// NullFields is a list of field names (e.g. "AgentAttributionInfo") to include
+	// in API requests with the JSON null value. By default, fields with empty
+	// values are omitted from API requests. See
 	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
 	NullFields []string `json:"-"`
 }
@@ -376,6 +386,11 @@ type ActivityEvents struct {
 	Parameters []*ActivityEventsParameters `json:"parameters,omitempty"`
 	// ResourceIds: Resource ids associated with the event.
 	ResourceIds []string `json:"resourceIds,omitempty"`
+	// SensitiveParameters: Includes sensitive parameter value pairs for various
+	// applications.
+	SensitiveParameters []*ActivityEventsSensitiveParameters `json:"sensitiveParameters,omitempty"`
+	// Status: Status of the event. Note: Not all events have status.
+	Status *ActivityEventsStatus `json:"status,omitempty"`
 	// Type: Type of event. The Google Workspace service or feature that an
 	// administrator changes is identified in the `type` property which identifies
 	// an event using the `eventName` property. For a full list of the API's `type`
@@ -484,6 +499,90 @@ func (s ActivityEventsParametersMultiMessageValue) MarshalJSON() ([]byte, error)
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+type ActivityEventsSensitiveParameters struct {
+	// BoolValue: Boolean value of the parameter.
+	BoolValue bool `json:"boolValue,omitempty"`
+	// IntValue: Integer value of the parameter.
+	IntValue int64 `json:"intValue,omitempty,string"`
+	// MessageValue: Nested parameter value pairs associated with this parameter.
+	// Complex value type for a parameter are returned as a list of parameter
+	// values. For example, the address parameter may have a value as `[{parameter:
+	// [{name: city, value: abc}]}]`
+	MessageValue *ActivityEventsSensitiveParametersMessageValue `json:"messageValue,omitempty"`
+	// MultiIntValue: Integer values of the parameter.
+	MultiIntValue googleapi.Int64s `json:"multiIntValue,omitempty"`
+	// MultiMessageValue: List of `messageValue` objects.
+	MultiMessageValue []*ActivityEventsSensitiveParametersMultiMessageValue `json:"multiMessageValue,omitempty"`
+	// MultiValue: String values of the parameter.
+	MultiValue []string `json:"multiValue,omitempty"`
+	// Name: The name of the parameter.
+	Name string `json:"name,omitempty"`
+	// Value: String value of the parameter.
+	Value string `json:"value,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "BoolValue") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "BoolValue") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ActivityEventsSensitiveParameters) MarshalJSON() ([]byte, error) {
+	type NoMethod ActivityEventsSensitiveParameters
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// ActivityEventsSensitiveParametersMessageValue: Nested parameter value pairs
+// associated with this parameter. Complex value type for a parameter are
+// returned as a list of parameter values. For example, the address parameter
+// may have a value as `[{parameter: [{name: city, value: abc}]}]`
+type ActivityEventsSensitiveParametersMessageValue struct {
+	// Parameter: Parameter values
+	Parameter []*NestedParameter `json:"parameter,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Parameter") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Parameter") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ActivityEventsSensitiveParametersMessageValue) MarshalJSON() ([]byte, error) {
+	type NoMethod ActivityEventsSensitiveParametersMessageValue
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+type ActivityEventsSensitiveParametersMultiMessageValue struct {
+	// Parameter: Parameter values
+	Parameter []*NestedParameter `json:"parameter,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Parameter") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Parameter") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ActivityEventsSensitiveParametersMultiMessageValue) MarshalJSON() ([]byte, error) {
+	type NoMethod ActivityEventsSensitiveParametersMultiMessageValue
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // ActivityId: Unique identifier for each activity record.
 type ActivityId struct {
 	// ApplicationName: Application name to which the event belongs. For possible
@@ -514,6 +613,36 @@ func (s ActivityId) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// ActivityEventsStatus: Status of the event. Note: Not all events have status.
+type ActivityEventsStatus struct {
+	// ErrorCode: Error code of the event. Note: Field can be empty.
+	ErrorCode string `json:"errorCode,omitempty"`
+	// ErrorMessage: Error message of the event. Note: Field can be empty.
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	// EventStatus: Status of the event. Possible values if not empty: -
+	// UNKNOWN_EVENT_STATUS - SUCCEEDED - SUCCEEDED_WITH_WARNINGS - FAILED -
+	// SKIPPED
+	EventStatus string `json:"eventStatus,omitempty"`
+	// HttpStatusCode: Status code of the event. Note: Field can be empty.
+	HttpStatusCode int64 `json:"httpStatusCode,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "ErrorCode") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "ErrorCode") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ActivityEventsStatus) MarshalJSON() ([]byte, error) {
+	type NoMethod ActivityEventsStatus
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // ActivityNetworkInfo: Network information of the user doing the action.
 type ActivityNetworkInfo struct {
 	// IpAsn: IP Address of the user doing the action.
@@ -538,6 +667,83 @@ type ActivityNetworkInfo struct {
 
 func (s ActivityNetworkInfo) MarshalJSON() ([]byte, error) {
 	type NoMethod ActivityNetworkInfo
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// ActivityUserDeviceInfo: Device details of the user doing the action.
+type ActivityUserDeviceInfo struct {
+	// DeviceId: Output only. Device ID of the user's device.
+	DeviceId string `json:"deviceId,omitempty"`
+	// DeviceOsVersion: Output only. Device OS version of the user's device.
+	DeviceOsVersion string `json:"deviceOsVersion,omitempty"`
+	// DeviceType: Output only. The type of the user's device.
+	DeviceType string `json:"deviceType,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "DeviceId") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "DeviceId") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s ActivityUserDeviceInfo) MarshalJSON() ([]byte, error) {
+	type NoMethod ActivityUserDeviceInfo
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// AgentAttributionInfo: Details of the AI agent that was the actor for the
+// activity.
+type AgentAttributionInfo struct {
+	// AgentId: The ID of the agent.
+	AgentId string `json:"agentId,omitempty"`
+	// AgentName: The user visible name of the agent.
+	AgentName string `json:"agentName,omitempty"`
+	// AgentOwner: The owner of the agent.
+	AgentOwner *AgentAttributionInfoAgentOwner `json:"agentOwner,omitempty"`
+	// AgentType: Type of the agent.
+	AgentType string `json:"agentType,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "AgentId") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "AgentId") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s AgentAttributionInfo) MarshalJSON() ([]byte, error) {
+	type NoMethod AgentAttributionInfo
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// AgentAttributionInfoAgentOwner: Details of the owner of the AI agent.
+type AgentAttributionInfoAgentOwner struct {
+	// Email: The email of the agent owner.
+	Email string `json:"email,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Email") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Email") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s AgentAttributionInfoAgentOwner) MarshalJSON() ([]byte, error) {
+	type NoMethod AgentAttributionInfoAgentOwner
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -620,6 +826,29 @@ type Channel struct {
 
 func (s Channel) MarshalJSON() ([]byte, error) {
 	type NoMethod Channel
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// CustomerIdentity: Identity of the Google Workspace customer who owns the
+// resource.
+type CustomerIdentity struct {
+	// Id: Customer id.
+	Id string `json:"id,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Id") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Id") to include in API requests
+	// with the JSON null value. By default, fields with empty values are omitted
+	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s CustomerIdentity) MarshalJSON() ([]byte, error) {
+	type NoMethod CustomerIdentity
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -829,6 +1058,30 @@ func (s FieldValueUserValue) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// GroupIdentity: Identity of the group who owns the resource.
+type GroupIdentity struct {
+	// GroupEmail: Group email.
+	GroupEmail string `json:"groupEmail,omitempty"`
+	// Id: Group gaia id.
+	Id string `json:"id,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "GroupEmail") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "GroupEmail") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s GroupIdentity) MarshalJSON() ([]byte, error) {
+	type NoMethod GroupIdentity
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // NestedParameter: JSON template for a parameter used in various reports.
 type NestedParameter struct {
 	// BoolValue: Boolean value of the parameter.
@@ -863,6 +1116,59 @@ func (s NestedParameter) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// OwnerDetails: Details of the owner of the resource.
+type OwnerDetails struct {
+	// OwnerIdentity: Identity details of the owner(s) of the resource.
+	OwnerIdentity []*OwnerIdentity `json:"ownerIdentity,omitempty"`
+	// OwnerType: Type of the owner of the resource.
+	OwnerType string `json:"ownerType,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "OwnerIdentity") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "OwnerIdentity") to include in API
+	// requests with the JSON null value. By default, fields with empty values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s OwnerDetails) MarshalJSON() ([]byte, error) {
+	type NoMethod OwnerDetails
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// OwnerIdentity: Identity details of the owner of the resource.
+type OwnerIdentity struct {
+	// CustomerIdentity: Identity of the Google Workspace customer who owns the
+	// resource.
+	CustomerIdentity *CustomerIdentity `json:"customerIdentity,omitempty"`
+	// GroupIdentity: Identity of the group who owns the resource.
+	GroupIdentity *GroupIdentity `json:"groupIdentity,omitempty"`
+	// SharedDriveIdentity: Identity of the shared drive who owns the resource.
+	SharedDriveIdentity *SharedDriveIdentity `json:"sharedDriveIdentity,omitempty"`
+	// UserIdentity: Identity of the user who owns the resource.
+	UserIdentity *UserIdentity `json:"userIdentity,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "CustomerIdentity") to
+	// unconditionally include in API requests. By default, fields with empty or
+	// default values are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "CustomerIdentity") to include in
+	// API requests with the JSON null value. By default, fields with empty values
+	// are omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s OwnerIdentity) MarshalJSON() ([]byte, error) {
+	type NoMethod OwnerIdentity
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 // Reason: The reason why the label/field was applied.
 type Reason struct {
 	// ReasonType: The type of the reason.
@@ -889,8 +1195,12 @@ func (s Reason) MarshalJSON() ([]byte, error) {
 type ResourceDetails struct {
 	// AppliedLabels: List of labels applied on the resource
 	AppliedLabels []*AppliedLabel `json:"appliedLabels,omitempty"`
-	// Id: Identifier of the resource.
+	// Id: Identifier of the resource, such as a doc_id for a Drive document, a
+	// conference_id for a Meet conference, or a "gaia_id/rfc2822_message_id" for
+	// an email.
 	Id string `json:"id,omitempty"`
+	// OwnerDetails: Owner details of the resource.
+	OwnerDetails *OwnerDetails `json:"ownerDetails,omitempty"`
 	// Relation: Defines relationship of the resource to the events
 	Relation string `json:"relation,omitempty"`
 	// Title: Title of the resource. For instance, in case of a drive document,
@@ -914,6 +1224,30 @@ type ResourceDetails struct {
 
 func (s ResourceDetails) MarshalJSON() ([]byte, error) {
 	type NoMethod ResourceDetails
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
+// SharedDriveIdentity: Identity of the shared drive who owns the resource.
+type SharedDriveIdentity struct {
+	// Id: Shared drive gaia id.
+	Id string `json:"id,omitempty"`
+	// SharedDriveName: Shared drive name.
+	SharedDriveName string `json:"sharedDriveName,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Id") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Id") to include in API requests
+	// with the JSON null value. By default, fields with empty values are omitted
+	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s SharedDriveIdentity) MarshalJSON() ([]byte, error) {
+	type NoMethod SharedDriveIdentity
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
@@ -1108,6 +1442,30 @@ func (s UsageReportsWarningsData) MarshalJSON() ([]byte, error) {
 	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
 }
 
+// UserIdentity: Identity of the user who owns the resource.
+type UserIdentity struct {
+	// Id: User gaia id.
+	Id string `json:"id,omitempty"`
+	// UserEmail: User email.
+	UserEmail string `json:"userEmail,omitempty"`
+	// ForceSendFields is a list of field names (e.g. "Id") to unconditionally
+	// include in API requests. By default, fields with empty or default values are
+	// omitted from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-ForceSendFields for more
+	// details.
+	ForceSendFields []string `json:"-"`
+	// NullFields is a list of field names (e.g. "Id") to include in API requests
+	// with the JSON null value. By default, fields with empty values are omitted
+	// from API requests. See
+	// https://pkg.go.dev/google.golang.org/api#hdr-NullFields for more details.
+	NullFields []string `json:"-"`
+}
+
+func (s UserIdentity) MarshalJSON() ([]byte, error) {
+	type NoMethod UserIdentity
+	return gensupport.MarshalJSON(NoMethod(s), s.ForceSendFields, s.NullFields)
+}
+
 type ActivitiesListCall struct {
 	s               *Service
 	userKey         string
@@ -1151,10 +1509,40 @@ func (c *ActivitiesListCall) ActorIpAddress(actorIpAddress string) *ActivitiesLi
 	return c
 }
 
+// AgentInfoFilter sets the optional parameter "agentInfoFilter": Filters on
+// agent info fields in the activity. This filter gets applied in
+// conjunction(AND) with other filters. Example:
+// "agentInfoFilter=agentId=\"agent-id\" AND agentName=\"agent-name\" AND
+// agentOwnerEmail=\"agent-owner-email\""
+func (c *ActivitiesListCall) AgentInfoFilter(agentInfoFilter string) *ActivitiesListCall {
+	c.urlParams_.Set("agentInfoFilter", agentInfoFilter)
+	return c
+}
+
+// ApplicationInfoFilter sets the optional parameter "applicationInfoFilter":
+// Used to filter on the `oAuthClientId` field present in `ApplicationInfo`
+// (#applicationinfo) message. **Usage** ```
+// GET...&applicationInfoFilter=oAuthClientId="clientId"
+// GET...&applicationInfoFilter=oAuthClientId=%22clientId%22 ```
+func (c *ActivitiesListCall) ApplicationInfoFilter(applicationInfoFilter string) *ActivitiesListCall {
+	c.urlParams_.Set("applicationInfoFilter", applicationInfoFilter)
+	return c
+}
+
 // CustomerId sets the optional parameter "customerId": The unique ID of the
 // customer to retrieve data for.
 func (c *ActivitiesListCall) CustomerId(customerId string) *ActivitiesListCall {
 	c.urlParams_.Set("customerId", customerId)
+	return c
+}
+
+// DeviceFilter sets the optional parameter "deviceFilter": Used to filter on
+// the fields present in `UserDeviceInfo` (#userdeviceinfo) message like
+// `deviceId`, `deviceType`, and `deviceOsVersion`. **Usage** ```
+// GET...&deviceFilter=deviceId="123" GET...&deviceFilter=deviceType="ANDROID"
+// GET...&deviceFilter=deviceOsVersion="14.0" ```
+func (c *ActivitiesListCall) DeviceFilter(deviceFilter string) *ActivitiesListCall {
+	c.urlParams_.Set("deviceFilter", deviceFilter)
 	return c
 }
 
@@ -1241,6 +1629,16 @@ func (c *ActivitiesListCall) GroupIdFilter(groupIdFilter string) *ActivitiesList
 	return c
 }
 
+// IncludeSensitiveData sets the optional parameter "includeSensitiveData":
+// When set to `true`, this field allows sensitive user-generated content to be
+// included in the returned audit logs. This parameter is supported only for
+// Rules (DLP), Chat and Workspace Studio applications; using it with any other
+// application will result in a permission error.
+func (c *ActivitiesListCall) IncludeSensitiveData(includeSensitiveData bool) *ActivitiesListCall {
+	c.urlParams_.Set("includeSensitiveData", fmt.Sprint(includeSensitiveData))
+	return c
+}
+
 // MaxResults sets the optional parameter "maxResults": Determines how many
 // activity records are shown on each response page. For example, if the
 // request sets `maxResults=1` and the report has two activities, the report
@@ -1249,6 +1647,15 @@ func (c *ActivitiesListCall) GroupIdFilter(groupIdFilter string) *ActivitiesList
 // default value is 1000.
 func (c *ActivitiesListCall) MaxResults(maxResults int64) *ActivitiesListCall {
 	c.urlParams_.Set("maxResults", fmt.Sprint(maxResults))
+	return c
+}
+
+// NetworkInfoFilter sets the optional parameter "networkInfoFilter": Used to
+// filter on the `regionCode` field present in `NetworkInfo` (#networkinfo)
+// message. **Usage** ``` GET...&networkInfoFilter=regionCode="IN"
+// GET...&networkInfoFilter=regionCode=%22IN%22 ```
+func (c *ActivitiesListCall) NetworkInfoFilter(networkInfoFilter string) *ActivitiesListCall {
+	c.urlParams_.Set("networkInfoFilter", networkInfoFilter)
 	return c
 }
 
@@ -1326,6 +1733,15 @@ func (c *ActivitiesListCall) ResourceDetailsFilter(resourceDetailsFilter string)
 // provided and the difference must not be greater than 30 days.
 func (c *ActivitiesListCall) StartTime(startTime string) *ActivitiesListCall {
 	c.urlParams_.Set("startTime", startTime)
+	return c
+}
+
+// StatusFilter sets the optional parameter "statusFilter": Used to filter on
+// the `statusCode` field present in `Status` (#status) message. **Usage** ```
+// GET...&statusFilter=statusCode="200"
+// GET...&statusFilter=statusCode=%22200%22 ```
+func (c *ActivitiesListCall) StatusFilter(statusFilter string) *ActivitiesListCall {
+	c.urlParams_.Set("statusFilter", statusFilter)
 	return c
 }
 
