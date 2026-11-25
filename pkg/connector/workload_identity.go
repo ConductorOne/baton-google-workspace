@@ -280,23 +280,44 @@ var stsStatusPattern = regexp.MustCompile(`oauth2/google: status code ([0-9]{3})
 
 // stsTransportFailurePrefix starts the error the vendored STS exchange returns
 // when the request itself fails. It formats the transport error with %v, which
-// drops the gRPC code uhttp gave it, so the code has to be restored here.
+// drops the error chain and with it the gRPC code uhttp gave the failure.
 const stsTransportFailurePrefix = "oauth2/google: invalid response from Secure Token Server:"
 
-// withSTSStatusCode gives an STS failure the gRPC code uhttp would give the
-// same HTTP status, so a 429 or 5xx is retried as Unavailable. A transport
-// failure is Unavailable too, as uhttp codes it for the other two calls.
+// grpcCodeInText reads a gRPC code back out of a status error's text
+// ("rpc error: code = FailedPrecondition desc = ..."), which survives %v.
+var grpcCodeInText = regexp.MustCompile(`rpc error: code = ([A-Za-z]+) desc =`)
+
+// grpcCodesByName maps each gRPC code's String() name back to the code.
+var grpcCodesByName = func() map[string]codes.Code {
+	m := make(map[string]codes.Code)
+	for c := codes.OK; c <= codes.Unauthenticated; c++ {
+		m[c.String()] = c
+	}
+	return m
+}()
+
+// withSTSStatusCode gives an STS failure a gRPC code. A non-2xx response gets
+// the code uhttp would give its HTTP status, so a 429 or 5xx is retried as
+// Unavailable. A transport failure keeps the code uhttp classified it with, as
+// it does for signJwt and the token exchange: a TLS verification failure stays
+// FailedPrecondition and a timeout DeadlineExceeded. Without one, it is
+// Unavailable.
 func withSTSStatusCode(err error) error {
 	msg := err.Error()
 	if m := stsStatusPattern.FindStringSubmatch(msg); m != nil {
-		if code, convErr := strconv.Atoi(m[1]); convErr == nil {
-			return uhttp.WrapErrors(uhttp.GrpcCodeFromHTTPStatus(code), fmt.Sprintf("STS returned HTTP %d", code), err)
+		code, _ := strconv.Atoi(m[1]) // the pattern matched exactly three digits
+		return uhttp.WrapErrors(uhttp.GrpcCodeFromHTTPStatus(code), fmt.Sprintf("STS returned HTTP %d", code), err)
+	}
+	if !strings.Contains(msg, stsTransportFailurePrefix) {
+		return err
+	}
+	code := codes.Unavailable
+	if m := grpcCodeInText.FindStringSubmatch(msg); m != nil {
+		if c, ok := grpcCodesByName[m[1]]; ok && c != codes.OK {
+			code = c
 		}
 	}
-	if strings.Contains(msg, stsTransportFailurePrefix) {
-		return uhttp.WrapErrors(codes.Unavailable, "STS request failed", err)
-	}
-	return err
+	return uhttp.WrapErrors(code, "STS request failed", err)
 }
 
 // googleAPIError names the status and message of a Google API error body, so

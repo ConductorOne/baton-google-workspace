@@ -502,6 +502,28 @@ func TestWorkloadIdentitySTSTransportFailureIsUnavailable(t *testing.T) {
 	require.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
 }
 
+// uhttp codes a TLS verification failure as terminal FailedPrecondition. The
+// vendored STS exchange flattens the error with %v, and that code must survive
+// rather than turn into a retryable Unavailable.
+func TestWorkloadIdentitySTSKeepsUhttpTransportCode(t *testing.T) {
+	fake := newFakeGoogle()
+	useFakeGoogle(t, fake)
+	untrusted := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(untrusted.Close)
+	googleSTSTokenURL = untrusted.URL + "/sts"
+	newGoogleHTTPClient = uhttp.NewClient // the real client, which does not trust the test certificate
+
+	_, err := newGWSAdminServiceForWorkloadIdentity(context.Background(), newTestWorkloadIdentity(t, &countingTokenSource{token: testC1JWT}),
+		testWIAdmin, directoryAdmin.NewService, directoryAdmin.AdminDirectoryUserReadonlyScope)
+	require.Error(t, err)
+	var wie *workloadIdentityError
+	require.True(t, errors.As(err, &wie), "got %T: %v", err, err)
+	require.Equal(t, "STS token exchange", wie.step)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
+}
+
 // The runtime's token source has no lock and C1 mints on every call to it, so
 // one ConductorOne JWT must serve every STS refresh until it expires, even
 // with scopes refreshing at the same time.

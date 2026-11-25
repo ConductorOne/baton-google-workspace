@@ -519,7 +519,10 @@ Leave the allowed audiences unset. C1 sets the token's audience to the provider'
 Let Google fetch C1's signing keys from the issuer. Don't upload a JWKS file to the provider: C1 rotates its keys daily, so an uploaded copy stops working within about two days.
 </Step>
 <Step>
-Let only this connector sign as the service account. Each token C1 issues names one connector in its subject, `c1:tenant/<tenant ID>/app/<app ID>/connector/<connector ID>`. Create the connector in C1 first (see the next step), then grant the role to that subject. C1 support can give you the exact subject for your connector.
+Create the connector in C1: in [Configure the Google Workspace connector](#configure-the-google-workspace-connector), choose the **Workload identity (ConductorOne)** authentication method. Enter the provider as `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/c1-pool/providers/c1-oidc` (the project number, not the project ID), and the service account's email. Syncs fail with `PERMISSION_DENIED` until you finish the next step.
+</Step>
+<Step>
+Let only this connector sign as the service account. Each token C1 issues names one connector in its subject, `c1:tenant/<tenant ID>/app/<app ID>/connector/<connector ID>`. The app ID and connector ID are the last two parts of the connector's page URL in C1 (`.../connector/<catalog ID>/<app ID>/<connector ID>`). Ask C1 support for your tenant ID.
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding SERVICE_ACCOUNT_EMAIL \
@@ -528,12 +531,11 @@ gcloud iam service-accounts add-iam-policy-binding SERVICE_ACCOUNT_EMAIL \
   --member="principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/c1-pool/subject/c1:tenant/TENANT_ID/app/APP_ID/connector/CONNECTOR_ID"
 ```
 
+If you delete the connector and create it again, it gets a new connector ID: grant the role to the new subject.
+
 <Warning>
 Don't grant the role to the whole pool (`principalSet://.../c1-pool/*`). Your tenant's issuer signs tokens for every workload identity connector in your C1 tenant, and a provider only checks the issuer and the audience. A pool-wide grant lets any connector in your tenant that obtains a token with this provider's audience act as the service account, with its domain-wide delegation. Binding the single subject closes that.
 </Warning>
-</Step>
-<Step>
-When you configure the connector in C1, choose the **Workload identity (ConductorOne)** authentication method. Enter the provider as `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/c1-pool/providers/c1-oidc` (the project number, not the project ID), and the service account's email.
 </Step>
 </Steps>
 
