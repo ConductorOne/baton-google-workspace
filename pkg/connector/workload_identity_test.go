@@ -189,7 +189,8 @@ func TestWorkloadIdentityUngrantedScopeIsAuthorizationError(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"401 unauthorized_client", http.StatusUnauthorized, `{"error":"unauthorized_client","error_description":"Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested."}`},
+		{"401 unauthorized_client", http.StatusUnauthorized, `{"error":"unauthorized_client","error_description":"Client is unauthorized ` +
+			`to retrieve access tokens using this method, or client not authorized for any of the scopes requested."}`},
 		{"403 access_denied", http.StatusForbidden, `{"error":"access_denied","error_description":"Requested client not authorized."}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -489,7 +490,7 @@ func TestWorkloadIdentitySharesFederatedTokenAcrossScopes(t *testing.T) {
 func TestWorkloadIdentitySTSTransportFailureIsUnavailable(t *testing.T) {
 	fake := newFakeGoogle()
 	useFakeGoogle(t, fake)
-	googleSTSTokenURL = "http://127.0.0.1:1/sts" // nothing listens on port 1
+	googleSTSTokenURL = "http://127.0.0.1:1/sts" //nolint:gosec // G101: a test URL; nothing listens on port 1
 
 	_, err := newGWSAdminServiceForWorkloadIdentity(context.Background(), newTestWorkloadIdentity(t, &countingTokenSource{token: testC1JWT}),
 		testWIAdmin, directoryAdmin.NewService, directoryAdmin.AdminDirectoryUserReadonlyScope)

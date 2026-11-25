@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	jwtSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt"
+	jwtSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt" //nolint:gosec // G101: an RFC 8693 token type name, not a credential
 	cloudPlatformScope  = "https://www.googleapis.com/auth/cloud-platform"
-	jwtBearerGrantType  = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+	jwtBearerGrantType  = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint:gosec // G101: an RFC 7523 grant type name, not a credential
 
 	// delegationAssertionLifetime is the lifetime of the domain-wide delegation
 	// assertion signed through the IAM Credentials API; Google accepts at most
@@ -37,9 +37,9 @@ const (
 
 // Google endpoints of the workload identity chain, replaceable by package tests.
 var (
-	googleSTSTokenURL        = "https://sts.googleapis.com/v1/token"
-	googleIAMCredentialsURL  = "https://iamcredentials.googleapis.com"
-	googleOAuth2TokenURL     = "https://oauth2.googleapis.com/token"
+	googleSTSTokenURL        = "https://sts.googleapis.com/v1/token"   //nolint:gosec // G101: a public endpoint URL, not a credential
+	googleIAMCredentialsURL  = "https://iamcredentials.googleapis.com" //nolint:gosec // G101: a public endpoint URL, not a credential
+	googleOAuth2TokenURL     = "https://oauth2.googleapis.com/token"   //nolint:gosec // G101: a public endpoint URL, not a credential
 	googleIAMAudiencePrefix  = "//iam.googleapis.com/"
 	googleIAMProviderURLBase = "https://iam.googleapis.com/"
 )

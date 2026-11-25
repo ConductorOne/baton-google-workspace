@@ -146,7 +146,7 @@
     {
       "name": "service-account-email",
       "displayName": "Service account email",
-      "description": "Workload identity only: email of the service account with domain-wide delegation. The workload identity pool's principal needs the Service Account Token Creator role on it.",
+      "description": "Workload identity only: email of the service account with domain-wide delegation. Grant Service Account Token Creator on it to this connector's subject (principal://iam.googleapis.com/.../subject/c1:tenant/\u003ctenant\u003e/app/\u003capp\u003e/connector/\u003cconnector\u003e), not to the whole pool.",
       "isRequired": true,
       "stringField": {
         "rules": {

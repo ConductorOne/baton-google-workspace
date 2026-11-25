@@ -75,7 +75,8 @@ var (
 		"service-account-email",
 		field.WithDisplayName("Service account email"),
 		field.WithDescription("Workload identity only: email of the service account with domain-wide delegation. "+
-			"The workload identity pool's principal needs the Service Account Token Creator role on it."),
+			"Grant Service Account Token Creator on it to this connector's subject "+
+			"(principal://iam.googleapis.com/.../subject/c1:tenant/<tenant>/app/<app>/connector/<connector>), not to the whole pool."),
 		field.WithRequired(true),
 	)
 
