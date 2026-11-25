@@ -518,24 +518,33 @@ func TestWorkloadIdentityReusesConductorOneToken(t *testing.T) {
 	client, err := newGoogleHTTPClient(context.Background())
 	require.NoError(t, err)
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
-	var wg sync.WaitGroup
-	for _, scope := range []string{
+	scopes := []string{
 		directoryAdmin.AdminDirectoryUserReadonlyScope,
 		directoryAdmin.AdminDirectoryGroupReadonlyScope,
 		directoryAdmin.AdminDirectoryDomainReadonlyScope,
-	} {
+	}
+	// require must not be called from these goroutines: they report errors here.
+	errs := make(chan error, len(scopes))
+	var wg sync.WaitGroup
+	for _, scope := range scopes {
 		ts, err := wi.tokenSource(ctx, client, testWIAdmin, scope)
 		require.NoError(t, err)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for range 3 {
-				_, err := ts.Token()
-				require.NoError(t, err)
+				if _, err := ts.Token(); err != nil {
+					errs <- err
+					return
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 	require.Greater(t, len(fake.stsForms), 1, "STS refreshed more than once")
 	require.Equal(t, 1, subject.calls, "one ConductorOne JWT serves every refresh until it expires")
 }
