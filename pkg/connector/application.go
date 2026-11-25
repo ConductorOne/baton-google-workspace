@@ -45,20 +45,13 @@ func (ar *applicationResource) List(ctx context.Context, _ *v2.ResourceId, attrs
 
 	var samlProfileMap map[string]string
 	if ar.client.CloudIdentityService != nil {
-		// The Cloud Identity service is only non-nil when the inboundsso.readonly scope was
-		// granted and service init succeeded, so a failure here is a transient/real API error,
-		// not a missing-scope condition. Do NOT swallow it: falling back to a nil profile map
-		// drops SAML apps discovered only via Cloud Identity AND flips the IDs of SAML apps
-		// found via login events from their stable profile name to a display-name-derived ID.
-		// A previously-synced SAML app would then change resource ID and c1 would prune the old
-		// resource and all of its access grants — a silent false-revocation on a transient blip.
-		// (When the scope is NOT granted, CloudIdentityService is nil and we consistently use
-		// display-name IDs every sync, so no ID flip occurs.)
+		// A Cloud Identity error fails this page rather than falling back to display-name IDs;
+		// see buildSAMLProfileMapOrFallback for why. A falling-back ID would make c1 prune the
+		// previously synced SAML app and all of its access grants on a transient blip.
 		//
 		// This is only fetched on the first page and cached in session for subsequent pages —
-		// each applicationResource.List() call now covers one bounded batch of users, not the
-		// whole directory, so re-fetching every call would be wasteful and would re-run the
-		// error-handling below on every page.
+		// each applicationResource.List() call covers one bounded batch of users, not the whole
+		// directory, so re-fetching every call would be wasteful.
 		var err error
 		samlProfileMap, err = loadCloudIdentitySAMLProfileMap(ctx, attrs.Session, ar.client, ar.customerID, isFirstPage)
 		if err != nil {

@@ -186,7 +186,7 @@ Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise appli
 | API | Service ID | Required? | Used for |
 | :--- | :--- | :--- | :--- |
 | Admin SDK API | `admin.googleapis.com` | Required | Syncing users, groups, roles, and audit events, and running provisioning and data transfer actions |
-| Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. |
+| Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. Enabling it later, with the `cloud-identity.inboundsso.readonly` scope granted, changes every SAML app's ID, so C1 replaces those resources. |
 | Groups Settings API | `groupssettings.googleapis.com` | Optional | The `modify_group_settings` connector action |
 | Security Token Service API | `sts.googleapis.com` | Workload identity only | Exchanging the C1-issued token for a Google token |
 | IAM Service Account Credentials API | `iamcredentials.googleapis.com` | Workload identity only | Signing the domain-wide delegation assertion as the service account |
@@ -430,7 +430,7 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `admin.directory.user.readonly` | Read and sync users |
 | `admin.reports.audit.readonly` | Sync usage and admin events for continuous sync. Also required to sync enterprise applications |
 | `admin.directory.user.security` | Discover OAuth apps through per-user token listing. Also required to sync enterprise applications, and permits three actions that revoke a user's access. See the warning below |
-| `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
+| `cloud-identity.inboundsso.readonly` | Optional. Resolves SAML app IDs to stable identifiers; without it they fall back to display names. Granting it later changes every SAML app's ID, so C1 replaces those resources. Once granted, any other Cloud Identity error fails enterprise application sync and continuous sync of SAML app usage events until it is resolved |
 </Tab>
 
 <Tab title="Read/write">
@@ -452,14 +452,25 @@ https://www.googleapis.com/auth/admin.directory.domain.readonly, https://www.goo
 | `admin.directory.group` | Write. Provision groups |
 | `admin.directory.user.security` | Write. Discover OAuth apps, sync enterprise applications, and run actions that remove a user's access, such as sign out and deleting auth tokens and app passwords |
 | `apps.groups.settings` | Write. Edit group settings. Requires the Groups Settings API |
-| `cloud-identity.inboundsso.readonly` | Optional. Resolve SAML app IDs to stable identifiers. Without it, SAML app IDs fall back to display names |
+| `cloud-identity.inboundsso.readonly` | Optional. Resolves SAML app IDs to stable identifiers; without it they fall back to display names. Granting it later changes every SAML app's ID, so C1 replaces those resources. Once granted, any other Cloud Identity error fails enterprise application sync and continuous sync of SAML app usage events until it is resolved |
 </Tab>
 </Tabs>
+
+<Note>
+Without `admin.directory.domain.readonly` (or `admin.directory.domain`), the connection fails. If another sync scope is missing, the sync succeeds but skips the resource types that need it. The users, roles and groups scopes can each be replaced by their write variant from the Read/write set:
+
+- Users: `admin.directory.user.readonly` or `admin.directory.user`
+- Roles: `admin.directory.rolemanagement.readonly` or `admin.directory.rolemanagement`
+- Groups: `admin.directory.group.readonly` or `admin.directory.group`, and `admin.directory.group.member.readonly` or `admin.directory.group.member`
+- Enterprise applications: the users scope, `admin.directory.user.security`, and `admin.reports.audit.readonly`
+
+Continuous sync needs `admin.reports.audit.readonly`: without it, the app usage and admin event feeds fail, and SAML and Google sign-in usage events are not collected at all. The app usage, SAML and Google sign-in feeds also need the users scope, and the app usage feed also needs `admin.directory.user.security`; without them, those feeds fail. Any other missing write scope only makes the matching provisioning task or action fail.
+</Note>
 
 <Warning>
 The write scopes let C1 provision and deprovision access. **If you do not want C1 to perform these tasks, use the read-only scope set.** Read-only still syncs users, groups, roles, and enterprise applications, so it is sufficient when you use Google Workspace as your [directory](#set-google-workspace-as-your-c1-directory) and run access reviews.
 
-The read-only set has one exception. `admin.directory.user.security` appears in both sets, and it permits three actions that revoke a user's access: `sign_out_user`, `delete_all_oauth_tokens`, and `delete_all_application_passwords`. These actions remain available with the read-only set. **If you do not want C1 to perform these tasks, do not grant this scope.** The connector then stops discovering OAuth apps and stops syncing enterprise applications.
+The read-only set has one exception. `admin.directory.user.security` appears in both sets, and it permits three actions that revoke a user's access: `sign_out_user`, `delete_all_oauth_tokens`, and `delete_all_application_passwords`. These actions remain available with the read-only set. **If you do not want C1 to perform these tasks, do not grant this scope.** The connector then stops discovering OAuth apps, stops syncing enterprise applications, and continuous sync of app usage events fails.
 </Warning>
 
 ### Find your customer ID and primary domain
