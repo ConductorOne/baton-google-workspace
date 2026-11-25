@@ -48,8 +48,8 @@
 
    | Flag | Env Var | Description | Required |
    | --- | --- | --- | --- |
-   | `--credentials-json-file-path` | `BATON_CREDENTIALS_JSON_FILE_PATH` | Path to the Google service-account JSON key file. Mutually exclusive with `--credentials-json`. | Yes (one of the two) |
-   | `--credentials-json` | `BATON_CREDENTIALS_JSON` | Service-account JSON credentials inline. Mutually exclusive with the file path. | Yes (one of the two) |
+   | `--credentials-json-file-path` | `BATON_CREDENTIALS_JSON_FILE_PATH` | Path to the Google service-account JSON key file. Mutually exclusive with `--credentials-json`. | With service account key (default): one of the two |
+   | `--credentials-json` | `BATON_CREDENTIALS_JSON` | Service-account JSON credentials inline. Mutually exclusive with the file path. | With service account key (default): one of the two |
    | `--administrator-email` | `BATON_ADMINISTRATOR_EMAIL` | Super-admin email the service account impersonates via domain-wide delegation (the delegation `subject`). | Yes |
    | `--customer-id` | `BATON_CUSTOMER_ID` | Google Workspace customer ID. | Yes |
    | `--domain` | `BATON_DOMAIN` | Primary domain to sync. If omitted, all available domains are synced. | No |

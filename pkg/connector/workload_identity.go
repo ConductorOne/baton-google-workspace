@@ -18,6 +18,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google/externalaccount"
+	"google.golang.org/grpc/codes"
 )
 
 const (
@@ -219,14 +220,16 @@ func (s *delegatedTokenSource) Token() (*oauth2.Token, error) {
 }
 
 func (s *delegatedTokenSource) signDelegationAssertion(federated *oauth2.Token) (string, error) {
-	now := time.Now()
+	// Backdated by 10 seconds like golang.org/x/oauth2/jws does for the key
+	// path, so a clock slightly ahead of Google's still yields a valid assertion.
+	iat := time.Now().Add(-10 * time.Second)
 	claims, err := json.Marshal(map[string]any{
 		"iss":   s.serviceAccount,
 		"sub":   s.admin,
 		"scope": strings.Join(s.scopes, " "),
 		"aud":   googleOAuth2TokenURL,
-		"iat":   now.Unix(),
-		"exp":   now.Add(delegationAssertionLifetime).Unix(),
+		"iat":   iat.Unix(),
+		"exp":   iat.Add(delegationAssertionLifetime).Unix(),
 	})
 	if err != nil {
 		return "", err
@@ -275,19 +278,25 @@ func (s *delegatedTokenSource) signDelegationAssertion(federated *oauth2.Token) 
 // ("oauth2/google: status code %d: %s"); it exposes no typed error.
 var stsStatusPattern = regexp.MustCompile(`oauth2/google: status code ([0-9]{3}):`)
 
+// stsTransportFailurePrefix starts the error the vendored STS exchange returns
+// when the request itself fails. It formats the transport error with %v, which
+// drops the gRPC code uhttp gave it, so the code has to be restored here.
+const stsTransportFailurePrefix = "oauth2/google: invalid response from Secure Token Server:"
+
 // withSTSStatusCode gives an STS failure the gRPC code uhttp would give the
-// same HTTP status, so a 429 or 5xx is retried as Unavailable. Failures without
-// a status, such as transport errors, are already coded by the uhttp client.
+// same HTTP status, so a 429 or 5xx is retried as Unavailable. A transport
+// failure is Unavailable too, as uhttp codes it for the other two calls.
 func withSTSStatusCode(err error) error {
-	m := stsStatusPattern.FindStringSubmatch(err.Error())
-	if m == nil {
-		return err
+	msg := err.Error()
+	if m := stsStatusPattern.FindStringSubmatch(msg); m != nil {
+		if code, convErr := strconv.Atoi(m[1]); convErr == nil {
+			return uhttp.WrapErrors(uhttp.GrpcCodeFromHTTPStatus(code), fmt.Sprintf("STS returned HTTP %d", code), err)
+		}
 	}
-	code, convErr := strconv.Atoi(m[1])
-	if convErr != nil {
-		return err
+	if strings.Contains(msg, stsTransportFailurePrefix) {
+		return uhttp.WrapErrors(codes.Unavailable, "STS request failed", err)
 	}
-	return uhttp.WrapErrors(uhttp.GrpcCodeFromHTTPStatus(code), fmt.Sprintf("STS returned HTTP %d", code), err)
+	return err
 }
 
 // googleAPIError names the status and message of a Google API error body, so

@@ -62,7 +62,7 @@ var (
 	WorkloadIdentityProviderField = field.StringField(
 		"workload-identity-provider",
 		field.WithDisplayName("Workload identity provider"),
-		field.WithDescription("Resource name of the Google workload identity pool provider that trusts ConductorOne: "+
+		field.WithDescription("Workload identity only: resource name of the Google workload identity pool provider that trusts ConductorOne: "+
 			"projects/<project number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>"),
 		// Required only within the workload identity group: validation skips
 		// fields the selected group does not list.
@@ -74,7 +74,7 @@ var (
 	ServiceAccountEmailField = field.StringField(
 		"service-account-email",
 		field.WithDisplayName("Service account email"),
-		field.WithDescription("Email of the service account with domain-wide delegation. "+
+		field.WithDescription("Workload identity only: email of the service account with domain-wide delegation. "+
 			"The workload identity pool's principal needs the Service Account Token Creator role on it."),
 		field.WithRequired(true),
 	)

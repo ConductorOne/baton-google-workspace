@@ -135,7 +135,7 @@
     {
       "name": "workload-identity-provider",
       "displayName": "Workload identity provider",
-      "description": "Resource name of the Google workload identity pool provider that trusts ConductorOne: projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/\u003cpool\u003e/providers/\u003cprovider\u003e",
+      "description": "Workload identity only: resource name of the Google workload identity pool provider that trusts ConductorOne: projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/\u003cpool\u003e/providers/\u003cprovider\u003e",
       "isRequired": true,
       "stringField": {
         "rules": {
@@ -146,7 +146,7 @@
     {
       "name": "service-account-email",
       "displayName": "Service account email",
-      "description": "Email of the service account with domain-wide delegation. The workload identity pool's principal needs the Service Account Token Creator role on it.",
+      "description": "Workload identity only: email of the service account with domain-wide delegation. The workload identity pool's principal needs the Service Account Token Creator role on it.",
       "isRequired": true,
       "stringField": {
         "rules": {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -115,10 +116,11 @@ func useFakeGoogle(t *testing.T, fake *fakeGoogle) {
 }
 
 type countingTokenSource struct {
-	mu    sync.Mutex
-	calls int
-	token string
-	err   error
+	mu     sync.Mutex
+	calls  int
+	token  string
+	expiry time.Time
+	err    error
 }
 
 func (s *countingTokenSource) Token() (*oauth2.Token, error) {
@@ -128,7 +130,7 @@ func (s *countingTokenSource) Token() (*oauth2.Token, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &oauth2.Token{AccessToken: s.token}, nil
+	return &oauth2.Token{AccessToken: s.token, Expiry: s.expiry}, nil
 }
 
 func newTestWorkloadIdentity(t *testing.T, subject oauth2.TokenSource) *workloadIdentity {
@@ -170,6 +172,7 @@ func TestWorkloadIdentityChain(t *testing.T) {
 	iat, _ := claims["iat"].(float64)
 	exp, _ := claims["exp"].(float64)
 	require.InDelta(t, delegationAssertionLifetime.Seconds(), exp-iat, 1)
+	require.LessOrEqual(t, iat, float64(time.Now().Add(-5*time.Second).Unix()), "iat is backdated like the key path's jws")
 
 	require.Len(t, fake.tokenForms, 1)
 	require.Equal(t, jwtBearerGrantType, fake.tokenForms[0].Get("grant_type"))
@@ -268,6 +271,17 @@ func TestWorkloadIdentityChainFailuresAreNotAuthorizationErrors(t *testing.T) {
 			subject:  &countingTokenSource{token: testC1JWT},
 			wantStep: "signJwt for " + testWIServiceAccount,
 			wantText: "Quota exceeded",
+			wantCode: codes.Unavailable,
+		},
+		{
+			name: "STS rate limited",
+			setup: func(f *fakeGoogle) {
+				f.stsStatus = http.StatusTooManyRequests
+				f.stsBody = `{"error":"rate_limited"}`
+			},
+			subject:  &countingTokenSource{token: testC1JWT},
+			wantStep: "STS token exchange",
+			wantText: "429",
 			wantCode: codes.Unavailable,
 		},
 		{
@@ -468,4 +482,59 @@ func TestWorkloadIdentitySharesFederatedTokenAcrossScopes(t *testing.T) {
 	require.Equal(t, 1, subject.calls)
 	require.Len(t, fake.signClaims, 3)
 	require.Len(t, fake.tokenForms, 3)
+}
+
+// The vendored STS exchange flattens a transport error with %v, dropping
+// uhttp's code; it must still come back Unavailable so the syncer retries it.
+func TestWorkloadIdentitySTSTransportFailureIsUnavailable(t *testing.T) {
+	fake := newFakeGoogle()
+	useFakeGoogle(t, fake)
+	googleSTSTokenURL = "http://127.0.0.1:1/sts" // nothing listens on port 1
+
+	_, err := newGWSAdminServiceForWorkloadIdentity(context.Background(), newTestWorkloadIdentity(t, &countingTokenSource{token: testC1JWT}),
+		testWIAdmin, directoryAdmin.NewService, directoryAdmin.AdminDirectoryUserReadonlyScope)
+	require.Error(t, err)
+	require.False(t, isAuthorizationError(err))
+	var wie *workloadIdentityError
+	require.True(t, errors.As(err, &wie), "got %T: %v", err, err)
+	require.Equal(t, "STS token exchange", wie.step)
+	require.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+}
+
+// The runtime's token source has no lock and C1 mints on every call to it, so
+// one ConductorOne JWT must serve every STS refresh until it expires, even
+// with scopes refreshing at the same time.
+func TestWorkloadIdentityReusesConductorOneToken(t *testing.T) {
+	fake := newFakeGoogle()
+	// Federated and delegated tokens expire within oauth2's refresh margin, so
+	// every Token() call goes back to STS.
+	fake.stsBody = `{"access_token":"federated-token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":1}`
+	fake.tokenBody = `{"access_token":"delegated-token","token_type":"Bearer","expires_in":1}`
+	useFakeGoogle(t, fake)
+	subject := &countingTokenSource{token: testC1JWT, expiry: time.Now().Add(10 * time.Minute)}
+	wi := newTestWorkloadIdentity(t, subject)
+
+	client, err := newGoogleHTTPClient(context.Background())
+	require.NoError(t, err)
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	var wg sync.WaitGroup
+	for _, scope := range []string{
+		directoryAdmin.AdminDirectoryUserReadonlyScope,
+		directoryAdmin.AdminDirectoryGroupReadonlyScope,
+		directoryAdmin.AdminDirectoryDomainReadonlyScope,
+	} {
+		ts, err := wi.tokenSource(ctx, client, testWIAdmin, scope)
+		require.NoError(t, err)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 3 {
+				_, err := ts.Token()
+				require.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Greater(t, len(fake.stsForms), 1, "STS refreshed more than once")
+	require.Equal(t, 1, subject.calls, "one ConductorOne JWT serves every refresh until it expires")
 }
