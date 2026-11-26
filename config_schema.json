@@ -131,10 +131,68 @@
           ".json"
         ]
       }
+    },
+    {
+      "name": "workload-identity-provider",
+      "displayName": "Workload identity provider",
+      "description": "Workload identity only: resource name of the Google workload identity pool provider that trusts ConductorOne: projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/\u003cpool\u003e/providers/\u003cprovider\u003e",
+      "isRequired": true,
+      "stringField": {
+        "rules": {
+          "isRequired": true
+        }
+      }
+    },
+    {
+      "name": "service-account-email",
+      "displayName": "Service account email",
+      "description": "Workload identity only: email of the service account with domain-wide delegation. Grant Service Account Token Creator on it to this connector's subject (principal://iam.googleapis.com/.../subject/c1:tenant/\u003ctenant\u003e/app/\u003capp\u003e/connector/\u003cconnector\u003e), not to the whole pool.",
+      "isRequired": true,
+      "stringField": {
+        "rules": {
+          "isRequired": true
+        }
+      }
+    },
+    {
+      "name": "google-workspace-c1-token",
+      "displayName": "ConductorOne token",
+      "description": "JWT ConductorOne issues for a hosted connector. The hosted runtime supplies it; leave it unset anywhere else.",
+      "stringField": {
+        "type": "STRING_FIELD_TYPE_OAUTH2"
+      }
     }
   ],
   "displayName": "Google Workspace",
   "helpUrl": "/docs/baton/google-workspace-v2",
   "iconUrl": "/static/app-icons/google-workspace.svg",
-  "isDirectory": true
+  "isDirectory": true,
+  "fieldGroups": [
+    {
+      "name": "service-account-key",
+      "displayName": "Service account key",
+      "helpText": "Authenticate with a service account JSON key that has domain-wide delegation.",
+      "fields": [
+        "customer-id",
+        "domain",
+        "administrator-email",
+        "credentials-json-file-path",
+        "credentials-json"
+      ],
+      "default": true
+    },
+    {
+      "name": "workload-identity-c1",
+      "displayName": "Workload identity (ConductorOne)",
+      "helpText": "For a ConductorOne-hosted connector, without a stored key. ConductorOne issues a short-lived JWT for this connector, Google exchanges it through your workload identity pool provider, and the connector impersonates the service account with domain-wide delegation.",
+      "fields": [
+        "customer-id",
+        "domain",
+        "administrator-email",
+        "workload-identity-provider",
+        "service-account-email",
+        "google-workspace-c1-token"
+      ]
+    }
+  ]
 }

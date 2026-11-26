@@ -118,7 +118,7 @@ You need:
 - Either the **Connector Administrator** or **Super Administrator** role in C1.
 
 <Warning>
-**Check your organization's key policy first.** Google organizations created on or after May 3, 2024 block service account key creation by default. The connector requires a JSON key, so confirm you can create one before you start. See [Allow service account key creation](#allow-service-account-key-creation).
+**Check your organization's key policy first.** Google organizations created on or after May 3, 2024 block service account key creation by default. The default authentication method uses a JSON key, so confirm you can create one before you start. See [Allow service account key creation](#allow-service-account-key-creation). If your organization blocks keys and the connector is hosted by C1, use [workload identity](#authenticate-without-a-key-workload-identity) instead.
 </Warning>
 
 ### What the Google Cloud project provides
@@ -188,6 +188,8 @@ Enable the Admin SDK API. Add the Cloud Identity API for stable enterprise appli
 | Admin SDK API | `admin.googleapis.com` | Required | Syncing users, groups, roles, and audit events, and running provisioning and data transfer actions |
 | Cloud Identity API | `cloudidentity.googleapis.com` | Recommended | Resolving SAML app IDs to stable identifiers when syncing enterprise applications. Leave it disabled and the connector derives those IDs from display names instead, which re-keys the resource if an app is renamed. Sync still succeeds. Enabling it later, with the `cloud-identity.inboundsso.readonly` scope granted, changes every SAML app's ID, so C1 replaces those resources. |
 | Groups Settings API | `groupssettings.googleapis.com` | Optional | The `modify_group_settings` connector action |
+| Security Token Service API | `sts.googleapis.com` | Workload identity only | Exchanging the C1-issued token for a Google token |
+| IAM Service Account Credentials API | `iamcredentials.googleapis.com` | Workload identity only | Signing the domain-wide delegation assertion as the service account |
 
 <Note>
 The Admin SDK API covers the Directory, Reports, and Data Transfer APIs. Enabling it once is enough. There is no separate Data Transfer API to enable, even though the connector requests the `admin.datatransfer` scope.
@@ -269,7 +271,7 @@ Earlier versions of this guide granted the service account the **Editor** role. 
 
 ### Allow service account key creation
 
-The connector authenticates with a JSON key, so your organization must permit key creation on this service account.
+The service account key method authenticates with a JSON key, so your organization must permit key creation on this service account. A C1-hosted connector can skip the key entirely with [workload identity](#authenticate-without-a-key-workload-identity).
 
 The `constraints/iam.disableServiceAccountKeyCreation` organization policy blocks key creation. **Google enforces this policy by default for organizations created on or after May 3, 2024**, so new organizations hit it unless an administrator grants an exception.
 
@@ -328,7 +330,7 @@ This exception applies only to the project you name. Enforcement elsewhere in yo
 </Note>
 
 <Warning>
-Google recommends against long-lived service account keys and prefers Workload Identity Federation where it's available. This connector requires a JSON key, so treat it as a sensitive credential: store it in a secrets manager, never commit it to source control, and rotate it on a schedule. See Google's [best practices for managing service account keys](https://cloud.google.com/iam/docs/best-practices-for-managing-service-account-keys).
+Google recommends against long-lived service account keys and prefers Workload Identity Federation where it's available. A C1-hosted connector can use [workload identity](#authenticate-without-a-key-workload-identity) instead. If you use a JSON key, treat it as a sensitive credential: store it in a secrets manager, never commit it to source control, and rotate it on a schedule. See Google's [best practices for managing service account keys](https://cloud.google.com/iam/docs/best-practices-for-managing-service-account-keys).
 </Warning>
 
 ### Create the key and get the unique ID
@@ -492,6 +494,62 @@ Click **Manage Domains**. Locate and copy the domain labeled as the **Primary Do
 
 **Done.** Next, move on to the connector configuration instructions.
 
+## Authenticate without a key (workload identity)
+
+A connector hosted by C1 can authenticate without a stored service account key. Use this when your organization blocks key creation or you don't want a long-lived key.
+
+<Note>
+Workload identity is available only for C1-hosted connectors, and it must be enabled for your C1 tenant. Contact C1 support to enable it.
+</Note>
+
+**How it works:** for each token refresh, C1 issues a short-lived JWT for this connector. Your Google Cloud project trusts C1 through a workload identity pool, exchanges that JWT for a Google token, and lets it sign a domain-wide delegation assertion as your service account. Domain-wide delegation, the admin email and the OAuth scopes work exactly as with a key.
+
+You still need the service account and its domain-wide delegation, but not its JSON key. Follow [Create a service account](#create-a-service-account), get its numeric Unique ID as in [Create the key and get the unique ID](#create-the-key-and-get-the-unique-id) without creating the key, and skip [Allow service account key creation](#allow-service-account-key-creation). You also need **Workload Identity Pool Admin** (`roles/iam.workloadIdentityPoolAdmin`) on the project, and permission to grant roles on the service account, such as **Service Account Admin** (`roles/iam.serviceAccountAdmin`).
+
+<Steps>
+<Step>
+Enable the **Security Token Service API** and the **IAM Service Account Credentials API**, in addition to the APIs in [Enable the APIs](#enable-the-apis).
+</Step>
+<Step>
+Create a workload identity pool and an OIDC provider that trusts your C1 tenant. The issuer is your C1 tenant URL followed by `/auth/v1/workload-identity`, for example `https://acme.conductor.one/auth/v1/workload-identity`.
+
+```bash
+gcloud iam workload-identity-pools create c1-pool \
+  --project=PROJECT_ID --location=global \
+  --display-name="ConductorOne"
+
+gcloud iam workload-identity-pools providers create-oidc c1-oidc \
+  --project=PROJECT_ID --location=global \
+  --workload-identity-pool=c1-pool \
+  --issuer-uri="https://acme.conductor.one/auth/v1/workload-identity" \
+  --attribute-mapping="google.subject=assertion.sub"
+```
+
+Leave the allowed audiences unset. C1 sets the token's audience to the provider's default, `https://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/c1-pool/providers/c1-oidc`.
+
+Let Google fetch C1's signing keys from the issuer. Don't upload a JWKS file to the provider: C1 rotates its keys daily, so an uploaded copy stops working within about two days.
+</Step>
+<Step>
+Create the connector in C1: in [Configure the Google Workspace connector](#configure-the-google-workspace-connector), choose the **Workload identity (ConductorOne)** authentication method. Enter the provider as `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/c1-pool/providers/c1-oidc` (the project number, not the project ID), and the service account's email. Syncs fail with `PERMISSION_DENIED` until you finish the next step.
+</Step>
+<Step>
+Let only this connector sign as the service account. Each token C1 issues names one connector in its subject, `c1:tenant/<tenant ID>/app/<app ID>/connector/<connector ID>`. The app ID and connector ID are the last two parts of the connector's page URL in C1 (`.../connector/<catalog ID>/<app ID>/<connector ID>`). Ask C1 support for your tenant ID.
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding SERVICE_ACCOUNT_EMAIL \
+  --project=PROJECT_ID \
+  --role=roles/iam.serviceAccountTokenCreator \
+  --member="principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/c1-pool/subject/c1:tenant/TENANT_ID/app/APP_ID/connector/CONNECTOR_ID"
+```
+
+If you delete the connector and create it again, it gets a new connector ID: grant the role to the new subject.
+
+<Warning>
+Don't grant the role to the whole pool (`principalSet://.../c1-pool/*`). Your tenant's issuer signs tokens for every workload identity connector in your C1 tenant, and a provider only checks the issuer and the audience. A pool-wide grant lets any connector in your tenant that obtains a token with this provider's audience act as the service account, with its domain-wide delegation. Binding the single subject closes that.
+</Warning>
+</Step>
+</Steps>
+
 ## Configure the Google Workspace connector
 
 <Warning>
@@ -539,6 +597,8 @@ In the **Administrator email** field, enter the email address of a Google Worksp
 </Step>
 <Step>
 In the **Credentials (JSON)** area, click **Choose file** and upload the file.
+
+   To authenticate without a key, choose the **Workload identity (ConductorOne)** method instead and fill in **Workload identity provider** and **Service account email**. See [Authenticate without a key](#authenticate-without-a-key-workload-identity).
 </Step>
 <Step>
 Click **Save**.
@@ -733,6 +793,10 @@ If Google Workspace is your company's identity provider (meaning that it is used
 | `SERVICE_DISABLED` or "API has not been used in project ... before or it is disabled" | The connector's API isn't enabled in the project. | Enable it. See [Enable the APIs](#enable-the-apis). |
 | Authentication succeeds but the sync returns no users or `Not Authorized to access this resource/api` | The **Administrator email** isn't a super admin, or the **Customer ID** is wrong. | Confirm both values. See [Find your customer ID and primary domain](#find-your-customer-id-and-primary-domain). |
 | The connector worked and then stopped authenticating | The service account key expired under `constraints/iam.serviceAccountKeyExpiryHours`, or someone deleted it. | Create a new key and upload it to the connector. |
+| `workload identity signJwt ... failed` with `PERMISSION_DENIED` | The connector's subject lacks **Service Account Token Creator** on the service account, or the IAM Service Account Credentials API is disabled. | Grant the role to the connector's subject and enable the API. See [Authenticate without a key](#authenticate-without-a-key-workload-identity). |
+| `workload identity STS token exchange failed` with `Error connecting to the given credential's issuer` | Google can't fetch your C1 tenant's issuer, or the provider's issuer URI is wrong. | Check the provider's issuer is your tenant URL followed by `/auth/v1/workload-identity`. |
+| `workload identity STS token exchange failed` with an audience or issuer mismatch | The **Workload identity provider** in C1 doesn't match the Google provider, or it uses the project ID instead of the project number. | Enter `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER`. |
+| `workload identity ConductorOne token failed` | Workload identity isn't enabled for your C1 tenant. | Contact C1 support. |
 
 ### When adding permissions to my Google Workspace API Client permissions I get authorization errors
 

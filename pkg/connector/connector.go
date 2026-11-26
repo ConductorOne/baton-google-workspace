@@ -45,7 +45,10 @@ type Config struct {
 	CustomerID         string
 	AdministratorEmail string
 	Domain             string
-	Credentials        []byte
+	// Credentials is a service account JSON key. Ignored when WorkloadIdentity is set.
+	Credentials []byte
+	// WorkloadIdentity authenticates without a stored key. When set, Credentials is not used.
+	WorkloadIdentity *WorkloadIdentityConfig
 }
 
 type GoogleWorkspace struct {
@@ -53,6 +56,7 @@ type GoogleWorkspace struct {
 	domain             string
 	administratorEmail string
 	credentials        []byte
+	workloadIdentity   *workloadIdentity // set instead of credentials on the workload identity auth method
 	mtx                sync.Mutex
 	serviceCache       map[string]any
 
@@ -133,10 +137,60 @@ func newGWSAdminServiceForScopes[T any](ctx context.Context, credentials []byte,
 	config.Subject = email
 
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-	tokenSrc := config.TokenSource(ctx)
+	return newGWSAdminServiceFromTokenSource(ctx, httpClient, config.TokenSource(ctx), newService)
+}
+
+// newGWSAdminServiceForWorkloadIdentity is newGWSAdminServiceForScopes for the
+// workload identity auth method: the same delegated token for email, without
+// a stored key.
+func newGWSAdminServiceForWorkloadIdentity[T any](
+	ctx context.Context,
+	wi *workloadIdentity,
+	email string,
+	newService newService[T],
+	scopes ...string,
+) (*T, error) {
+	l := ctxzap.Extract(ctx)
+	httpClient, err := newGoogleHTTPClient(ctx, uhttp.WithLogger(true, l))
+	if err != nil {
+		return nil, uhttp.WrapErrors(codes.Internal, "failed to create HTTP client", err)
+	}
+
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+	tokenSrc, err := wi.tokenSource(ctx, httpClient, email, scopes...)
+	if err != nil {
+		return nil, err
+	}
+	return newGWSAdminServiceFromTokenSource(ctx, httpClient, tokenSrc, newService)
+}
+
+// newGWSAdminService returns the admin service for scopes with whichever
+// credential the connector was configured with.
+func newGWSAdminService[T any](ctx context.Context, c *GoogleWorkspace, newService newService[T], scopes ...string) (*T, error) {
+	if c.workloadIdentity != nil {
+		return newGWSAdminServiceForWorkloadIdentity(ctx, c.workloadIdentity, c.administratorEmail, newService, scopes...)
+	}
+	return newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, newService, scopes...)
+}
+
+// newGWSAdminServiceFromTokenSource fetches the first token, so a scope the
+// admin console has not granted is found here, and builds the service on it.
+func newGWSAdminServiceFromTokenSource[T any](
+	ctx context.Context,
+	httpClient *http.Client,
+	tokenSrc oauth2.TokenSource,
+	newService newService[T],
+) (*T, error) {
+	l := ctxzap.Extract(ctx)
 	token, err := tokenSrc.Token()
 	if err != nil {
 		l.Debug("google-workspace: failed fetching token", zap.Error(err))
+		// A workload identity failure affects every scope. Check it first: it can
+		// wrap an *oauth2.RetrieveError that would otherwise read as a missing scope.
+		var wie *workloadIdentityError
+		if errors.As(err, &wie) {
+			return nil, err
+		}
 		var oe *oauth2.RetrieveError
 		if errors.As(err, &oe) && isScopeUnauthorized(oe) {
 			return nil, &GoogleWorkspaceOAuthUnauthorizedError{o: oe}
@@ -162,7 +216,7 @@ func (c *GoogleWorkspace) getReportService(ctx context.Context) (*reportsAdmin.S
 	if c.reportService != nil {
 		return c.reportService, nil
 	}
-	srv, err := newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
+	srv, err := newGWSAdminService(ctx, c, reportsAdmin.NewService, reportsAdmin.AdminReportsAuditReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create report service: %w", err)
 	}
@@ -185,6 +239,26 @@ func (c *GoogleWorkspace) getDataTransferService(ctx context.Context, scope stri
 
 // New creates a new Google Workspace connector with the V2 interface.
 func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOpts) (connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error) {
+	// The auth method decides the credential, never which fields happen to be
+	// set: an empty or unknown method is the default service account key group,
+	// as it is for the SDK's own validation.
+	if opts != nil && opts.SelectedAuthMethod == cfg.WorkloadIdentityC1AuthMethod {
+		connector, err := NewConnector(ctx, Config{
+			CustomerID:         config.CustomerId,
+			AdministratorEmail: config.AdministratorEmail,
+			Domain:             config.Domain,
+			WorkloadIdentity: &WorkloadIdentityConfig{
+				SubjectTokenSource:  opts.TokenSource,
+				Provider:            config.WorkloadIdentityProvider,
+				ServiceAccountEmail: config.ServiceAccountEmail,
+			},
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return connector, []connectorbuilder.Opt{}, nil
+	}
+
 	var credentialBytes []byte
 	switch {
 	case config.CredentialsJson != "":
@@ -210,6 +284,20 @@ func New(ctx context.Context, config *cfg.GoogleWorkspace, opts *cli.ConnectorOp
 
 // NewConnector creates a new Google Workspace connector instance (internal constructor).
 func NewConnector(ctx context.Context, config Config) (*GoogleWorkspace, error) {
+	if config.WorkloadIdentity != nil {
+		wi, err := newWorkloadIdentity(config.WorkloadIdentity)
+		if err != nil {
+			return nil, uhttp.WrapErrors(codes.InvalidArgument, "invalid workload identity configuration", err)
+		}
+		return &GoogleWorkspace{
+			customerID:         config.CustomerID,
+			administratorEmail: config.AdministratorEmail,
+			workloadIdentity:   wi,
+			serviceCache:       map[string]any{},
+			domain:             config.Domain,
+		}, nil
+	}
+
 	credential, err := googlecredentialguard.ParseServiceAccountJSON(config.Credentials)
 	if err != nil {
 		return nil, uhttp.WrapErrors(codes.InvalidArgument, "invalid service-account credentials", err)
@@ -603,7 +691,7 @@ func getService[T any](ctx context.Context, c *GoogleWorkspace, scope string, ne
 		}
 	}
 
-	service, err = newGWSAdminServiceForScopes(ctx, c.credentials, c.administratorEmail, newService, scope)
+	service, err = newGWSAdminService(ctx, c, newService, scope)
 	if err != nil {
 		var ae *GoogleWorkspaceOAuthUnauthorizedError
 		if errors.As(err, &ae) {
